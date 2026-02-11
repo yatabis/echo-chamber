@@ -38,6 +38,7 @@ export class ThinkingEngine {
   constructor(options: {
     env: Env;
     storage: DurableObjectStorage;
+    sql: SqlStorage;
     logger: Logger;
     instanceConfig: EchoInstanceConfig;
   }) {
@@ -45,7 +46,7 @@ export class ThinkingEngine {
     this.instanceConfig = options.instanceConfig;
     const embeddingService = new OpenAIEmbeddingService(options.env);
     const memorySystem = new MemorySystem({
-      storage: options.storage,
+      sql: options.sql,
       embeddingService,
       logger: options.logger,
     });
@@ -90,7 +91,7 @@ export class ThinkingEngine {
 
   private async buildInitialMessages(): Promise<ResponseInput> {
     const currentDatetime = formatDatetime(new Date());
-    const latestMemory = await this.toolContext.memorySystem.getLatestMemory();
+    const latestMemory = this.toolContext.memorySystem.getLatestMemory();
     const context = latestMemory
       ? `context loaded: ${JSON.stringify(
           {

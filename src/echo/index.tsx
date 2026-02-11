@@ -156,6 +156,7 @@ export class Echo extends DurableObject<Env> {
     this.thinkingEngine = new ThinkingEngine({
       env: this._env,
       storage: this.storage,
+      sql: this.ctx.storage.sql,
       logger: this.logger,
       instanceConfig: this.instanceConfig,
     });
