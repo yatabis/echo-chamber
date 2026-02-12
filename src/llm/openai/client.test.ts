@@ -14,6 +14,7 @@ import {
   formatFunctionCall,
   OpenAIClient,
 } from './client';
+import { finishThinkingFunction } from './functions/finish';
 import { thinkDeeplyFunction } from './functions/think';
 
 import type {
@@ -318,6 +319,103 @@ describe('OpenAI Client', () => {
       );
       expect(response).toEqual(totalUsage);
       expect(mockCreateResponse).toHaveBeenCalledTimes(2);
+    });
+
+    it('finish_thinkingでループが終了する', async () => {
+      const client = new OpenAIClient(
+        env,
+        [thinkDeeplyFunction, finishThinkingFunction],
+        mockToolContext,
+        mockThinkingStream
+      );
+      const input: ResponseInputItem[] = [
+        {
+          role: 'user',
+          content: 'Hello, how are you?',
+        },
+      ];
+      const usage1 = {
+        input_tokens: 10,
+        input_tokens_details: { cached_tokens: 0 },
+        output_tokens: 10,
+        output_tokens_details: { reasoning_tokens: 0 },
+        total_tokens: 20,
+      };
+      // finish_thinking が呼ばれる
+      mockCreateResponse.mockResolvedValueOnce({
+        id: 'response_123',
+        output: [
+          {
+            type: 'function_call',
+            call_id: 'call_finish',
+            name: 'finish_thinking',
+            arguments: JSON.stringify({
+              reason: '十分な情報を得た',
+            }),
+            status: 'completed',
+          },
+        ],
+        usage: usage1,
+      });
+
+      const response = await client.call(input);
+
+      // finish_thinking が呼ばれたので、1回のみで終了
+      expect(mockCreateResponse).toHaveBeenCalledTimes(1);
+      expect(response).toEqual(usage1);
+    });
+
+    it('finish_thinkingと他のfunction_callが同時に呼ばれた場合', async () => {
+      const client = new OpenAIClient(
+        env,
+        [thinkDeeplyFunction, finishThinkingFunction],
+        mockToolContext,
+        mockThinkingStream
+      );
+      const input: ResponseInputItem[] = [
+        {
+          role: 'user',
+          content: 'Hello, how are you?',
+        },
+      ];
+      const usage = {
+        input_tokens: 10,
+        input_tokens_details: { cached_tokens: 0 },
+        output_tokens: 10,
+        output_tokens_details: { reasoning_tokens: 0 },
+        total_tokens: 20,
+      };
+      // finish_thinking と think_deeply が同時に呼ばれる
+      mockCreateResponse.mockResolvedValueOnce({
+        id: 'response_123',
+        output: [
+          {
+            type: 'function_call',
+            call_id: 'call_think',
+            name: 'think_deeply',
+            arguments: JSON.stringify({
+              thought: 'Some thought',
+            }),
+            status: 'completed',
+          },
+          {
+            type: 'function_call',
+            call_id: 'call_finish',
+            name: 'finish_thinking',
+            arguments: JSON.stringify({
+              reason: '十分な情報を得た',
+            }),
+            status: 'completed',
+          },
+        ],
+        usage,
+      });
+
+      const response = await client.call(input);
+
+      // finish_thinking が含まれているので、1回のみで終了
+      expect(mockCreateResponse).toHaveBeenCalledTimes(1);
+      expect(response).toEqual(usage);
     });
 
     it('MAX_TURNSを超える呼び出し', async () => {

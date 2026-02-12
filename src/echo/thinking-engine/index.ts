@@ -6,6 +6,7 @@ import {
   readChatMessagesFunction,
   sendChatMessageFunction,
 } from '../../llm/openai/functions/chat';
+import { finishThinkingFunction } from '../../llm/openai/functions/finish';
 import {
   storeMemoryFunction,
   searchMemoryFunction,
@@ -83,6 +84,7 @@ export class ThinkingEngine {
         storeMemoryFunction,
         searchMemoryFunction,
         thinkDeeplyFunction,
+        finishThinkingFunction,
       ],
       this.toolContext,
       thinkingStream

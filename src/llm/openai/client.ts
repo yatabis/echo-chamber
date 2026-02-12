@@ -138,17 +138,24 @@ export class OpenAIClient {
       total_tokens: 0,
     };
 
-    const nextInput: ResponseInput = await Promise.all(
-      response.output
-        .filter((item) => item.type === 'function_call')
-        .map(async (item) => ({
-          type: 'function_call_output',
-          call_id: item.call_id,
-          output: await this.executeFunction(item),
-        }))
+    const functionCalls = response.output.filter(
+      (item) => item.type === 'function_call'
     );
 
-    if (nextInput.length > 0) {
+    // finish_thinking が呼ばれた場合はループを終了
+    const hasFinishThinking = functionCalls.some(
+      (item) => item.name === 'finish_thinking'
+    );
+
+    const nextInput: ResponseInput = await Promise.all(
+      functionCalls.map(async (item) => ({
+        type: 'function_call_output',
+        call_id: item.call_id,
+        output: await this.executeFunction(item),
+      }))
+    );
+
+    if (nextInput.length > 0 && !hasFinishThinking) {
       const recursiveUsage = await this.call(nextInput, turn + 1);
       totalUsage = accumulateUsage(totalUsage, recursiveUsage);
     }
@@ -236,6 +243,10 @@ const functionCallFormatters: Record<
     return `*store_memory: ${content}\n(${valence}, ${arousal}) [${labels.join(', ')}]*`;
   },
   search_memory: (args) => `*search_memory: ${args.query as string}*`,
+  finish_thinking: (args) => {
+    const nextWakeAt = args.next_wake_at as string | undefined;
+    return `*finish_thinking: ${args.reason as string}(next_wake_at: ${nextWakeAt})*`;
+  },
 };
 
 export function formatInputItem(item: ResponseInputItem): string {
