@@ -37,6 +37,7 @@ describe('Memory Functions', () => {
       expect(parameters).toBeDefined();
 
       expect(parameters).toHaveProperty('content');
+      expect(parameters).toHaveProperty('type');
       expect(parameters).toHaveProperty('emotion');
     });
 
@@ -44,6 +45,7 @@ describe('Memory Functions', () => {
       it('MemorySystem.storeMemoryを呼び出す', async () => {
         const args = {
           content: 'Had a great conversation about AI',
+          type: 'episode' as const,
           emotion: createMockEmotion({
             valence: 0.7,
             arousal: 0.5,
@@ -60,7 +62,26 @@ describe('Memory Functions', () => {
             valence: 0.7,
             arousal: 0.5,
             labels: ['joy', 'interest'],
-          }
+          },
+          'episode'
+        );
+        expect(result).toEqual({ success: true });
+      });
+
+      it('semanticタイプで呼び出すことができる', async () => {
+        const args = {
+          content: 'General knowledge about AI',
+          type: 'semantic' as const,
+          emotion: createMockEmotion(),
+        };
+
+        const result = await storeMemoryFunction.handler(args, mockToolContext);
+
+        // eslint-disable-next-line @typescript-eslint/unbound-method
+        expect(mockedMemorySystem.storeMemory).toHaveBeenCalledWith(
+          'General knowledge about AI',
+          createMockEmotion(),
+          'semantic'
         );
         expect(result).toEqual({ success: true });
       });
@@ -72,6 +93,7 @@ describe('Memory Functions', () => {
 
         const args = {
           content: 'Memory that will fail',
+          type: 'episode' as const,
           emotion: createMockEmotion(),
         };
 
@@ -106,12 +128,14 @@ describe('Memory Functions', () => {
         const mockResults: MemorySearchResult[] = [
           {
             content: 'High similarity memory',
+            type: 'episode',
             emotion: createMockEmotion({ valence: 0.8 }),
             createdAt: '2025-08-04T08:00:00.000Z',
             similarity: 0.95,
           },
           {
             content: 'Medium similarity memory',
+            type: 'semantic',
             emotion: createMockEmotion({ valence: 0.5 }),
             createdAt: '2025-08-03T08:00:00.000Z',
             similarity: 0.75,
@@ -127,18 +151,21 @@ describe('Memory Functions', () => {
 
         // eslint-disable-next-line @typescript-eslint/unbound-method
         expect(mockedMemorySystem.searchMemory).toHaveBeenCalledWith(
-          'test query'
+          'test query',
+          undefined
         );
         expect(result).toEqual({
           success: true,
           results: [
             {
               content: 'High similarity memory',
+              type: 'episode',
               emotion: { valence: 0.8, arousal: 0.3, labels: ['neutral'] },
               createdAt: '2025-08-04T08:00:00.000Z',
             },
             {
               content: 'Medium similarity memory',
+              type: 'semantic',
               emotion: { valence: 0.5, arousal: 0.3, labels: ['neutral'] },
               createdAt: '2025-08-03T08:00:00.000Z',
             },
@@ -176,6 +203,32 @@ describe('Memory Functions', () => {
           success: false,
           error: 'Failed to search memory',
         });
+      });
+
+      it('type指定時はMemorySystem.searchMemoryにtypeを渡す', async () => {
+        mockedMemorySystem.searchMemory.mockResolvedValue([]);
+
+        const args = { query: 'test query', type: 'episode' as const };
+        await searchMemoryFunction.handler(args, mockToolContext);
+
+        // eslint-disable-next-line @typescript-eslint/unbound-method
+        expect(mockedMemorySystem.searchMemory).toHaveBeenCalledWith(
+          'test query',
+          'episode'
+        );
+      });
+
+      it('type未指定時はMemorySystem.searchMemoryにundefinedを渡す', async () => {
+        mockedMemorySystem.searchMemory.mockResolvedValue([]);
+
+        const args = { query: 'test query' };
+        await searchMemoryFunction.handler(args, mockToolContext);
+
+        // eslint-disable-next-line @typescript-eslint/unbound-method
+        expect(mockedMemorySystem.searchMemory).toHaveBeenCalledWith(
+          'test query',
+          undefined
+        );
       });
     });
   });

@@ -42,6 +42,9 @@ export interface Emotion {
   labels: string[]; // e.g., ["intellectual-engagement", "mild-anticipation"]
 }
 
+export const MEMORY_TYPES = ['semantic', 'episode'] as const;
+export type MemoryType = (typeof MEMORY_TYPES)[number];
+
 export interface Memory {
   content: string; // Max 500 characters
   embedding: number[]; // 1536-dim vector from content

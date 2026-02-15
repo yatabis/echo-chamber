@@ -3,7 +3,7 @@ import { cosineSimilarity } from '../../utils/vector';
 
 import type { EmbeddingService } from '../../llm/openai/embedding';
 import type { Logger } from '../../utils/logger';
-import type { Emotion } from '../types';
+import type { Emotion, MemoryType } from '../types';
 
 const MAX_MEMORY_COUNT = 500;
 const SEARCH_RESULT_LIMIT = 5;
@@ -14,6 +14,7 @@ const SIMILARITY_THRESHOLD = 0.001;
  */
 export interface MemorySnapshot {
   content: string;
+  type: MemoryType;
   emotion: Emotion;
   createdAt: string;
 }
@@ -31,6 +32,7 @@ export interface MemorySearchResult extends MemorySnapshot {
 interface MemoryRow extends Record<string, SqlStorageValue> {
   id: string;
   content: string;
+  type: MemoryType;
   embedding: ArrayBuffer;
   emotion_valence: number;
   emotion_arousal: number;
@@ -85,6 +87,7 @@ export class MemorySystem {
       CREATE TABLE IF NOT EXISTS memories (
         id TEXT PRIMARY KEY,
         content TEXT NOT NULL,
+        type TEXT NOT NULL,
         embedding BLOB NOT NULL,
         emotion_valence REAL NOT NULL,
         emotion_arousal REAL NOT NULL,
@@ -102,14 +105,40 @@ export class MemorySystem {
       CREATE INDEX IF NOT EXISTS idx_memories_updated_at ON memories(updated_at)
     `);
 
+    // マイグレーション: 既存テーブルにtypeカラムがない場合は追加
+    this.migrateAddTypeColumn();
+
     this.initialized = true;
   }
 
   /**
-   * エピソード記憶を保存する
+   * typeカラムが存在しない既存テーブルにカラムを追加するマイグレーション
+   */
+  private migrateAddTypeColumn(): void {
+    // PRAGMA table_infoでカラム存在確認
+    const columns = this.sql
+      .exec<{ name: string }>('PRAGMA table_info(memories)')
+      .toArray();
+
+    const hasTypeColumn = columns.some((col) => col.name === 'type');
+
+    if (!hasTypeColumn) {
+      // typeカラムを追加（既存データは'episode'をデフォルト値とする）
+      this.sql.exec(
+        "ALTER TABLE memories ADD COLUMN type TEXT NOT NULL DEFAULT 'episode'"
+      );
+    }
+  }
+
+  /**
+   * 記憶を保存する
    * 容量超過時は最古のメモリを自動削除する
    */
-  async storeMemory(content: string, emotion: Emotion): Promise<void> {
+  async storeMemory(
+    content: string,
+    emotion: Emotion,
+    type: MemoryType
+  ): Promise<void> {
     this.ensureSchema();
 
     const embedding = await this.embeddingService.embed(content);
@@ -136,10 +165,11 @@ export class MemorySystem {
     const embeddingBuffer = float32ArrayToBuffer(embedding);
 
     this.sql.exec(
-      `INSERT INTO memories (id, content, embedding, emotion_valence, emotion_arousal, emotion_labels, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO memories (id, content, type, embedding, emotion_valence, emotion_arousal, emotion_labels, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id,
       content,
+      type,
       embeddingBuffer,
       emotion.valence,
       emotion.arousal,
@@ -174,12 +204,21 @@ export class MemorySystem {
   /**
    * セマンティック検索でメモリを取得する
    * @param query 検索クエリ
+   * @param type 検索対象のメモリタイプ（省略時は全タイプ）
    * @returns 類似度順にソートされた検索結果（最大5件）
    */
-  async searchMemory(query: string): Promise<MemorySearchResult[]> {
+  async searchMemory(
+    query: string,
+    type?: MemoryType
+  ): Promise<MemorySearchResult[]> {
     this.ensureSchema();
 
-    const rows = this.getAllMemories();
+    let rows = this.getAllMemories();
+
+    // タイプが指定された場合はフィルタ
+    if (type !== undefined) {
+      rows = rows.filter((row) => row.type === type);
+    }
 
     if (rows.length === 0) {
       return [];
@@ -245,6 +284,7 @@ export class MemorySystem {
   private rowToSnapshot(row: MemoryRow): MemorySnapshot {
     return {
       content: row.content,
+      type: row.type,
       emotion: {
         valence: row.emotion_valence,
         arousal: row.emotion_arousal,

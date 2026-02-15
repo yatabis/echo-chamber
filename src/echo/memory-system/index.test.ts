@@ -9,6 +9,7 @@ import type { Emotion } from '../types';
 interface MockMemoryRow {
   id: string;
   content: string;
+  type: 'semantic' | 'episode';
   embedding: ArrayBuffer;
   emotion_valence: number;
   emotion_arousal: number;
@@ -94,6 +95,7 @@ function createMockSqlStorage(): MockSqlStorage {
         const [
           id,
           content,
+          type,
           embedding,
           valence,
           arousal,
@@ -103,6 +105,7 @@ function createMockSqlStorage(): MockSqlStorage {
         ] = args as [
           string,
           string,
+          'semantic' | 'episode',
           ArrayBuffer,
           number,
           number,
@@ -113,6 +116,7 @@ function createMockSqlStorage(): MockSqlStorage {
         tables.memories.push({
           id,
           content,
+          type,
           embedding,
           emotion_valence: valence,
           emotion_arousal: arousal,
@@ -170,6 +174,7 @@ function createMockMemoryRow(
   return {
     id: crypto.randomUUID(),
     content: 'Test memory content',
+    type: 'episode',
     embedding: float32ArrayToBuffer(new Array<number>(1536).fill(0)),
     emotion_valence: 0.5,
     emotion_arousal: 0.3,
@@ -229,6 +234,7 @@ describe('MemorySystem', () => {
 
       expect(result).toEqual({
         content: 'Newer memory',
+        type: 'episode',
         emotion: {
           valence: 0.5,
           arousal: 0.3,
@@ -250,6 +256,7 @@ describe('MemorySystem', () => {
 
       expect(result).not.toHaveProperty('embedding');
       expect(result).toHaveProperty('content');
+      expect(result).toHaveProperty('type');
       expect(result).toHaveProperty('emotion');
       expect(result).toHaveProperty('createdAt');
     });
@@ -263,14 +270,31 @@ describe('MemorySystem', () => {
         labels: ['happy'],
       };
 
-      await memorySystem.storeMemory('New memory content', emotion);
+      await memorySystem.storeMemory('New memory content', emotion, 'episode');
 
       expect(mockSql._tables.memories).toHaveLength(1);
       expect(mockSql._tables.memories[0]).toMatchObject({
         content: 'New memory content',
+        type: 'episode',
         emotion_valence: 0.8,
         emotion_arousal: 0.5,
         emotion_labels: JSON.stringify(['happy']),
+      });
+    });
+
+    it('semanticタイプのメモリを保存できる', async () => {
+      const emotion: Emotion = {
+        valence: 0.5,
+        arousal: 0.3,
+        labels: ['neutral'],
+      };
+
+      await memorySystem.storeMemory('Semantic memory', emotion, 'semantic');
+
+      expect(mockSql._tables.memories).toHaveLength(1);
+      expect(mockSql._tables.memories[0]).toMatchObject({
+        content: 'Semantic memory',
+        type: 'semantic',
       });
     });
 
@@ -281,7 +305,7 @@ describe('MemorySystem', () => {
         labels: ['neutral'],
       };
 
-      await memorySystem.storeMemory('Test content', emotion);
+      await memorySystem.storeMemory('Test content', emotion, 'episode');
 
       expect(mockEmbeddingService.embed).toHaveBeenCalledWith('Test content'); // eslint-disable-line @typescript-eslint/unbound-method
     });
@@ -351,6 +375,82 @@ describe('MemorySystem', () => {
         content: 'Similar memory',
       });
       expect(firstResult?.similarity).toBeCloseTo(1.0, 5);
+    });
+
+    it('type未指定時は全タイプのメモリを検索する', async () => {
+      const embedding = new Float32Array(1536).fill(0.5);
+      (
+        mockEmbeddingService.embed as ReturnType<typeof vi.fn>
+      ).mockResolvedValue(Array.from(embedding));
+
+      mockSql._tables.memories = [
+        createMockMemoryRow({
+          content: 'Episode memory',
+          type: 'episode',
+          embedding: embedding.buffer,
+        }),
+        createMockMemoryRow({
+          content: 'Semantic memory',
+          type: 'semantic',
+          embedding: embedding.buffer,
+        }),
+      ];
+
+      const results = await memorySystem.searchMemory('test query');
+
+      expect(results).toHaveLength(2);
+    });
+
+    it('type指定時はそのタイプのメモリのみ返す（episode）', async () => {
+      const embedding = new Float32Array(1536).fill(0.5);
+      (
+        mockEmbeddingService.embed as ReturnType<typeof vi.fn>
+      ).mockResolvedValue(Array.from(embedding));
+
+      mockSql._tables.memories = [
+        createMockMemoryRow({
+          content: 'Episode memory',
+          type: 'episode',
+          embedding: embedding.buffer,
+        }),
+        createMockMemoryRow({
+          content: 'Semantic memory',
+          type: 'semantic',
+          embedding: embedding.buffer,
+        }),
+      ];
+
+      const results = await memorySystem.searchMemory('test query', 'episode');
+
+      expect(results).toHaveLength(1);
+      expect(results[0]?.content).toBe('Episode memory');
+      expect(results[0]?.type).toBe('episode');
+    });
+
+    it('type指定時はそのタイプのメモリのみ返す（semantic）', async () => {
+      const embedding = new Float32Array(1536).fill(0.5);
+      (
+        mockEmbeddingService.embed as ReturnType<typeof vi.fn>
+      ).mockResolvedValue(Array.from(embedding));
+
+      mockSql._tables.memories = [
+        createMockMemoryRow({
+          content: 'Episode memory',
+          type: 'episode',
+          embedding: embedding.buffer,
+        }),
+        createMockMemoryRow({
+          content: 'Semantic memory',
+          type: 'semantic',
+          embedding: embedding.buffer,
+        }),
+      ];
+
+      const results = await memorySystem.searchMemory('test query', 'semantic');
+
+      expect(results).toHaveLength(1);
+      expect(results[0]?.content).toBe('Semantic memory');
+      expect(results[0]?.type).toBe('semantic');
     });
   });
 });
