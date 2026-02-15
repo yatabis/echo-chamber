@@ -3,12 +3,14 @@ import { Hono } from 'hono';
 
 import { getInstanceConfig } from '../config/echo-registry';
 import { getUnreadMessageCount } from '../discord';
+import { OpenAIEmbeddingService } from '../llm/openai/embedding';
 import { isValidInstanceId } from '../types/echo-config';
 import { formatDatetime } from '../utils/datetime';
 import { getErrorMessage } from '../utils/error';
 import { createLogger } from '../utils/logger';
 
 import { ALARM_CONFIG, TOKEN_LIMITS } from './constants';
+import { MemorySystem } from './memory-system';
 import { ThinkingEngine } from './thinking-engine';
 import {
   addUsage,
@@ -84,18 +86,31 @@ export class Echo extends DurableObject<Env> {
         const name = await this.getName();
         const state = await this.getState();
         const nextAlarm = await this.getNextAlarm();
-        const context = await this.getContext();
-        const tasks = await this.getTasks();
-        const knowledges = await this.getKnowledges();
         const usage = await this.getAllUsage();
+
+        const embeddingService = new OpenAIEmbeddingService(this._env);
+        const memorySystem = new MemorySystem({
+          sql: this.ctx.storage.sql,
+          embeddingService,
+          logger: this.logger,
+        });
+        const memories = memorySystem.getAllMemories().map((row) => ({
+          content: row.content,
+          emotion: {
+            valence: row.emotion_valence,
+            arousal: row.emotion_arousal,
+            labels: JSON.parse(row.emotion_labels) as string[],
+          },
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        }));
+
         return c.json({
           id,
           name,
           state,
           nextAlarm,
-          context,
-          tasks,
-          knowledges,
+          memories,
           usage,
         });
       })
