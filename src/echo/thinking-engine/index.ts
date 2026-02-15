@@ -12,7 +12,7 @@ import {
   searchMemoryFunction,
 } from '../../llm/openai/functions/memory';
 import { thinkDeeplyFunction } from '../../llm/openai/functions/think';
-import { formatDatetime } from '../../utils/datetime';
+import { formatDatetime, formatElapsedTime } from '../../utils/datetime';
 import { ThinkingStream } from '../../utils/thinking-stream';
 import { MemorySystem } from '../memory-system';
 import { getTodayUsageKey } from '../usage';
@@ -92,8 +92,12 @@ export class ThinkingEngine {
   }
 
   private async buildInitialMessages(): Promise<ResponseInput> {
-    const currentDatetime = formatDatetime(new Date());
+    const now = new Date();
+    const currentDatetime = formatDatetime(now);
     const latestMemory = this.toolContext.memorySystem.getLatestMemory();
+    const elapsedInfo = latestMemory
+      ? ` (${formatElapsedTime(latestMemory.createdAt, now)})`
+      : '';
     const context = latestMemory
       ? `context loaded: ${JSON.stringify(
           {
@@ -107,7 +111,7 @@ export class ThinkingEngine {
           },
           null,
           2
-        )}`
+        )}${elapsedInfo}`
       : 'No context loaded.';
 
     return [
