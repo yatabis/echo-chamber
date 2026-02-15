@@ -248,10 +248,16 @@ This is a Cloudflare Workers application built with Hono framework and TypeScrip
 ### Core Components
 
 - **Main Worker** (`src/index.ts`) - Hono application serving as the entry point with basic routing
-- **Echo Durable Object** (`src/echo/index.ts`) - Implements the core Echo functionality as a Durable Object with RPC methods
+- **Echo Durable Object** (`src/echo/index.tsx`) - Implements the core Echo functionality as a Durable Object with RPC methods
+- **Memory System** (`src/echo/memory-system/`) - Semantic and episodic memory with embedding-based retrieval
+- **Thinking Engine** (`src/echo/thinking-engine/`) - Deep thinking and reflection module
+- **Emotion Engine** (`src/echo/emotion-engine/`) - Emotional state management
 - **OpenAI Client** (`src/llm/openai/client.ts`) - GPT-5 Responses API client with usage tracking and recursive function call handling
 - **Discord Integration** (`src/discord/`) - Discord API wrapper for chat functionality
-- **Tool System** (`src/llm/openai/functions/`) - OpenAI function calling tools for chat, tasks, context, and deep thinking
+- **Tool System** (`src/llm/openai/functions/`) - OpenAI function calling tools: chat (Discord messaging), memory (semantic/episodic storage), think (deep thinking), finish (thinking completion)
+- **Embedding Client** (`src/llm/openai/embedding.ts`) - Text embedding generation for semantic search
+- **Prompt Templates** (`src/llm/prompts/`) - Character-specific system prompts (rin.ts, marie.ts)
+- **Instance Registry** (`src/config/echo-registry.ts`) - Echo instance configuration and registration
 
 ### Cloudflare Resources
 
@@ -275,12 +281,13 @@ This is a Cloudflare Workers application built with Hono framework and TypeScrip
 
 **Debug Endpoints** (local only):
 
+- `GET /rin/` - Status page (HTML)
+- `GET /rin/json` - Status data (JSON format)
 - `POST /rin/wake` - Wake up Echo instance
 - `POST /rin/sleep` - Put Echo to sleep
 - `POST /rin/run` - Force execution cycle
-- `POST /rin/reset` - Clear context and tasks
-- `GET /rin/usage/today` - Today's token usage
-- `GET /rin/usage/:date` - Usage for specific date (YYYY-MM-DD format)
+- `POST /rin/reset` - Clear memory and tasks
+- `GET /rin/usage` - Token usage statistics
 
 Always run `wrangler types` when making changes to `wrangler.jsonc` to keep TypeScript definitions up to date.
 

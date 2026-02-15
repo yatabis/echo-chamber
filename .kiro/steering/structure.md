@@ -77,25 +77,21 @@ llm/
 ├── openai/                # OpenAI API 統合
 │   ├── client.ts          # OpenAI クライアントとUsage管理
 │   ├── client.test.ts     # クライアントテスト
+│   ├── embedding.ts       # テキスト埋め込み生成
 │   └── functions/         # OpenAI Function Calling
 │       ├── index.ts       # 関数定義の集約
 │       ├── index.test.ts  # 統合テスト
-│       ├── chat.ts        # チャット機能
-│       ├── chat.test.ts   # チャットテスト
-│       ├── context.ts     # コンテキスト管理
-│       ├── context.test.ts
-│       ├── task.ts        # タスク管理
-│       ├── task.test.ts
-│       ├── time.ts        # 時間・日時機能
-│       ├── time.test.ts
+│       ├── chat.ts        # チャット機能（Discord連携）
+│       ├── chat.test.ts
+│       ├── memory.ts      # 記憶管理（semantic/episodic）
+│       ├── memory.test.ts
 │       ├── think.ts       # 深層思考機能
 │       ├── think.test.ts
-│       ├── knowledge.ts   # 知識管理
-│       └── knowledge.test.ts
-├── prompts/               # プロンプトテンプレート
-│   └── system.ts          # システムプロンプト
-└── modelfile/             # LLMモデル定義
-    └── echo-rin           # Rin用モデル設定
+│       ├── finish.ts      # 思考完了通知
+│       └── finish.test.ts
+└── prompts/               # プロンプトテンプレート
+    ├── rin.ts             # Rin用システムプロンプト
+    └── marie.ts           # Marie用システムプロンプト
 ```
 
 ### 共通ユーティリティ (`src/utils/`)
@@ -105,14 +101,25 @@ utils/
 ├── datetime.ts            # 日時処理ユーティリティ
 ├── datetime.test.ts       # 日時処理テスト
 ├── error.ts               # エラーハンドリング
-└── logger.ts              # ログ機能
+├── logger.ts              # ログ機能
+├── vector.ts              # ベクトル計算（コサイン類似度など）
+├── vector.test.ts         # ベクトル計算テスト
+└── thinking-stream.ts     # 思考ストリーム処理
+```
+
+### 設定 (`src/config/`)
+
+```
+config/
+└── echo-registry.ts       # Echoインスタンス設定・レジストリ
 ```
 
 ### 型定義 (`src/types/`)
 
 ```
 types/
-└── logger.ts              # ログ関連の型定義
+├── logger.ts              # ログ関連の型定義
+└── echo-config.ts         # Echoインスタンス設定の型定義
 ```
 
 ## テスト構成 (`test/`)
@@ -125,7 +132,8 @@ test/
 ├── helpers/               # テストヘルパー
 │   └── discord.ts         # Discord API モック
 └── mocks/                 # モックオブジェクト
-    └── tool.ts            # OpenAI Tool モック
+    ├── tool.ts            # OpenAI Tool モック
+    └── thinking-stream.ts # ThinkingStream モック
 ```
 
 ## コードファイル命名規則
@@ -317,6 +325,6 @@ Types → すべてのモジュール
 
 ---
 
-**最終更新**: 2025-09-11
-**バージョン**: 1.0
+**最終更新**: 2026-02-16
+**バージョン**: 1.1
 **ステータス**: Always Included - 全ファイル組織において参照必須

@@ -2,8 +2,8 @@
 
 ## Project Structure & Modules
 
-- `src/`: TypeScript sources. Entrypoint `src/index.ts` (Cloudflare Worker). Key areas: `discord/`, `echo/` (view components under `echo/view` using `hono/jsx`), `llm/` (OpenAI client, prompts, tool functions), `utils/`, and `types/`.
-- `test/`: Vitest tests (`unit/`, `helpers/`, `mocks/`). Test setup in `test/setup.ts`.
+- `src/`: TypeScript sources. Entrypoint `src/index.ts` (Cloudflare Worker). Key areas: `discord/`, `echo/` (Durable Object with memory-system, thinking-engine, emotion-engine, view components using `hono/jsx`), `llm/` (OpenAI client, embedding, prompts, function calling tools), `config/`, `utils/`, and `types/`.
+- `test/`: Test setup and helpers (`helpers/`, `mocks/`). Test files are co-located with source in `src/**/*.test.ts`.
 - `public/`: Static assets (optional via Wrangler assets binding).
 - Config: `wrangler.jsonc` (Durable Object `Echo`, KV `ECHO_KV`), `tsconfig.json`, `eslint.config.js`, `vitest.config.ts`.
 
@@ -22,12 +22,12 @@
 - Language: TypeScript (strict). JSX via `hono/jsx`.
 - Formatting: Prettier (2-space indent, 80 cols, semicolons, single quotes). Run `pnpm format`.
 - Linting: ESLint with TypeScript rules. Enforced: explicit return types, type-only imports, import ordering, no unused vars (prefix unused with `_`). Run `pnpm lint`.
-- Names: files `kebab-case.ts`; React-style components `PascalCase.tsx`; tests `*.spec.ts`.
+- Names: files `kebab-case.ts`; React-style components `PascalCase.tsx`; tests `*.test.ts` (co-located with source).
 
 ## Testing Guidelines
 
 - Framework: Vitest with `@cloudflare/vitest-pool-workers` (Workers/miniflare pool). Globals enabled.
-- Location: place tests under `src/**/**.test.ts` and helpers in `test/helpers/**`.
+- Location: Tests co-located with source in `src/**/*.test.ts`. Helpers in `test/helpers/`, mocks in `test/mocks/`.
 - Coverage: Istanbul provider includes `src/**/*.ts` (excludes logger/discord API). Aim to keep or raise existing coverage.
 - Run locally: `pnpm test` (watch) or `pnpm test:coverage` for reports.
 
