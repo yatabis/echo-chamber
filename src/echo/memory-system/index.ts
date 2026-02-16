@@ -244,7 +244,8 @@ export class MemorySystem {
     await this.logger.info(
       `Search Memory with query:\n${query}\nResults:\n${filteredMemories
         .map(
-          ({ row, similarity }) => `${row.content} (${similarity.toFixed(4)})`
+          ({ row, similarity }) =>
+            `[${row.type}] ${row.content} (${similarity.toFixed(4)})`
         )
         .join('\n')}`
     );

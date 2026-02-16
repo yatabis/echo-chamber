@@ -634,6 +634,61 @@ describe('formatLogOutput', () => {
     );
   });
 
+  it('store_memory with type', () => {
+    const output: ResponseOutputItem[] = [
+      {
+        type: 'function_call',
+        call_id: 'call_store',
+        name: 'store_memory',
+        arguments: JSON.stringify({
+          content: '今日は楽しい一日だった',
+          type: 'episode',
+          emotion: { valence: 0.8, arousal: 0.5, labels: ['楽しい', '満足'] },
+        }),
+        status: 'completed',
+      },
+    ];
+
+    expect(formatLogOutput(output)).toBe(
+      '*store_memory [episode]: 今日は楽しい一日だった\n(0.8, 0.5) [楽しい, 満足]*'
+    );
+  });
+
+  it('search_memory with type', () => {
+    const output: ResponseOutputItem[] = [
+      {
+        type: 'function_call',
+        call_id: 'call_search',
+        name: 'search_memory',
+        arguments: JSON.stringify({
+          query: '楽しかった思い出',
+          type: 'episode',
+        }),
+        status: 'completed',
+      },
+    ];
+
+    expect(formatLogOutput(output)).toBe(
+      '*search_memory [episode]: 楽しかった思い出*'
+    );
+  });
+
+  it('search_memory without type', () => {
+    const output: ResponseOutputItem[] = [
+      {
+        type: 'function_call',
+        call_id: 'call_search_no_type',
+        name: 'search_memory',
+        arguments: JSON.stringify({
+          query: '何か思い出',
+        }),
+        status: 'completed',
+      },
+    ];
+
+    expect(formatLogOutput(output)).toBe('*search_memory: 何か思い出*');
+  });
+
   it('デフォルトの function_call', () => {
     const output: ResponseOutputItem[] = [
       {

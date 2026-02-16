@@ -239,10 +239,17 @@ const functionCallFormatters: Record<
   think_deeply: (args) => `*think_deeply: ${args.thought as string}*`,
   store_memory: (args) => {
     const content = args.content as string;
+    const type = args.type as string;
     const { valence, arousal, labels } = args.emotion as Emotion;
-    return `*store_memory: ${content}\n(${valence}, ${arousal}) [${labels.join(', ')}]*`;
+    return `*store_memory [${type}]: ${content}\n(${valence}, ${arousal}) [${labels.join(', ')}]*`;
   },
-  search_memory: (args) => `*search_memory: ${args.query as string}*`,
+  search_memory: (args) => {
+    const query = args.query as string;
+    const type = args.type as string | undefined;
+    return type !== undefined && type !== ''
+      ? `*search_memory [${type}]: ${query}*`
+      : `*search_memory: ${query}*`;
+  },
   finish_thinking: (args) => {
     const nextWakeAt = args.next_wake_at as string | undefined;
     return `*finish_thinking: ${args.reason as string}(next_wake_at: ${nextWakeAt})*`;

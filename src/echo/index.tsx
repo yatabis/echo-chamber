@@ -96,6 +96,7 @@ export class Echo extends DurableObject<Env> {
         });
         const memories = memorySystem.getAllMemories().map((row) => ({
           content: row.content,
+          type: row.type,
           emotion: {
             valence: row.emotion_valence,
             arousal: row.emotion_arousal,
