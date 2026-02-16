@@ -6,7 +6,7 @@ import {
   getNotificationDetails,
   sendChannelMessage,
 } from '../../../discord';
-import { formatDatetime } from '../../../utils/datetime';
+import { formatDatetimeForAgent } from '../../../utils/datetime';
 import { getErrorMessage } from '../../../utils/error';
 
 import { Tool } from '.';
@@ -72,7 +72,7 @@ export const readChatMessagesFunction = new Tool(
           messageId: message.id,
           user: message.author.username,
           message: message.content,
-          created_at: formatDatetime(new Date(message.timestamp)),
+          created_at: formatDatetimeForAgent(new Date(message.timestamp)),
           reactions: message.reactions?.map((reaction) => ({
             emoji: reaction.emoji.name,
             me: reaction.me,

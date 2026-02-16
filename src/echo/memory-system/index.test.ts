@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MemorySystem } from './index';
 
@@ -189,7 +189,11 @@ describe('MemorySystem', () => {
   let memorySystem: MemorySystem;
   let mockSql: MockSqlStorage;
 
+  // テストデータのタイムスタンプ: 2025-01-25T15:00:00.000Z (UTC)
+  // 基準時刻を2025-01-27に固定して「2日前」を期待
   beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2025-01-27T23:59:59.999Z'));
     vi.resetAllMocks();
     // デフォルトのembedding実装を設定
     (mockEmbeddingService.embed as ReturnType<typeof vi.fn>).mockResolvedValue(
@@ -201,6 +205,10 @@ describe('MemorySystem', () => {
       embeddingService: mockEmbeddingService,
       logger: mockLogger,
     });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   describe('getLatestMemory', () => {
@@ -240,7 +248,7 @@ describe('MemorySystem', () => {
           arousal: 0.3,
           labels: ['neutral'],
         },
-        createdAt: '2025/01/26 00:00:00',
+        createdAt: '2日前 (2025年01月26日 00:00:00)',
       });
     });
 

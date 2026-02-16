@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 
-import { formatDatetime, formatDate, formatElapsedTime } from './datetime';
+import {
+  formatDatetime,
+  formatDate,
+  formatElapsedTime,
+  formatDatetimeForAgent,
+} from './datetime';
 
 describe('formatDatetime', () => {
   it('基本的な日時フォーマット（Asia/Tokyo）', () => {
@@ -210,5 +215,99 @@ describe('formatElapsedTime', () => {
     const result = formatElapsedTime(since, now);
 
     expect(result).toBe('0分前');
+  });
+});
+
+describe('formatDatetimeForAgent', () => {
+  it('0分以下の場合は "たった今 (YYYY年MM月DD日 HH:mm:ss)"', () => {
+    const date = new Date('2025-07-29T12:00:00Z');
+    const ref = new Date('2025-07-29T12:00:00Z');
+
+    const result = formatDatetimeForAgent(date, ref);
+
+    // Asia/Tokyo: UTC+9 = 21:00:00
+    expect(result).toBe('たった今 (2025年07月29日 21:00:00)');
+  });
+
+  it('負の差分（未来の日時）の場合は "たった今"', () => {
+    const date = new Date('2025-07-29T13:00:00Z');
+    const ref = new Date('2025-07-29T12:00:00Z');
+
+    const result = formatDatetimeForAgent(date, ref);
+
+    expect(result).toBe('たった今 (2025年07月29日 22:00:00)');
+  });
+
+  it('30分経過の場合は "30分前 (YYYY年MM月DD日 HH:mm:ss)"', () => {
+    const date = new Date('2025-07-29T12:00:00Z');
+    const ref = new Date('2025-07-29T12:30:00Z');
+
+    const result = formatDatetimeForAgent(date, ref);
+
+    expect(result).toBe('30分前 (2025年07月29日 21:00:00)');
+  });
+
+  it('59分経過の場合は "59分前"', () => {
+    const date = new Date('2025-07-29T12:00:00Z');
+    const ref = new Date('2025-07-29T12:59:00Z');
+
+    const result = formatDatetimeForAgent(date, ref);
+
+    expect(result).toBe('59分前 (2025年07月29日 21:00:00)');
+  });
+
+  it('1時間経過の場合は "1時間前"', () => {
+    const date = new Date('2025-07-29T12:00:00Z');
+    const ref = new Date('2025-07-29T13:00:00Z');
+
+    const result = formatDatetimeForAgent(date, ref);
+
+    expect(result).toBe('1時間前 (2025年07月29日 21:00:00)');
+  });
+
+  it('23時間59分経過の場合は "23時間前"', () => {
+    const date = new Date('2025-07-29T12:00:00Z');
+    const ref = new Date('2025-07-30T11:59:00Z');
+
+    const result = formatDatetimeForAgent(date, ref);
+
+    expect(result).toBe('23時間前 (2025年07月29日 21:00:00)');
+  });
+
+  it('24時間経過の場合は "1日前"', () => {
+    const date = new Date('2025-07-29T12:00:00Z');
+    const ref = new Date('2025-07-30T12:00:00Z');
+
+    const result = formatDatetimeForAgent(date, ref);
+
+    expect(result).toBe('1日前 (2025年07月29日 21:00:00)');
+  });
+
+  it('複数日経過の場合は "n日前"', () => {
+    const date = new Date('2025-07-29T12:00:00Z');
+    const ref = new Date('2025-08-01T15:15:00Z');
+
+    const result = formatDatetimeForAgent(date, ref);
+
+    // 3日と3時間15分 = 3日前
+    expect(result).toBe('3日前 (2025年07月29日 21:00:00)');
+  });
+
+  it('タイムゾーン UTC を指定', () => {
+    const date = new Date('2025-07-29T12:00:00Z');
+    const ref = new Date('2025-07-29T14:30:00Z');
+
+    const result = formatDatetimeForAgent(date, ref, 'UTC');
+
+    expect(result).toBe('2時間前 (2025年07月29日 12:00:00)');
+  });
+
+  it('referenceDate 省略時は現在時刻を使用', () => {
+    const date = new Date();
+
+    const result = formatDatetimeForAgent(date);
+
+    // 現在時刻との差なので "たった今" を含む
+    expect(result).toMatch(/^たった今 \(/);
   });
 });

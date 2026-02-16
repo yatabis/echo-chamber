@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createDiscordCurrentUserResponse,
@@ -200,6 +200,17 @@ describe('getUnreadMessageCount', () => {
 });
 
 describe('getNotificationDetails', () => {
+  // テストデータのタイムスタンプ: 2025-01-23T04:56:07.089Z (UTC)
+  // 基準時刻を2025-01-25の深夜に固定して「2日前」を期待
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2025-01-25T23:59:59.999Z'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('基本ケース：未読メッセージありで未読数と最新プレビューを返す', async () => {
     const mockUser = createDiscordCurrentUserResponse(BOT_USER_ID);
     vi.mocked(getCurrentUser).mockResolvedValue(mockUser);
@@ -226,7 +237,7 @@ describe('getNotificationDetails', () => {
         messageId: 'message-1',
         user: 'user-1',
         message: '最新メッセージ',
-        created_at: '2025/01/23 13:56:07',
+        created_at: '2日前 (2025年01月23日 13:56:07)',
       },
     });
   });
@@ -258,7 +269,7 @@ describe('getNotificationDetails', () => {
         messageId: 'message-1',
         user: BOT_USER_ID,
         message: '最新メッセージ（既読）',
-        created_at: '2025/01/23 13:56:07',
+        created_at: '2日前 (2025年01月23日 13:56:07)',
       },
     });
   });
@@ -309,7 +320,7 @@ describe('getNotificationDetails', () => {
         messageId: 'message-1',
         user: 'user-1',
         message: '最新メッセージ',
-        created_at: '2025/01/23 13:56:07',
+        created_at: '2日前 (2025年01月23日 13:56:07)',
       },
     });
   });

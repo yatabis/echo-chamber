@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createDiscordMessagesResponse } from '../../../../test/helpers/discord';
 import { mockToolContext } from '../../../../test/mocks/tool';
@@ -301,7 +301,15 @@ describe('readChatMessagesFunction', () => {
   });
 
   describe('handler', () => {
+    // テストデータのタイムスタンプ: 2025-01-23T04:56:07〜09 (UTC)
+    // 基準時刻を2025-01-25の深夜に固定して、すべて「2日前」を期待
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2025-01-25T23:59:59.999Z'));
+    });
+
     afterEach(() => {
+      vi.useRealTimers();
       vi.restoreAllMocks();
     });
 
@@ -324,7 +332,7 @@ describe('readChatMessagesFunction', () => {
             messageId: 'message-1',
             user: 'user1',
             message: 'Hello',
-            created_at: '2025/01/23 13:56:07',
+            created_at: '2日前 (2025年01月23日 13:56:07)',
           },
         ],
       };
@@ -332,7 +340,7 @@ describe('readChatMessagesFunction', () => {
     });
 
     it('メッセージが日付の昇順にソートされる', async () => {
-      const messages = [
+      const mockData = [
         {
           message: 'Third',
           user: 'user1',
@@ -349,7 +357,7 @@ describe('readChatMessagesFunction', () => {
           timestamp: '2025-01-23T04:56:07.000Z',
         },
       ];
-      const mockMessages = createDiscordMessagesResponse(messages);
+      const mockMessages = createDiscordMessagesResponse(mockData);
       vi.mocked(getChannelMessages).mockResolvedValue(mockMessages);
       const result = await readChatMessagesFunction.handler(
         { limit: 3 },
@@ -362,19 +370,19 @@ describe('readChatMessagesFunction', () => {
             messageId: 'message-3',
             user: 'user3',
             message: 'First',
-            created_at: '2025/01/23 13:56:07',
+            created_at: '2日前 (2025年01月23日 13:56:07)',
           },
           {
             messageId: 'message-2',
             user: 'user2',
             message: 'Second',
-            created_at: '2025/01/23 13:56:08',
+            created_at: '2日前 (2025年01月23日 13:56:08)',
           },
           {
             messageId: 'message-1',
             user: 'user1',
             message: 'Third',
-            created_at: '2025/01/23 13:56:09',
+            created_at: '2日前 (2025年01月23日 13:56:09)',
           },
         ],
       };
@@ -404,7 +412,7 @@ describe('readChatMessagesFunction', () => {
             messageId: 'message-1',
             user: 'user1',
             message: 'Hello with reactions',
-            created_at: '2025/01/23 13:56:07',
+            created_at: '2日前 (2025年01月23日 13:56:07)',
             reactions: [
               { emoji: '👍', me: false },
               { emoji: '😄', me: true },

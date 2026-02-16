@@ -1,4 +1,4 @@
-import { formatDatetime } from '../utils/datetime';
+import { formatDatetimeForAgent } from '../utils/datetime';
 
 import { getChannelMessages, getCurrentUser } from './api';
 
@@ -93,7 +93,7 @@ export async function getNotificationDetails(
         messageId: latestMessage.id,
         user: latestMessage.author.username,
         message: latestMessage.content,
-        created_at: formatDatetime(new Date(latestMessage.timestamp)),
+        created_at: formatDatetimeForAgent(new Date(latestMessage.timestamp)),
       }
     : null;
 

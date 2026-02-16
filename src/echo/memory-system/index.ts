@@ -1,4 +1,4 @@
-import { formatDatetime } from '../../utils/datetime';
+import { formatDatetimeForAgent } from '../../utils/datetime';
 import { cosineSimilarity } from '../../utils/vector';
 
 import type { EmbeddingService } from '../../llm/openai/embedding';
@@ -291,7 +291,7 @@ export class MemorySystem {
         arousal: row.emotion_arousal,
         labels: JSON.parse(row.emotion_labels) as string[],
       },
-      createdAt: formatDatetime(new Date(row.created_at)),
+      createdAt: formatDatetimeForAgent(new Date(row.created_at)),
     };
   }
 }
