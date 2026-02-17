@@ -689,6 +689,86 @@ describe('formatLogOutput', () => {
     expect(formatLogOutput(output)).toBe('*search_memory: 何か思い出*');
   });
 
+  it('create_note', () => {
+    const output: ResponseOutputItem[] = [
+      {
+        type: 'function_call',
+        call_id: 'call_create_note',
+        name: 'create_note',
+        arguments: JSON.stringify({
+          title: '買い物メモ',
+          content: '牛乳とパン',
+        }),
+        status: 'completed',
+      },
+    ];
+
+    expect(formatLogOutput(output)).toBe('*create_note: 買い物メモ*');
+  });
+
+  it('list_notes', () => {
+    const output: ResponseOutputItem[] = [
+      {
+        type: 'function_call',
+        call_id: 'call_list_notes',
+        name: 'list_notes',
+        arguments: JSON.stringify({}),
+        status: 'completed',
+      },
+    ];
+
+    expect(formatLogOutput(output)).toBe('*list_notes*');
+  });
+
+  it('search_notes', () => {
+    const output: ResponseOutputItem[] = [
+      {
+        type: 'function_call',
+        call_id: 'call_search_notes',
+        name: 'search_notes',
+        arguments: JSON.stringify({
+          query: '買い物',
+        }),
+        status: 'completed',
+      },
+    ];
+
+    expect(formatLogOutput(output)).toBe('*search_notes: 買い物*');
+  });
+
+  it('update_note', () => {
+    const output: ResponseOutputItem[] = [
+      {
+        type: 'function_call',
+        call_id: 'call_update_note',
+        name: 'update_note',
+        arguments: JSON.stringify({
+          id: 'note-1',
+          title: '更新後タイトル',
+        }),
+        status: 'completed',
+      },
+    ];
+
+    expect(formatLogOutput(output)).toBe('*update_note: note-1*');
+  });
+
+  it('delete_note', () => {
+    const output: ResponseOutputItem[] = [
+      {
+        type: 'function_call',
+        call_id: 'call_delete_note',
+        name: 'delete_note',
+        arguments: JSON.stringify({
+          id: 'note-1',
+        }),
+        status: 'completed',
+      },
+    ];
+
+    expect(formatLogOutput(output)).toBe('*delete_note: note-1*');
+  });
+
   it('デフォルトの function_call', () => {
     const output: ResponseOutputItem[] = [
       {

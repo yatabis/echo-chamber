@@ -36,6 +36,14 @@ export interface Knowledge {
   forgottenAt: string;
 }
 
+export interface Note {
+  id: string;
+  title: string;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Emotion {
   valence: number; // [-1.0, 1.0] - negative to positive
   arousal: number; // [0.0, 1.0] - calm to excited

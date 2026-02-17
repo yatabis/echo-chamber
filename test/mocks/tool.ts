@@ -4,6 +4,7 @@ import { vi } from 'vitest';
 import { createLogger } from '../../src/utils/logger';
 
 import type { MemorySystem } from '../../src/echo/memory-system';
+import type { NoteSystem } from '../../src/echo/note-system';
 import type { ToolContext } from '../../src/llm/openai/functions';
 import type { EchoInstanceConfig } from '../../src/types/echo-config';
 
@@ -41,6 +42,14 @@ const mockMemorySystem: MemorySystem = {
   searchMemory: vi.fn().mockResolvedValue([]),
 } as unknown as MemorySystem;
 
+const mockNoteSystem: NoteSystem = {
+  createNote: vi.fn(),
+  listNotes: vi.fn().mockResolvedValue([]),
+  searchNotes: vi.fn().mockResolvedValue([]),
+  updateNote: vi.fn().mockResolvedValue(null),
+  deleteNote: vi.fn().mockResolvedValue(false),
+} as unknown as NoteSystem;
+
 export const mockInstanceConfig: EchoInstanceConfig = {
   id: 'rin',
   name: 'テスト用リン',
@@ -54,5 +63,6 @@ export const mockToolContext: ToolContext = {
   instanceConfig: mockInstanceConfig,
   storage: mockStorage as unknown as DurableObjectStorage,
   memorySystem: mockMemorySystem,
+  noteSystem: mockNoteSystem,
   logger: mockLogger,
 };

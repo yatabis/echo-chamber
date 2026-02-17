@@ -2,10 +2,11 @@ import { formatDate } from '../../../utils/datetime';
 import { Card } from '../components/Card';
 import { KnowledgeList } from '../components/KnowledgeList';
 import { Layout } from '../components/Layout';
+import { NoteList } from '../components/NoteList';
 import { TaskList } from '../components/TaskList';
 import { UsageChart } from '../components/UsageChart';
 
-import type { Knowledge, Task, UsageRecord } from '../../types';
+import type { Knowledge, Note, Task, UsageRecord } from '../../types';
 import type { FC } from 'hono/jsx';
 
 type EchoState = 'Idling' | 'Running' | 'Sleeping';
@@ -18,6 +19,8 @@ export interface StatusPageProps {
   context: string;
   tasks: Task[];
   knowledges: Knowledge[];
+  notes: Note[];
+  noteQuery: string;
   usage: UsageRecord;
 }
 
@@ -29,6 +32,8 @@ export const StatusPage: FC<StatusPageProps> = async ({
   context,
   tasks,
   knowledges,
+  notes,
+  noteQuery,
   usage,
 }) => {
   const today = new Date(Date.now() + 9 * 60 * 60 * 1000);
@@ -94,6 +99,12 @@ export const StatusPage: FC<StatusPageProps> = async ({
         <div style={{ marginTop: '12px' }}>
           <Card title="Knowledge">
             <KnowledgeList id={id} knowledges={knowledges} />
+          </Card>
+        </div>
+
+        <div style={{ marginTop: '12px' }}>
+          <Card title="Notes">
+            <NoteList id={id} notes={notes} noteQuery={noteQuery} />
           </Card>
         </div>
       </main>

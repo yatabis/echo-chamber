@@ -11,6 +11,7 @@ import { createLogger } from '../utils/logger';
 
 import { ALARM_CONFIG, TOKEN_LIMITS } from './constants';
 import { MemorySystem } from './memory-system';
+import { NoteSystem } from './note-system';
 import { ThinkingEngine } from './thinking-engine';
 import {
   addUsage,
@@ -20,7 +21,14 @@ import {
 } from './usage';
 import { StatusPage } from './view/pages/StatusPage';
 
-import type { EchoState, Knowledge, Task, Usage, UsageRecord } from './types';
+import type {
+  EchoState,
+  Knowledge,
+  Note,
+  Task,
+  Usage,
+  UsageRecord,
+} from './types';
 import type { EchoInstanceConfig, EchoInstanceId } from '../types/echo-config';
 import type { Logger } from '../utils/logger';
 
@@ -30,6 +38,7 @@ export class Echo extends DurableObject<Env> {
   private readonly router: Hono;
   private readonly logger: Logger;
   private readonly _env: Env;
+  private readonly noteSystem: NoteSystem;
 
   // 遅延初期化されるプロパティ（ensureInitializedで設定されるためreadonlyではない）
   private instanceConfig: EchoInstanceConfig | null = null;
@@ -48,6 +57,10 @@ export class Echo extends DurableObject<Env> {
     this.storage = ctx.storage;
     this.logger = createLogger(env);
     this._env = env;
+    this.noteSystem = new NoteSystem({
+      storage: this.storage,
+      logger: this.logger,
+    });
     this.router = new Hono()
       .basePath('/:id')
       // 全リクエストで遅延初期化を実行するミドルウェア
@@ -67,6 +80,8 @@ export class Echo extends DurableObject<Env> {
         const context = await this.getContext();
         const tasks = await this.getTasks();
         const knowledges = await this.getKnowledges();
+        const noteQuery = c.req.query('noteQuery')?.trim() ?? '';
+        const notes = await this.getNotes(noteQuery);
         const usage = await this.getAllUsage();
         return c.render(
           <StatusPage
@@ -77,6 +92,8 @@ export class Echo extends DurableObject<Env> {
             context={context}
             tasks={tasks}
             knowledges={knowledges}
+            notes={notes}
+            noteQuery={noteQuery}
             usage={usage}
           />
         );
@@ -105,6 +122,7 @@ export class Echo extends DurableObject<Env> {
           createdAt: row.created_at,
           updatedAt: row.updated_at,
         }));
+        const notes = await this.getNotes();
 
         return c.json({
           id,
@@ -112,6 +130,7 @@ export class Echo extends DurableObject<Env> {
           state,
           nextAlarm,
           memories,
+          notes,
           usage,
         });
       })
@@ -296,6 +315,14 @@ export class Echo extends DurableObject<Env> {
       (a, b) =>
         new Date(b.forgottenAt).getTime() - new Date(a.forgottenAt).getTime()
     );
+  }
+
+  async getNotes(query = ''): Promise<Note[]> {
+    const normalizedQuery = query.trim();
+    if (normalizedQuery.length > 0) {
+      return await this.noteSystem.searchNotes(normalizedQuery);
+    }
+    return await this.noteSystem.listNotes();
   }
 
   /**

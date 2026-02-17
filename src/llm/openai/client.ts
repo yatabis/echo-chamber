@@ -250,6 +250,11 @@ const functionCallFormatters: Record<
       ? `*search_memory [${type}]: ${query}*`
       : `*search_memory: ${query}*`;
   },
+  create_note: (args) => `*create_note: ${args.title as string}*`,
+  list_notes: () => `*list_notes*`,
+  search_notes: (args) => `*search_notes: ${args.query as string}*`,
+  update_note: (args) => `*update_note: ${args.id as string}*`,
+  delete_note: (args) => `*delete_note: ${args.id as string}*`,
   finish_thinking: (args) => {
     const nextWakeAt = args.next_wake_at as string | undefined;
     return `*finish_thinking: ${args.reason as string}(next_wake_at: ${nextWakeAt})*`;

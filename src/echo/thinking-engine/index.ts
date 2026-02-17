@@ -11,10 +11,18 @@ import {
   storeMemoryFunction,
   searchMemoryFunction,
 } from '../../llm/openai/functions/memory';
+import {
+  createNoteFunction,
+  deleteNoteFunction,
+  listNotesFunction,
+  searchNotesFunction,
+  updateNoteFunction,
+} from '../../llm/openai/functions/note';
 import { thinkDeeplyFunction } from '../../llm/openai/functions/think';
 import { formatJapaneseDatetime } from '../../utils/datetime';
 import { ThinkingStream } from '../../utils/thinking-stream';
 import { MemorySystem } from '../memory-system';
+import { NoteSystem } from '../note-system';
 import { getTodayUsageKey } from '../usage';
 
 import type { ITool, ToolContext } from '../../llm/openai/functions';
@@ -51,10 +59,15 @@ export class ThinkingEngine {
       embeddingService,
       logger: options.logger,
     });
+    const noteSystem = new NoteSystem({
+      storage: options.storage,
+      logger: options.logger,
+    });
     this.toolContext = {
       instanceConfig: options.instanceConfig,
       storage: options.storage,
       memorySystem,
+      noteSystem,
       logger: options.logger,
     };
   }
@@ -83,6 +96,11 @@ export class ThinkingEngine {
         addReactionToChatMessageFunction,
         storeMemoryFunction,
         searchMemoryFunction,
+        createNoteFunction,
+        listNotesFunction,
+        searchNotesFunction,
+        updateNoteFunction,
+        deleteNoteFunction,
         thinkDeeplyFunction,
         finishThinkingFunction,
       ],
