@@ -1,11 +1,5 @@
 export type EchoState = 'Idling' | 'Running' | 'Sleeping';
 
-export interface Task {
-  name: string;
-  content: string;
-  execution_time: string;
-}
-
 export interface Usage {
   cached_input_tokens: number;
   uncached_input_tokens: number;
@@ -17,24 +11,6 @@ export interface Usage {
 }
 
 export type UsageRecord = Record<string, Usage>;
-
-export type KnowledgeCategory =
-  | 'fact'
-  | 'experience'
-  | 'insight'
-  | 'pattern'
-  | 'rule'
-  | 'preference'
-  | 'other';
-
-export interface Knowledge {
-  content: string;
-  category: KnowledgeCategory;
-  tags: string[];
-  accessCount: number;
-  lastAccessedAt: string;
-  forgottenAt: string;
-}
 
 export interface Note {
   id: string;

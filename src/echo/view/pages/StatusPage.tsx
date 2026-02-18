@@ -1,12 +1,10 @@
 import { formatDate } from '../../../utils/datetime';
 import { Card } from '../components/Card';
-import { KnowledgeList } from '../components/KnowledgeList';
 import { Layout } from '../components/Layout';
 import { NoteList } from '../components/NoteList';
-import { TaskList } from '../components/TaskList';
 import { UsageChart } from '../components/UsageChart';
 
-import type { Knowledge, Note, Task, UsageRecord } from '../../types';
+import type { Note, UsageRecord } from '../../types';
 import type { FC } from 'hono/jsx';
 
 type EchoState = 'Idling' | 'Running' | 'Sleeping';
@@ -16,9 +14,6 @@ export interface StatusPageProps {
   name: string;
   state: EchoState;
   nextAlarm: string | null;
-  context: string;
-  tasks: Task[];
-  knowledges: Knowledge[];
   notes: Note[];
   noteQuery: string;
   usage: UsageRecord;
@@ -29,9 +24,6 @@ export const StatusPage: FC<StatusPageProps> = async ({
   name,
   state,
   nextAlarm,
-  context,
-  tasks,
-  knowledges,
   notes,
   noteQuery,
   usage,
@@ -72,33 +64,11 @@ export const StatusPage: FC<StatusPageProps> = async ({
 
       <main>
         <div className="grid">
-          <Card title="Context">
-            <div className="context">
-              {context.trim().length > 0 ? (
-                context
-              ) : (
-                <span className="muted">No context.</span>
-              )}
-            </div>
-          </Card>
-
           <Card
             title="Usage (7days)"
             right={<div className="pill mono">total {totalTokens} tokens</div>}
           >
             <UsageChart data={usageData} />
-          </Card>
-        </div>
-
-        <div style={{ marginTop: '12px' }}>
-          <Card title="Tasks">
-            <TaskList id={id} tasks={tasks} />
-          </Card>
-        </div>
-
-        <div style={{ marginTop: '12px' }}>
-          <Card title="Knowledge">
-            <KnowledgeList id={id} knowledges={knowledges} />
           </Card>
         </div>
 

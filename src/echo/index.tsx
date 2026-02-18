@@ -21,14 +21,7 @@ import {
 } from './usage';
 import { StatusPage } from './view/pages/StatusPage';
 
-import type {
-  EchoState,
-  Knowledge,
-  Note,
-  Task,
-  Usage,
-  UsageRecord,
-} from './types';
+import type { EchoState, Note, Usage, UsageRecord } from './types';
 import type { EchoInstanceConfig, EchoInstanceId } from '../types/echo-config';
 import type { Logger } from '../utils/logger';
 
@@ -77,9 +70,6 @@ export class Echo extends DurableObject<Env> {
         const name = await this.getName();
         const state = await this.getState();
         const nextAlarm = await this.getNextAlarm();
-        const context = await this.getContext();
-        const tasks = await this.getTasks();
-        const knowledges = await this.getKnowledges();
         const noteQuery = c.req.query('noteQuery')?.trim() ?? '';
         const notes = await this.getNotes(noteQuery);
         const usage = await this.getAllUsage();
@@ -89,9 +79,6 @@ export class Echo extends DurableObject<Env> {
             name={name}
             state={state}
             nextAlarm={nextAlarm}
-            context={context}
-            tasks={tasks}
-            knowledges={knowledges}
             notes={notes}
             noteQuery={noteQuery}
             usage={usage}
@@ -149,23 +136,6 @@ export class Echo extends DurableObject<Env> {
         await this.run();
         return c.text('OK.');
       })
-      .post('/reset', async (c) => {
-        await this.storage.put('context', '');
-        await this.storage.put('tasks', []);
-        return c.text('OK.');
-      })
-      .delete('/tasks/', async (c) => {
-        const taskName = c.req.query('name');
-        const tasks = await this.getTasks();
-        if (!tasks.find((t) => t.name === taskName)) {
-          return c.text('Task not found', 404);
-        }
-        await this.storage.put(
-          'tasks',
-          tasks.filter((t) => t.name !== taskName)
-        );
-        return c.text('OK.');
-      })
       .get('/usage', async (c) => {
         const allUsage = await this.getAllUsage();
         return c.json(allUsage);
@@ -182,6 +152,10 @@ export class Echo extends DurableObject<Env> {
    * 最初のリクエスト時に呼び出され、instanceConfigとThinkingEngineを設定する
    */
   private async ensureInitialized(id: EchoInstanceId): Promise<void> {
+    await this.storage.delete('context');
+    await this.storage.delete('tasks');
+    await this.storage.delete('knowledge');
+
     // 既に同じIDで初期化済みの場合はスキップ
     if (this.instanceConfig?.id === id) {
       return;
@@ -297,26 +271,6 @@ export class Echo extends DurableObject<Env> {
     await this.storage.put('state', newState);
   }
 
-  async getContext(): Promise<string> {
-    const context = await this.storage.get<string>('context');
-    return context ?? '';
-  }
-
-  async getTasks(): Promise<Task[]> {
-    const tasks = await this.storage.get<Task[]>('tasks');
-    return tasks ?? [];
-  }
-
-  async getKnowledges(): Promise<Knowledge[]> {
-    const knowledges = await this.storage.get<Knowledge[]>('knowledge');
-    if (!knowledges) return [];
-    // forgottenAtの降順でソート
-    return knowledges.sort(
-      (a, b) =>
-        new Date(b.forgottenAt).getTime() - new Date(a.forgottenAt).getTime()
-    );
-  }
-
   async getNotes(query = ''): Promise<Note[]> {
     const normalizedQuery = query.trim();
     if (normalizedQuery.length > 0) {
@@ -421,18 +375,6 @@ export class Echo extends DurableObject<Env> {
       return true;
     }
 
-    // Usageチェック
-    const usageValidationMessage = await this.validateUsageLimit();
-
-    // 実行すべきタスクがあれば実行
-    if (await this.validateTask()) {
-      if (usageValidationMessage) {
-        await this.logger.warn(usageValidationMessage);
-        return false;
-      }
-      return true;
-    }
-
     // tokenが余っていれば実行
     const softLimit = calculateDynamicTokenLimit(TOKEN_LIMITS.DAILY_SOFT_LIMIT);
     const todayUsage = await this.getTodayUsage();
@@ -481,35 +423,6 @@ export class Echo extends DurableObject<Env> {
   }
 
   /**
-   * Usageの制限を検証
-   */
-  private async validateUsageLimit(): Promise<string> {
-    const name = await this.getName();
-    const todayUsage = await this.getTodayUsage();
-    const dynamicLimit = calculateDynamicTokenLimit(
-      TOKEN_LIMITS.DAILY_LIMIT,
-      TOKEN_LIMITS.BUFFER_FACTOR
-    );
-
-    if (todayUsage && todayUsage.total_tokens >= dynamicLimit) {
-      const now = new Date();
-      const timeStr = now.toLocaleTimeString('ja-JP', {
-        timeZone: 'Asia/Tokyo',
-        hour: '2-digit',
-        minute: '2-digit',
-      });
-
-      return (
-        `${name}の現在時刻(${timeStr})におけるトークン使用制限(${Math.floor(dynamicLimit)})を超えています。` +
-        `現在の使用量: ${todayUsage.total_tokens}トークン。` +
-        `(1日上限: ${TOKEN_LIMITS.DAILY_LIMIT}トークン)`
-      );
-    }
-
-    return '';
-  }
-
-  /**
    * 未読メッセージがあるか検証
    */
   private async validateChatMessage(): Promise<boolean> {
@@ -532,33 +445,6 @@ export class Echo extends DurableObject<Env> {
     }
 
     return unreadCount > 0;
-  }
-
-  /**
-   * 実行すべきタスクがあるか検証
-   */
-  private async validateTask(): Promise<boolean> {
-    const tasks = await this.getTasks();
-    if (tasks.length === 0) {
-      await this.logger.debug('タスクがありません。');
-      return false;
-    }
-
-    const nextTime = new Date();
-    nextTime.setMinutes(nextTime.getMinutes() + ALARM_CONFIG.INTERVAL_MINUTES);
-
-    const taskToExecute = tasks.find((task) => {
-      const taskExecutionTime = new Date(task.execution_time);
-      return taskExecutionTime < nextTime;
-    });
-
-    if (taskToExecute) {
-      await this.logger.info(`予定されたタスク: ${taskToExecute.name}`);
-    } else {
-      await this.logger.debug('予定されたタスクなし');
-    }
-
-    return !!taskToExecute;
   }
 
   /**

@@ -36,7 +36,6 @@ export const Layout: FC<PropsWithChildren<{ title?: string }>> = async ({
         .item h3{margin:0 0 4px 0;font-size:14px}
         .small{font-size:12px}
         .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace}
-        .context{white-space:pre-wrap;word-break:break-word;line-height:1.5;border:1px solid var(--line);border-radius:10px;padding:10px;background:#0f1520}
         .chart{height:200px;display:flex;flex-direction:column;gap:12px;border:1px dashed #223047;border-radius:10px;padding:10px}
         .chart-bars{display:flex;align-items:flex-end;gap:8px;flex:1;min-height:120px}
         .bar{flex:1;display:flex;flex-direction:column-reverse;align-items:center;gap:6px;height:100%}
