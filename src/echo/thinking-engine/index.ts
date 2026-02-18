@@ -14,6 +14,7 @@ import {
 import {
   createNoteFunction,
   deleteNoteFunction,
+  getNoteFunction,
   listNotesFunction,
   searchNotesFunction,
   updateNoteFunction,
@@ -98,6 +99,7 @@ export class ThinkingEngine {
         searchMemoryFunction,
         createNoteFunction,
         listNotesFunction,
+        getNoteFunction,
         searchNotesFunction,
         updateNoteFunction,
         deleteNoteFunction,

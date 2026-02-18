@@ -139,6 +139,29 @@ describe('NoteSystem', () => {
     });
   });
 
+  describe('getNote', () => {
+    it('id指定でノートを1件取得できる', async () => {
+      const created = await noteSystem.createNote({
+        title: 'Meeting',
+        content: 'Discuss timeline',
+      });
+
+      const found = await noteSystem.getNote(created.id);
+      expect(found).toEqual(created);
+    });
+
+    it('存在しないIDはnullを返す', async () => {
+      const found = await noteSystem.getNote('missing-note');
+      expect(found).toBeNull();
+    });
+
+    it('空白IDはバリデーションエラー', async () => {
+      await expect(noteSystem.getNote('   ')).rejects.toThrowError(
+        'Note ID is required'
+      );
+    });
+  });
+
   describe('searchNotes', () => {
     it('titleの部分一致で1件ヒットする', async () => {
       await noteSystem.createNote({

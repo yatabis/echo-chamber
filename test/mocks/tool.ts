@@ -45,6 +45,7 @@ const mockMemorySystem: MemorySystem = {
 const mockNoteSystem: NoteSystem = {
   createNote: vi.fn(),
   listNotes: vi.fn().mockResolvedValue([]),
+  getNote: vi.fn().mockResolvedValue(null),
   searchNotes: vi.fn().mockResolvedValue([]),
   updateNote: vi.fn().mockResolvedValue(null),
   deleteNote: vi.fn().mockResolvedValue(false),

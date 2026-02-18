@@ -720,6 +720,22 @@ describe('formatLogOutput', () => {
     expect(formatLogOutput(output)).toBe('*list_notes*');
   });
 
+  it('get_note', () => {
+    const output: ResponseOutputItem[] = [
+      {
+        type: 'function_call',
+        call_id: 'call_get_note',
+        name: 'get_note',
+        arguments: JSON.stringify({
+          id: 'note-1',
+        }),
+        status: 'completed',
+      },
+    ];
+
+    expect(formatLogOutput(output)).toBe('*get_note: note-1*');
+  });
+
   it('search_notes', () => {
     const output: ResponseOutputItem[] = [
       {

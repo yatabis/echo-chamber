@@ -252,6 +252,7 @@ const functionCallFormatters: Record<
   },
   create_note: (args) => `*create_note: ${args.title as string}*`,
   list_notes: () => `*list_notes*`,
+  get_note: (args) => `*get_note: ${args.id as string}*`,
   search_notes: (args) => `*search_notes: ${args.query as string}*`,
   update_note: (args) => `*update_note: ${args.id as string}*`,
   delete_note: (args) => `*delete_note: ${args.id as string}*`,

@@ -9,6 +9,8 @@ import { getErrorMessage } from '../../../utils/error';
 
 import { Tool } from './index';
 
+import type { Note } from '../../../echo/types';
+
 const noteIdSchema = z.string().min(1).trim().describe('ノートID。例: note-12');
 
 const noteTitleSchema = z
@@ -33,6 +35,8 @@ const noteQuerySchema = z
   .describe(
     `検索クエリ。title/contentに対して部分一致で検索する。最大${MAX_NOTE_QUERY_LENGTH}文字。`
   );
+
+type NoteSummary = Pick<Note, 'id' | 'title' | 'createdAt' | 'updatedAt'>;
 
 export const createNoteFunction = new Tool(
   'create_note',
@@ -61,18 +65,54 @@ export const createNoteFunction = new Tool(
 
 export const listNotesFunction = new Tool(
   'list_notes',
-  '保存済みノートを一覧取得する。更新日時の降順で返す。',
+  '保存済みノートを一覧取得する。更新日時の降順で返す。本文は含めずメタ情報のみ返す。',
   {},
   async (_, ctx) => {
     try {
       const notes = await ctx.noteSystem.listNotes();
+      const summaries: NoteSummary[] = notes.map((note) => ({
+        id: note.id,
+        title: note.title,
+        createdAt: note.createdAt,
+        updatedAt: note.updatedAt,
+      }));
       return {
         success: true,
-        notes,
+        notes: summaries,
       };
     } catch (error) {
       const message = getErrorMessage(error);
       await ctx.logger.error(`Error listing notes: ${message}`);
+      return {
+        success: false,
+        error: message,
+      };
+    }
+  }
+);
+
+export const getNoteFunction = new Tool(
+  'get_note',
+  'IDを指定してノート1件を取得する。本文を含む完全なノート情報を返す。',
+  {
+    id: noteIdSchema,
+  },
+  async ({ id }, ctx) => {
+    try {
+      const note = await ctx.noteSystem.getNote(id);
+      if (note === null) {
+        return {
+          success: false,
+          error: 'Note not found',
+        };
+      }
+      return {
+        success: true,
+        note,
+      };
+    } catch (error) {
+      const message = getErrorMessage(error);
+      await ctx.logger.error(`Error getting note: ${message}`);
       return {
         success: false,
         error: message,

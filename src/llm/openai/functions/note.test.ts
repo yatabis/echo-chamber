@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createNoteFunction,
   deleteNoteFunction,
+  getNoteFunction,
   listNotesFunction,
   searchNotesFunction,
   updateNoteFunction,
@@ -16,6 +17,7 @@ import type { Note } from '../../../echo/types';
 const createNoteMock =
   vi.fn<(input: { title: string; content: string }) => Promise<Note>>();
 const listNotesMock = vi.fn<() => Promise<Note[]>>();
+const getNoteMock = vi.fn<(id: string) => Promise<Note | null>>();
 const searchNotesMock = vi.fn<(query: string) => Promise<Note[]>>();
 const updateNoteMock =
   vi.fn<
@@ -29,6 +31,7 @@ const deleteNoteMock = vi.fn<(id: string) => Promise<boolean>>();
 const mockedNoteSystem: NoteSystem = {
   createNote: createNoteMock,
   listNotes: listNotesMock,
+  getNote: getNoteMock,
   searchNotes: searchNotesMock,
   updateNote: updateNoteMock,
   deleteNote: deleteNoteMock,
@@ -60,6 +63,7 @@ const mockToolContext: ToolContext = {
 beforeEach(() => {
   vi.resetAllMocks();
   listNotesMock.mockResolvedValue([]);
+  getNoteMock.mockResolvedValue(null);
   searchNotesMock.mockResolvedValue([]);
   updateNoteMock.mockResolvedValue(null);
   deleteNoteMock.mockResolvedValue(false);
@@ -136,9 +140,55 @@ describe('Note Functions', () => {
       const result = await listNotesFunction.handler({}, mockToolContext);
 
       expect(listNotesMock).toHaveBeenCalled();
+      const noteSummaries = notes.map((note) => ({
+        id: note.id,
+        title: note.title,
+        createdAt: note.createdAt,
+        updatedAt: note.updatedAt,
+      }));
       expect(result).toEqual({
         success: true,
-        notes,
+        notes: noteSummaries,
+      });
+      if (result.success) {
+        const summary = (result.notes as Record<string, unknown>[])[0];
+        expect(summary).not.toHaveProperty('content');
+      }
+    });
+  });
+
+  describe('getNoteFunction', () => {
+    it('name', () => {
+      expect(getNoteFunction.name).toBe('get_note');
+    });
+
+    it('handler gets note', async () => {
+      const note = createMockNote({ id: 'note-3' });
+      getNoteMock.mockResolvedValue(note);
+
+      const result = await getNoteFunction.handler(
+        { id: 'note-3' },
+        mockToolContext
+      );
+
+      expect(getNoteMock).toHaveBeenCalledWith('note-3');
+      expect(result).toEqual({
+        success: true,
+        note,
+      });
+    });
+
+    it('存在しないノートはnot found', async () => {
+      getNoteMock.mockResolvedValue(null);
+
+      const result = await getNoteFunction.handler(
+        { id: 'missing-note' },
+        mockToolContext
+      );
+
+      expect(result).toEqual({
+        success: false,
+        error: 'Note not found',
       });
     });
   });

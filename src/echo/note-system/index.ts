@@ -126,6 +126,20 @@ export class NoteSystem {
     return sortByUpdatedAtDesc(notes);
   }
 
+  async getNote(id: string): Promise<Note | null> {
+    const noteId = id.trim();
+    if (noteId.length === 0) {
+      throw new Error('Note ID is required');
+    }
+
+    const storedNote = await this.storage.get<Note>(getNoteStorageKey(noteId));
+    if (!isNoteRecord(storedNote)) {
+      return null;
+    }
+
+    return storedNote;
+  }
+
   async searchNotes(query: string): Promise<Note[]> {
     const normalizedQuery = validateQuery(query).toLowerCase();
     const notes = await this.listNotes();
