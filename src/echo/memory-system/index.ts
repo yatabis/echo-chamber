@@ -242,7 +242,7 @@ export class MemorySystem {
       .slice(0, SEARCH_RESULT_LIMIT);
 
     await this.logger.info(
-      `Search Memory with query:\n${query}\nResults:\n${filteredMemories
+      `Search Memory with query:\n[${type}] ${query}\nResults:\n${filteredMemories
         .map(
           ({ row, similarity }) =>
             `[${row.type}] ${row.content} (${similarity.toFixed(4)})`
