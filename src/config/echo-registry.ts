@@ -7,7 +7,11 @@
 
 import systemPromptRin from '../llm/prompts/rin';
 
-import type { EchoInstanceConfig, EchoInstanceId } from '../types/echo-config';
+import type {
+  EchoInstanceConfig,
+  EchoInstanceId,
+  EmbeddingConfig,
+} from '../types/echo-config';
 
 /**
  * インスタンスごとの静的設定
@@ -18,6 +22,7 @@ interface StaticInstanceConfig {
   getDiscordBotToken(env: Env): string;
   chatChannelKvKey: string;
   thinkingChannelKvKey: string;
+  embeddingConfig?: EmbeddingConfig;
 }
 
 const INSTANCE_CONFIGS: Record<EchoInstanceId, StaticInstanceConfig> = {
@@ -27,6 +32,10 @@ const INSTANCE_CONFIGS: Record<EchoInstanceId, StaticInstanceConfig> = {
     getDiscordBotToken: (env) => env.DISCORD_BOT_TOKEN_RIN,
     chatChannelKvKey: 'chat_channel_discord_rin',
     thinkingChannelKvKey: 'thinking_channel_discord_rin',
+    embeddingConfig: {
+      provider: 'workersai',
+      model: '@cf/pfnet/plamo-embedding-1b',
+    },
   },
   marie: {
     name: 'マリー',
@@ -78,5 +87,6 @@ export async function getInstanceConfig(
     discordBotToken: staticConfig.getDiscordBotToken(env),
     chatChannelId,
     thinkingChannelId,
+    embeddingConfig: staticConfig.embeddingConfig,
   };
 }

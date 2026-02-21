@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 
 import { getInstanceConfig } from '../config/echo-registry';
 import { getUnreadMessageCount } from '../discord';
-import { OpenAIEmbeddingService } from '../llm/openai/embedding';
+import { createEmbeddingService } from '../llm/embedding-factory';
 import { isValidInstanceId } from '../types/echo-config';
 import { formatDatetime } from '../utils/datetime';
 import { getErrorMessage } from '../utils/error';
@@ -92,7 +92,10 @@ export class Echo extends DurableObject<Env> {
         const nextAlarm = await this.getNextAlarm();
         const usage = await this.getAllUsage();
 
-        const embeddingService = new OpenAIEmbeddingService(this._env);
+        const embeddingService = createEmbeddingService(
+          this._env,
+          this.instanceConfig?.embeddingConfig
+        );
         const memorySystem = new MemorySystem({
           sql: this.ctx.storage.sql,
           embeddingService,
@@ -106,6 +109,7 @@ export class Echo extends DurableObject<Env> {
             arousal: row.emotion_arousal,
             labels: JSON.parse(row.emotion_labels) as string[],
           },
+          embedding_model: row.embedding_model,
           createdAt: row.created_at,
           updatedAt: row.updated_at,
         }));
@@ -169,6 +173,8 @@ export class Echo extends DurableObject<Env> {
       logger: this.logger,
       instanceConfig: this.instanceConfig,
     });
+    // embedding モデル変更時の自動再 embedding
+    await this.thinkingEngine.initialize();
 
     // ストレージにID/名前を保存（alarmから参照するため）
     await this.storage.put('id', id);

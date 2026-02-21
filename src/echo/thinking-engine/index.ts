@@ -1,5 +1,5 @@
+import { createEmbeddingService } from '../../llm/embedding-factory';
 import { OpenAIClient } from '../../llm/openai/client';
-import { OpenAIEmbeddingService } from '../../llm/openai/embedding';
 import {
   addReactionToChatMessageFunction,
   checkNotificationsFunction,
@@ -54,7 +54,10 @@ export class ThinkingEngine {
   }) {
     this.env = options.env;
     this.instanceConfig = options.instanceConfig;
-    const embeddingService = new OpenAIEmbeddingService(options.env);
+    const embeddingService = createEmbeddingService(
+      options.env,
+      options.instanceConfig.embeddingConfig
+    );
     const memorySystem = new MemorySystem({
       sql: options.sql,
       embeddingService,
@@ -71,6 +74,10 @@ export class ThinkingEngine {
       noteSystem,
       logger: options.logger,
     };
+  }
+
+  async initialize(): Promise<void> {
+    await this.toolContext.memorySystem.reEmbedStaleMemories();
   }
 
   async think(): Promise<ResponseUsage> {

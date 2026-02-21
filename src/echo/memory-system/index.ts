@@ -1,4 +1,5 @@
 import { formatDatetimeForAgent } from '../../utils/datetime';
+import { getErrorMessage } from '../../utils/error';
 import { cosineSimilarity } from '../../utils/vector';
 
 import type { EmbeddingService } from '../../llm/openai/embedding';
@@ -34,6 +35,7 @@ interface MemoryRow extends Record<string, SqlStorageValue> {
   content: string;
   type: MemoryType;
   embedding: ArrayBuffer;
+  embedding_model: string;
   emotion_valence: number;
   emotion_arousal: number;
   emotion_labels: string;
@@ -89,6 +91,7 @@ export class MemorySystem {
         content TEXT NOT NULL,
         type TEXT NOT NULL,
         embedding BLOB NOT NULL,
+        embedding_model TEXT NOT NULL,
         emotion_valence REAL NOT NULL,
         emotion_arousal REAL NOT NULL,
         emotion_labels TEXT NOT NULL,
@@ -105,16 +108,16 @@ export class MemorySystem {
       CREATE INDEX IF NOT EXISTS idx_memories_updated_at ON memories(updated_at)
     `);
 
-    // マイグレーション: 既存テーブルにtypeカラムがない場合は追加
-    this.migrateAddTypeColumn();
+    // マイグレーション: 既存テーブルにtypeカラム, embedding_modelカラムがない場合は追加
+    this.migrateColumn();
 
     this.initialized = true;
   }
 
   /**
-   * typeカラムが存在しない既存テーブルにカラムを追加するマイグレーション
+   * typeカラム, embedding_modelカラムが存在しない既存テーブルにカラムを追加するマイグレーション
    */
-  private migrateAddTypeColumn(): void {
+  private migrateColumn(): void {
     // PRAGMA table_infoでカラム存在確認
     const columns = this.sql
       .exec<{ name: string }>('PRAGMA table_info(memories)')
@@ -126,6 +129,16 @@ export class MemorySystem {
       // typeカラムを追加（既存データは'episode'をデフォルト値とする）
       this.sql.exec(
         "ALTER TABLE memories ADD COLUMN type TEXT NOT NULL DEFAULT 'episode'"
+      );
+    }
+
+    const hasEmbeddingModelColumn = columns.some(
+      (col) => col.name === 'embedding_model'
+    );
+
+    if (!hasEmbeddingModelColumn) {
+      this.sql.exec(
+        "ALTER TABLE memories ADD COLUMN embedding_model TEXT NOT NULL DEFAULT 'openai/text-embedding-3-small'"
       );
     }
   }
@@ -163,14 +176,16 @@ export class MemorySystem {
     const now = new Date().toISOString();
     const id = crypto.randomUUID();
     const embeddingBuffer = float32ArrayToBuffer(embedding);
+    const embeddingModel = this.embeddingService.modelIdentifier;
 
     this.sql.exec(
-      `INSERT INTO memories (id, content, type, embedding, emotion_valence, emotion_arousal, emotion_labels, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO memories (id, content, type, embedding, embedding_model, emotion_valence, emotion_arousal, emotion_labels, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id,
       content,
       type,
       embeddingBuffer,
+      embeddingModel,
       emotion.valence,
       emotion.arousal,
       JSON.stringify(emotion.labels),
@@ -277,6 +292,57 @@ export class MemorySystem {
     this.ensureSchema();
 
     return this.sql.exec<MemoryRow>('SELECT * FROM memories').toArray();
+  }
+
+  /**
+   * 現在の embedding モデルと異なるモデルで生成された memory を再 embedding する
+   */
+  async reEmbedStaleMemories(): Promise<void> {
+    this.ensureSchema();
+
+    const currentModel = this.embeddingService.modelIdentifier;
+
+    const staleRows = this.sql
+      .exec<{
+        id: string;
+        content: string;
+      }>(
+        'SELECT id, content FROM memories WHERE embedding_model != ?',
+        currentModel
+      )
+      .toArray();
+
+    if (staleRows.length === 0) {
+      await this.logger.debug(
+        `No stale memories to re-embed (model: ${currentModel})`
+      );
+      return;
+    }
+
+    await this.logger.info(
+      `Re-embedding ${staleRows.length} memories with ${currentModel}...`
+    );
+
+    for (const row of staleRows) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const embedding = await this.embeddingService.embed(row.content);
+        const buffer = float32ArrayToBuffer(embedding);
+        this.sql.exec(
+          'UPDATE memories SET embedding = ?, embedding_model = ? WHERE id = ?',
+          buffer,
+          currentModel,
+          row.id
+        );
+      } catch (error) {
+        // eslint-disable-next-line no-await-in-loop
+        await this.logger.error(
+          `Failed to re-embed memory ${row.id}: ${getErrorMessage(error)}`
+        );
+      }
+    }
+
+    await this.logger.info(`Re-embedding complete.`);
   }
 
   /**

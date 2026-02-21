@@ -11,6 +11,7 @@ const EMBEDDING_DIMENSIONS = 1536;
  */
 export interface EmbeddingService {
   embed(text: string): Promise<number[]>;
+  readonly modelIdentifier: string;
 }
 
 /**
@@ -19,6 +20,7 @@ export interface EmbeddingService {
 export class OpenAIEmbeddingService implements EmbeddingService {
   private readonly client: OpenAI;
   private readonly logger: Logger;
+  readonly modelIdentifier = 'openai/text-embedding-3-small';
 
   constructor(env: Env) {
     this.client = new OpenAI({ apiKey: env.OPENAI_API_KEY });

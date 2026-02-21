@@ -11,6 +11,7 @@ interface MockMemoryRow {
   content: string;
   type: 'semantic' | 'episode';
   embedding: ArrayBuffer;
+  embedding_model: string;
   emotion_valence: number;
   emotion_arousal: number;
   emotion_labels: string;
@@ -37,103 +38,135 @@ function createMockSqlStorage(): MockSqlStorage {
     memories: [],
   };
 
+  function handleSelect(
+    queryLower: string,
+    args: unknown[]
+  ): MockSqlResult | null {
+    if (queryLower.includes('count(*)')) {
+      return {
+        toArray: () => [],
+        one: () => ({ count: tables.memories.length }),
+      };
+    }
+    if (queryLower.includes('order by created_at desc limit 1')) {
+      const sorted = [...tables.memories].sort((a, b) =>
+        b.created_at.localeCompare(a.created_at)
+      );
+      return { toArray: () => sorted.slice(0, 1), one: () => sorted[0] };
+    }
+    if (queryLower.includes('order by updated_at asc limit 1')) {
+      const sorted = [...tables.memories].sort((a, b) =>
+        a.updated_at.localeCompare(b.updated_at)
+      );
+      return { toArray: () => sorted.slice(0, 1), one: () => sorted[0] };
+    }
+    if (queryLower.includes('from memories where embedding_model')) {
+      const targetModel = args[0] as string;
+      const stale = tables.memories.filter(
+        (m) => m.embedding_model !== targetModel
+      );
+      return {
+        toArray: () => stale.map((m) => ({ ...m })),
+        one: () => (stale[0] ? { ...stale[0] } : undefined),
+      };
+    }
+    if (
+      queryLower.includes('from memories') &&
+      !queryLower.includes('order by')
+    ) {
+      return {
+        toArray: () => tables.memories.map((m) => ({ ...m })),
+        one: () => (tables.memories[0] ? { ...tables.memories[0] } : undefined),
+      };
+    }
+    return null;
+  }
+
+  function handleMutation(
+    queryLower: string,
+    args: unknown[]
+  ): MockSqlResult | null {
+    if (queryLower.startsWith('update memories set embedding')) {
+      const [newEmbedding, newModel, targetId] = args as [
+        ArrayBuffer,
+        string,
+        string,
+        string,
+      ];
+      const idx = tables.memories.findIndex((m) => m.id === targetId);
+      const existing = tables.memories[idx];
+      if (idx !== -1 && existing !== undefined) {
+        tables.memories[idx] = {
+          ...existing,
+          embedding: newEmbedding,
+          embedding_model: newModel,
+        };
+      }
+      return { toArray: () => [], one: () => undefined };
+    }
+    if (queryLower.startsWith('insert into memories')) {
+      const [
+        id,
+        content,
+        type,
+        embedding,
+        embedding_model,
+        valence,
+        arousal,
+        labels,
+        created_at,
+        updated_at,
+      ] = args as [
+        string,
+        string,
+        'semantic' | 'episode',
+        ArrayBuffer,
+        string,
+        number,
+        number,
+        string,
+        string,
+        string,
+      ];
+      tables.memories.push({
+        id,
+        content,
+        type,
+        embedding,
+        embedding_model,
+        emotion_valence: valence,
+        emotion_arousal: arousal,
+        emotion_labels: labels,
+        created_at,
+        updated_at,
+      });
+      return { toArray: () => [], one: () => undefined };
+    }
+    if (queryLower.startsWith('delete from memories')) {
+      const idToDelete = args[0] as string;
+      tables.memories = tables.memories.filter((m) => m.id !== idToDelete);
+      return { toArray: () => [], one: () => undefined };
+    }
+    return null;
+  }
+
   const mockExec = vi
     .fn()
     .mockImplementation((query: string, ...args: unknown[]): MockSqlResult => {
       const queryLower = query.toLowerCase().trim();
-
-      // CREATE TABLE / CREATE INDEX は無視
-      if (queryLower.startsWith('create')) {
-        return { toArray: () => [], one: () => undefined };
-      }
-
-      // COUNT クエリ
-      if (queryLower.includes('count(*)')) {
-        return {
-          toArray: () => [],
-          one: () => ({ count: tables.memories.length }),
-        };
-      }
-
-      // SELECT クエリ（最新取得）
-      if (queryLower.includes('order by created_at desc limit 1')) {
-        const sorted = [...tables.memories].sort((a, b) =>
-          b.created_at.localeCompare(a.created_at)
-        );
-        return {
-          toArray: () => sorted.slice(0, 1),
-          one: () => sorted[0],
-        };
-      }
-
-      // SELECT クエリ（最古取得）
-      if (queryLower.includes('order by updated_at asc limit 1')) {
-        const sorted = [...tables.memories].sort((a, b) =>
-          a.updated_at.localeCompare(b.updated_at)
-        );
-        return {
-          toArray: () => sorted.slice(0, 1),
-          one: () => sorted[0],
-        };
-      }
-
-      // SELECT 全件（order byなし）
       if (
-        queryLower.includes('select') &&
-        queryLower.includes('from memories') &&
-        !queryLower.includes('order by')
+        queryLower.startsWith('create') ||
+        queryLower.startsWith('pragma') ||
+        queryLower.startsWith('alter')
       ) {
-        return {
-          toArray: () => tables.memories.map((m) => ({ ...m })),
-          one: () =>
-            tables.memories[0] ? { ...tables.memories[0] } : undefined,
-        };
-      }
-
-      // INSERT
-      if (queryLower.startsWith('insert into memories')) {
-        const [
-          id,
-          content,
-          type,
-          embedding,
-          valence,
-          arousal,
-          labels,
-          created_at,
-          updated_at,
-        ] = args as [
-          string,
-          string,
-          'semantic' | 'episode',
-          ArrayBuffer,
-          number,
-          number,
-          string,
-          string,
-          string,
-        ];
-        tables.memories.push({
-          id,
-          content,
-          type,
-          embedding,
-          emotion_valence: valence,
-          emotion_arousal: arousal,
-          emotion_labels: labels,
-          created_at,
-          updated_at,
-        });
         return { toArray: () => [], one: () => undefined };
       }
-
-      // DELETE
-      if (queryLower.startsWith('delete from memories')) {
-        const idToDelete = args[0] as string;
-        tables.memories = tables.memories.filter((m) => m.id !== idToDelete);
-        return { toArray: () => [], one: () => undefined };
+      if (queryLower.includes('select')) {
+        const result = handleSelect(queryLower, args);
+        if (result) return result;
       }
-
+      const mutResult = handleMutation(queryLower, args);
+      if (mutResult) return mutResult;
       return { toArray: () => [], one: () => undefined };
     });
 
@@ -148,6 +181,7 @@ function createMockSqlStorage(): MockSqlStorage {
 
 const mockEmbeddingService: EmbeddingService = {
   embed: vi.fn(),
+  modelIdentifier: 'test/mock-embedding-model',
 };
 
 const mockLogger: Logger = {
@@ -176,6 +210,7 @@ function createMockMemoryRow(
     content: 'Test memory content',
     type: 'episode',
     embedding: float32ArrayToBuffer(new Array<number>(1536).fill(0)),
+    embedding_model: 'openai/text-embedding-3-small',
     emotion_valence: 0.5,
     emotion_arousal: 0.3,
     emotion_labels: JSON.stringify(['neutral']),
@@ -459,6 +494,97 @@ describe('MemorySystem', () => {
       expect(results).toHaveLength(1);
       expect(results[0]?.content).toBe('Semantic memory');
       expect(results[0]?.type).toBe('semantic');
+    });
+  });
+
+  describe('reEmbedStaleMemories', () => {
+    it('現在のモデルと同じ場合は何もしない', async () => {
+      mockSql._tables.memories = [
+        createMockMemoryRow({
+          embedding_model: 'test/mock-embedding-model',
+        }),
+      ];
+
+      await memorySystem.reEmbedStaleMemories();
+
+      expect(mockEmbeddingService.embed).not.toHaveBeenCalled(); // eslint-disable-line @typescript-eslint/unbound-method
+    });
+
+    it('古いモデルの memory を再 embedding する', async () => {
+      const newEmbedding = new Array<number>(2048).fill(0.5);
+      // eslint-disable-next-line @typescript-eslint/unbound-method
+      vi.mocked(mockEmbeddingService.embed).mockResolvedValue(newEmbedding);
+
+      mockSql._tables.memories = [
+        createMockMemoryRow({
+          content: 'Old memory',
+          embedding_model: 'openai/text-embedding-3-small',
+        }),
+      ];
+
+      await memorySystem.reEmbedStaleMemories();
+
+      expect(mockEmbeddingService.embed).toHaveBeenCalledWith('Old memory'); // eslint-disable-line @typescript-eslint/unbound-method
+      expect(mockSql._tables.memories[0]?.embedding_model).toBe(
+        'test/mock-embedding-model'
+      );
+    });
+
+    it('複数の stale memory を順に再 embedding する', async () => {
+      const newEmbedding = new Array<number>(2048).fill(0.1);
+      // eslint-disable-next-line @typescript-eslint/unbound-method
+      vi.mocked(mockEmbeddingService.embed).mockResolvedValue(newEmbedding);
+
+      mockSql._tables.memories = [
+        createMockMemoryRow({
+          content: 'Memory A',
+          embedding_model: 'openai/text-embedding-3-small',
+        }),
+        createMockMemoryRow({
+          content: 'Memory B',
+          embedding_model: 'openai/text-embedding-3-small',
+        }),
+      ];
+
+      await memorySystem.reEmbedStaleMemories();
+
+      expect(mockEmbeddingService.embed).toHaveBeenCalledTimes(2); // eslint-disable-line @typescript-eslint/unbound-method
+      expect(mockSql._tables.memories[0]?.embedding_model).toBe(
+        'test/mock-embedding-model'
+      );
+      expect(mockSql._tables.memories[1]?.embedding_model).toBe(
+        'test/mock-embedding-model'
+      );
+    });
+
+    it('embed に失敗した memory はスキップして続行する', async () => {
+      // eslint-disable-next-line @typescript-eslint/unbound-method
+      vi.mocked(mockEmbeddingService.embed)
+        .mockRejectedValueOnce(new Error('API error'))
+        .mockResolvedValueOnce(new Array<number>(2048).fill(0.1));
+
+      mockSql._tables.memories = [
+        createMockMemoryRow({
+          content: 'Memory A',
+          embedding_model: 'openai/text-embedding-3-small',
+        }),
+        createMockMemoryRow({
+          content: 'Memory B',
+          embedding_model: 'openai/text-embedding-3-small',
+        }),
+      ];
+
+      await memorySystem.reEmbedStaleMemories();
+
+      expect(mockEmbeddingService.embed).toHaveBeenCalledTimes(2); // eslint-disable-line @typescript-eslint/unbound-method
+      // Memory A は失敗したので embedding_model は更新されていない
+      expect(mockSql._tables.memories[0]?.embedding_model).toBe(
+        'openai/text-embedding-3-small'
+      );
+      // Memory B は成功したので更新されている
+      expect(mockSql._tables.memories[1]?.embedding_model).toBe(
+        'test/mock-embedding-model'
+      );
     });
   });
 });

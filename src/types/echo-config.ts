@@ -17,6 +17,21 @@ export function isValidInstanceId(id: string): id is EchoInstanceId {
 }
 
 /**
+ * Embedding プロバイダー設定
+ */
+export interface OpenAIEmbeddingConfig {
+  provider: 'openai';
+}
+
+export interface WorkersAIEmbeddingConfig {
+  provider: 'workersai';
+  /** Workers AI モデル名。 */
+  model?: string;
+}
+
+export type EmbeddingConfig = OpenAIEmbeddingConfig | WorkersAIEmbeddingConfig;
+
+/**
  * Echo インスタンスごとの設定
  */
 export interface EchoInstanceConfig {
@@ -37,4 +52,7 @@ export interface EchoInstanceConfig {
 
   /** Thinking ログを送信する Discord チャンネル ID */
   thinkingChannelId: string;
+
+  /** Embedding プロバイダー設定。省略時は OpenAI を使用 */
+  embeddingConfig?: EmbeddingConfig;
 }
