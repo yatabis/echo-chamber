@@ -18,5 +18,18 @@
     ],
     "deny": []
   },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|MultiEdit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.' >> notifications.jsonl && pnpm lint && pnpm format && pnpm typecheck"
+          }
+        ]
+      }
+    ]
+  },
   "enableAllProjectMcpServers": true
 }
