@@ -7,20 +7,18 @@ OpenAI Responses API と Embedding を利用し、複数インスタンスを 1 
 
 ```text
 apps/
-  cloudflare-workers/        # Worker エントリ・wrangler 設定・静的配信
+  cloudflare-workers/        # Worker エントリ・DO実装・wrangler 設定・Cloudflare依存テスト・静的配信
   dashboard/                 # React + Vite ダッシュボード
 packages/
   core/                      # Cloudflare 非依存ロジック・共有型・Discord API ラッパ
-  cloudflare-workers/        # Cloudflare 依存実装（DO/KV/Workers AI/配線対象）
 ```
 
 ## 依存ルール
 
 - `packages/core` は Cloudflare 固有型に依存しない
-- `packages/cloudflare-workers` は `packages/core` に依存する
-- `apps/cloudflare-workers` は `packages/cloudflare-workers` と `packages/core` を利用する
+- `apps/cloudflare-workers` は Cloudflare 実装を持ち、`packages/core` に依存する
 - `apps/dashboard` は `packages/core` の型を利用する
-- `packages/core -> packages/cloudflare-workers` の逆依存は禁止
+- 禁止: `packages/core -> apps/cloudflare-workers` の逆依存
 
 ## 前提条件
 
@@ -56,6 +54,8 @@ pnpm dev
 | `LOG_CHANNEL_ID`          | ログ通知先チャンネル ID            |
 | `ENVIRONMENT`             | 実行環境判定（`local` / それ以外） |
 
+ローカル開発時は、リポジトリルートの `.dev.vars` に上記キーを設定します。
+
 ### Secret 設定例
 
 ```bash
@@ -80,23 +80,25 @@ pnpm exec wrangler secret put LOG_CHANNEL_ID
 設定例:
 
 ```bash
-pnpm exec wrangler kv key put --binding ECHO_KV chat_channel_discord_rin "<CHAT_CHANNEL_ID>"
-pnpm exec wrangler kv key put --binding ECHO_KV thinking_channel_discord_rin "<THINKING_CHANNEL_ID>"
+pnpm exec wrangler kv key put --config apps/cloudflare-workers/wrangler.jsonc --binding ECHO_KV --local chat_channel_discord_rin "<CHAT_CHANNEL_ID>"
+pnpm exec wrangler kv key put --config apps/cloudflare-workers/wrangler.jsonc --binding ECHO_KV --local thinking_channel_discord_rin "<THINKING_CHANNEL_ID>"
 ```
+
+`pnpm dev` で使うローカルKVに投入するため、ローカル開発時は `--local` を付けてください。
 
 ## 実行・開発コマンド
 
-| コマンド                                            | 用途                                     |
-| --------------------------------------------------- | ---------------------------------------- |
-| `pnpm dev`                                          | Worker ローカル起動（型生成付き）        |
-| `pnpm start`                                        | Worker ローカル起動                      |
-| `pnpm cf-typegen`                                   | Worker 型定義生成                        |
-| `pnpm deploy`                                       | Cloudflare へデプロイ                    |
-| `pnpm --filter @echo-chamber/dashboard dev`         | Dashboard 単体開発                       |
-| `pnpm dashboard:build`                              | Dashboard ビルド（Worker assets に出力） |
-| `pnpm test:run`                                     | `core` + `cloudflare-workers` テスト実行 |
-| `pnpm test:coverage`                                | Cloudflare 側テストのカバレッジ生成      |
-| `pnpm lint:check` / `pnpm typecheck` / `pnpm check` | 品質チェック                             |
+| コマンド                                            | 用途                                         |
+| --------------------------------------------------- | -------------------------------------------- |
+| `pnpm dev`                                          | Worker ローカル起動（型生成付き）            |
+| `pnpm start`                                        | Worker ローカル起動                          |
+| `pnpm cf-typegen`                                   | Worker 型定義生成                            |
+| `pnpm deploy`                                       | Cloudflare へデプロイ                        |
+| `pnpm --filter @echo-chamber/dashboard dev`         | Dashboard 単体開発                           |
+| `pnpm dashboard:build`                              | Dashboard ビルド（Worker assets に出力）     |
+| `pnpm test:run`                                     | `core` + `app-cloudflare-workers` テスト実行 |
+| `pnpm test:coverage`                                | Cloudflare 側テストのカバレッジ生成          |
+| `pnpm lint:check` / `pnpm typecheck` / `pnpm check` | 品質チェック                                 |
 
 ## HTTP エンドポイント
 
@@ -122,9 +124,9 @@ pnpm exec wrangler kv key put --binding ECHO_KV thinking_channel_discord_rin "<T
 
 ## テスト方針（概要）
 
-- Cloudflare 依存ロジックのテスト: `packages/cloudflare-workers/src/**/*.test.ts`
+- Cloudflare 依存ロジックのテスト: `apps/cloudflare-workers/src/**/*.test.ts`
 - 純粋ロジックのテスト: `packages/core/src/**/*.test.ts`
-- 共通モックは依存境界に合わせて `packages/core/test` と `packages/cloudflare-workers/test` に分離
+- 共通モックは依存境界に合わせて `packages/core/test` と `apps/cloudflare-workers/test` に分離
 
 ## 運用メモ
 

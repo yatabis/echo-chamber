@@ -1,7 +1,7 @@
 # @echo-chamber/app-cloudflare-workers
 
-Cloudflare Worker のアプリ層です。  
-この workspace は配線と配信を担当し、実ロジックは主に `@echo-chamber/cloudflare-workers` にあります。
+Cloudflare Worker / Durable Object の実装本体です。
+エントリ、ルーティング、Cloudflare 依存ロジック、テストをこの workspace に集約しています。
 
 ## 役割
 
@@ -10,12 +10,14 @@ Cloudflare Worker のアプリ層です。
   - `GET /`
   - `GET /dashboard` / `GET /dashboard/*`
   - `ALL /:instanceId/*`（Durable Object へフォワード）
+- Durable Object `Echo` 実装 (`src/echo`)
+- Cloudflare KV / Workers AI / OpenAI 連携 (`src/config`, `src/llm`, `src/utils`)
+- Cloudflare 依存テスト (`src/**/*.test.ts`, `test/**`)
 - Wrangler 設定と bindings 管理
 - Dashboard ビルド成果物の静的配信 (`public/dashboard`)
 
 ## 依存
 
-- `@echo-chamber/cloudflare-workers`
 - `@echo-chamber/core`
 
 ## 主要ファイル
@@ -23,6 +25,9 @@ Cloudflare Worker のアプリ層です。
 - `wrangler.jsonc`
 - `worker-configuration.d.ts`
 - `src/index.ts`
+- `src/echo/index.tsx`
+- `vitest.config.ts`
+- `test/`
 - `public/`
 
 ## コマンド
@@ -31,9 +36,13 @@ Cloudflare Worker のアプリ層です。
 - `pnpm --filter @echo-chamber/app-cloudflare-workers start`
 - `pnpm --filter @echo-chamber/app-cloudflare-workers cf-typegen`
 - `pnpm --filter @echo-chamber/app-cloudflare-workers deploy`
+- `pnpm --filter @echo-chamber/app-cloudflare-workers test:run`
+- `pnpm --filter @echo-chamber/app-cloudflare-workers test:coverage`
 - `pnpm --filter @echo-chamber/app-cloudflare-workers typecheck`
 
 ## メモ
 
 - ルートの `pnpm dev` / `pnpm start` / `pnpm deploy` はこの workspace のコマンドを呼び出します。
+- ルートの `pnpm test:run` / `pnpm test:coverage` もこの workspace のテストを実行します。
 - `wrangler.jsonc` 変更時は `pnpm cf-typegen` を実行してください。
+- DO を動かすには `ECHO_KV` に `chat_channel_discord_*` / `thinking_channel_discord_*` を投入してください（ローカルは `wrangler kv key put --local`）。

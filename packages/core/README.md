@@ -14,7 +14,7 @@ Cloudflare 非依存のコアロジックと共有型を提供する package で
 ## 依存ルール
 
 - Cloudflare 固有型・Cloudflare API には依存しない
-- `@echo-chamber/cloudflare-workers` への逆依存は禁止
+- `@echo-chamber/app-cloudflare-workers` への逆依存は禁止
 
 ## 主要エクスポート
 

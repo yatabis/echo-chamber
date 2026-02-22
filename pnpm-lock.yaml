@@ -81,15 +81,18 @@ importers:
 
   apps/cloudflare-workers:
     dependencies:
-      '@echo-chamber/cloudflare-workers':
-        specifier: workspace:*
-        version: link:../../packages/cloudflare-workers
       '@echo-chamber/core':
         specifier: workspace:*
         version: link:../../packages/core
       hono:
         specifier: 4.7.11
         version: 4.7.11
+      openai:
+        specifier: 5.23.2
+        version: 5.23.2(ws@8.18.0)(zod@4.0.5)
+      zod:
+        specifier: 4.0.5
+        version: 4.0.5
 
   apps/dashboard:
     dependencies:
@@ -115,21 +118,6 @@ importers:
       vite:
         specifier: ^6.4.1
         version: 6.4.1(@types/node@24.3.0)
-
-  packages/cloudflare-workers:
-    dependencies:
-      '@echo-chamber/core':
-        specifier: workspace:*
-        version: link:../core
-      hono:
-        specifier: 4.7.11
-        version: 4.7.11
-      openai:
-        specifier: 5.23.2
-        version: 5.23.2(ws@8.18.0)(zod@4.0.5)
-      zod:
-        specifier: 4.0.5
-        version: 4.0.5
 
   packages/core:
     dependencies:

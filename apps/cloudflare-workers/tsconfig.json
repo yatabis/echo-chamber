@@ -3,7 +3,18 @@
   "compilerOptions": {
     "jsx": "react-jsx",
     "jsxImportSource": "hono/jsx",
-    "types": ["./worker-configuration.d.ts", "@cloudflare/vitest-pool-workers"]
+    "types": [
+      "./worker-configuration.d.ts",
+      "@cloudflare/vitest-pool-workers",
+      "vitest/globals"
+    ]
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "worker-configuration.d.ts"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "test/**/*.ts",
+    "test/**/*.d.ts",
+    "worker-configuration.d.ts",
+    "vitest.config.ts"
+  ]
 }

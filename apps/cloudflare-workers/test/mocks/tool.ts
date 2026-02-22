@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unsafe-assignment */
 import { env } from 'cloudflare:test';
 import { vi } from 'vitest';
 

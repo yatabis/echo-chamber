@@ -1,7 +1,8 @@
 import { Hono } from 'hono';
 
-import { Echo } from '@echo-chamber/cloudflare-workers';
 import { isValidInstanceId } from '@echo-chamber/core';
+
+import { Echo } from './echo';
 
 const app = new Hono<{ Bindings: Env }>();
 

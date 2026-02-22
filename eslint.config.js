@@ -15,8 +15,6 @@ const typedFiles = [
 const workerFiles = [
   'apps/cloudflare-workers/**/*.ts',
   'apps/cloudflare-workers/**/*.tsx',
-  'packages/cloudflare-workers/**/*.ts',
-  'packages/cloudflare-workers/**/*.tsx',
 ];
 
 export default tseslint.config(
@@ -26,6 +24,7 @@ export default tseslint.config(
       'dist/**',
       'build/**',
       '.wrangler/**',
+      '**/.wrangler/**',
       '**/worker-configuration.d.ts',
       '*.min.js',
       'coverage/**',

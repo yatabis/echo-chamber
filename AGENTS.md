@@ -2,19 +2,17 @@
 
 ## Project Structure & Modules
 
-- `apps/cloudflare-workers/`: Worker アプリ層（エントリ `src/index.ts`、`wrangler.jsonc`、`public/`）
+- `apps/cloudflare-workers/`: Cloudflare 実装本体（エントリ、Durable Object、KV/Workers AI 連携、tests、`wrangler.jsonc`、`public/`）
 - `apps/dashboard/`: React + Vite の Dashboard フロントエンド
 - `packages/core/`: Cloudflare 非依存ロジック（型、usage、datetime、vector、error、Discord API ラッパ、共有 DTO）
-- `packages/cloudflare-workers/`: Cloudflare 依存実装（Durable Object、KV、Workers AI、OpenAI クライアント、ルーティング実装）
 - ルート設定: `pnpm-workspace.yaml`, `tsconfig.json`, `eslint.config.js`
 
 ## Dependency Rules
 
 - `packages/core` は Cloudflare 固有型に依存しない
-- `packages/cloudflare-workers` は `packages/core` に依存する
-- `apps/cloudflare-workers` は配線層として `packages/cloudflare-workers` を利用する
+- `apps/cloudflare-workers` は `packages/core` に依存する
 - `apps/dashboard` は `packages/core` の型・変換ロジックを利用する
-- 禁止: `packages/core -> packages/cloudflare-workers` の逆依存
+- 禁止: `packages/core -> apps/cloudflare-workers` の逆依存
 
 ## Build, Test, and Development
 
@@ -38,10 +36,10 @@
 
 - Framework: Vitest + `@cloudflare/vitest-pool-workers`
 - Core tests: `packages/core/src/**/*.test.ts`
-- Cloudflare tests: `packages/cloudflare-workers/src/**/*.test.ts`
+- Cloudflare tests: `apps/cloudflare-workers/src/**/*.test.ts`
 - Test helpers/mocks:
   - `packages/core/test/**`
-  - `packages/cloudflare-workers/test/**`
+  - `apps/cloudflare-workers/test/**`
 - Coverage は Cloudflare 側を中心に維持・改善する
 
 ## Commits & Pull Requests

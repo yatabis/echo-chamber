@@ -119,10 +119,10 @@ This project implements **t-wada式TDD (Test-Driven Development)** using the lat
 
 **CRITICAL**: Always run tests after code changes to ensure functionality is preserved.
 
-- `pnpm test:run` - Run all workspace test suites once (`core` + `cloudflare-workers`)
-- `pnpm test:coverage` - Generate coverage report (`@echo-chamber/cloudflare-workers`)
+- `pnpm test:run` - Run all workspace test suites once (`core` + `app-cloudflare-workers`)
+- `pnpm test:coverage` - Generate coverage report (`@echo-chamber/app-cloudflare-workers`)
 - `pnpm --filter @echo-chamber/core test:run` - Run core package tests only
-- `pnpm --filter @echo-chamber/cloudflare-workers test:run` - Run Cloudflare package tests only
+- `pnpm --filter @echo-chamber/app-cloudflare-workers test:run` - Run Cloudflare app tests only
 
 ### Claude Code Testing Constraints
 
@@ -170,20 +170,20 @@ This approach ensures continuous quality verification while respecting Claude Co
 **Co-location Pattern:**
 
 - Core logic tests are co-located in `packages/core/src/**/*.test.ts`
-- Cloudflare-dependent tests are co-located in `packages/cloudflare-workers/src/**/*.test.ts`
+- Cloudflare-dependent tests are co-located in `apps/cloudflare-workers/src/**/*.test.ts`
 - Shared test helpers/mocks are split by boundary:
   - `packages/core/test/**`
-  - `packages/cloudflare-workers/test/**`
+  - `apps/cloudflare-workers/test/**`
 
 **Discovery & Execution:**
 
 - Use patterns:
   - `packages/core/src/**/*.test.ts`
-  - `packages/cloudflare-workers/src/**/*.test.ts`
+  - `apps/cloudflare-workers/src/**/*.test.ts`
 - Run all tests: `pnpm test:run`
 - Run per package:
   - `pnpm --filter @echo-chamber/core test:run`
-  - `pnpm --filter @echo-chamber/cloudflare-workers test:run`
+  - `pnpm --filter @echo-chamber/app-cloudflare-workers test:run`
 
 ### Testing Patterns
 
@@ -258,16 +258,16 @@ This project is a monorepo Cloudflare Workers application built with TypeScript 
 - **Worker App** (`apps/cloudflare-workers/`) - Entry point, Wrangler config, static assets
 - **Dashboard App** (`apps/dashboard/`) - React + Vite frontend, built into Worker assets
 - **Core Package** (`packages/core/`) - Cloudflare-independent logic and shared types
-- **Cloudflare Package** (`packages/cloudflare-workers/`) - Cloudflare-dependent runtime implementation
+- **Cloudflare Runtime** (`apps/cloudflare-workers/src/`) - Cloudflare-dependent runtime implementation
 
 ### Runtime Components
 
 - **Worker Entrypoint** (`apps/cloudflare-workers/src/index.ts`) - Routes `/`, `/dashboard/*`, and `/:instanceId/*`
-- **Echo Durable Object** (`packages/cloudflare-workers/src/echo/index.tsx`) - Main agent lifecycle and APIs
-- **Memory / Thinking / Emotion Engines** (`packages/cloudflare-workers/src/echo/*`)
-- **OpenAI Client & Tool System** (`packages/cloudflare-workers/src/llm/openai/*`)
+- **Echo Durable Object** (`apps/cloudflare-workers/src/echo/index.tsx`) - Main agent lifecycle and APIs
+- **Memory / Thinking / Emotion Engines** (`apps/cloudflare-workers/src/echo/*`)
+- **OpenAI Client & Tool System** (`apps/cloudflare-workers/src/llm/openai/*`)
 - **Discord API & Shared DTO/Utils** (`packages/core/src/discord/*`, `packages/core/src/dashboard/*`, `packages/core/src/utils/*`)
-- **Instance Registry** (`packages/cloudflare-workers/src/config/echo-registry.ts`)
+- **Instance Registry** (`apps/cloudflare-workers/src/config/echo-registry.ts`)
 
 ### Cloudflare Resources
 
@@ -279,8 +279,8 @@ This project is a monorepo Cloudflare Workers application built with TypeScript 
 
 ### Key Patterns
 
-- `apps/cloudflare-workers` is a thin wiring layer; most runtime logic lives in `packages/cloudflare-workers`
-- `packages/cloudflare-workers` depends on `packages/core`, never vice versa
+- `apps/cloudflare-workers` contains both wiring and Cloudflare runtime implementation
+- `apps/cloudflare-workers` depends on `packages/core`, never vice versa
 - Dashboard build output is emitted to `apps/cloudflare-workers/public/dashboard`
 - Durable Object alarms drive periodic execution
 - OpenAI usage is tracked and accumulated per day
@@ -309,12 +309,12 @@ This project tracks OpenAI usage to control token consumption across recursive t
 
 ### Architecture
 
-**OpenAIClient** (`packages/cloudflare-workers/src/llm/openai/client.ts`)
+**OpenAIClient** (`apps/cloudflare-workers/src/llm/openai/client.ts`)
 
 - `call()` returns cumulative `ResponseUsage` across recursive calls
 - Logs a warning when response usage is missing
 
-**Echo Durable Object** (`packages/cloudflare-workers/src/echo/index.tsx`)
+**Echo Durable Object** (`apps/cloudflare-workers/src/echo/index.tsx`)
 
 - Accumulates daily usage in Durable Object storage
 - Applies dynamic token limits
