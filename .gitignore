@@ -179,3 +179,9 @@ notifications.jsonl
 
 # Vitest
 html/
+
+# Dashboard build output
+apps/cloudflare-workers/public/dashboard/
+
+# Vitest HTML reports
+**/html/

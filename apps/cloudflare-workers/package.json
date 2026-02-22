@@ -1,0 +1,18 @@
+{
+  "name": "@echo-chamber/app-cloudflare-workers",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy --config wrangler.jsonc",
+    "dev": "wrangler types --config wrangler.jsonc && wrangler dev --config wrangler.jsonc",
+    "start": "wrangler dev --config wrangler.jsonc",
+    "cf-typegen": "wrangler types --config wrangler.jsonc",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@echo-chamber/cloudflare-workers": "workspace:*",
+    "@echo-chamber/core": "workspace:*",
+    "hono": "4.7.11"
+  }
+}

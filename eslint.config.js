@@ -5,6 +5,20 @@ import importPlugin from 'eslint-plugin-import';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
+const typedFiles = [
+  'apps/**/*.ts',
+  'apps/**/*.tsx',
+  'packages/**/*.ts',
+  'packages/**/*.tsx',
+];
+
+const workerFiles = [
+  'apps/cloudflare-workers/**/*.ts',
+  'apps/cloudflare-workers/**/*.tsx',
+  'packages/cloudflare-workers/**/*.ts',
+  'packages/cloudflare-workers/**/*.tsx',
+];
+
 export default tseslint.config(
   {
     ignores: [
@@ -12,9 +26,12 @@ export default tseslint.config(
       'dist/**',
       'build/**',
       '.wrangler/**',
-      'worker-configuration.d.ts',
+      '**/worker-configuration.d.ts',
       '*.min.js',
       'coverage/**',
+      'html/**',
+      '**/html/**',
+      'apps/cloudflare-workers/public/dashboard/**',
     ],
   },
   js.configs.recommended,
@@ -25,11 +42,14 @@ export default tseslint.config(
     },
   },
   {
-    files: ['src/**/*.ts', 'src/**/*.tsx', 'test/**/*.ts'],
+    files: typedFiles,
     languageOptions: {
       globals: { ...globals.node },
       parser: tsparser,
-      parserOptions: { project: './tsconfig.json' },
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
     },
     extends: [
       tseslint.configs.eslintRecommended,
@@ -66,7 +86,6 @@ export default tseslint.config(
           ignoreRestSiblings: true,
         },
       ],
-
       '@typescript-eslint/restrict-template-expressions': [
         'error',
         {
@@ -75,7 +94,6 @@ export default tseslint.config(
           allowNever: true,
         },
       ],
-
       'no-eval': 'error',
       'no-implied-eval': 'error',
       'no-new-func': 'error',
@@ -93,50 +111,29 @@ export default tseslint.config(
       'no-promise-executor-return': 'error',
       'no-unreachable-loop': 'error',
       'no-await-in-loop': 'error',
-
-      // Workers-specific restrictions
-      'no-restricted-globals': [
-        'error',
-        'window',
-        'document',
-        'localStorage',
-        'sessionStorage',
-      ],
-      'no-restricted-syntax': [
-        'error',
-        {
-          selector: 'CallExpression[callee.name="setTimeout"]',
-          message:
-            'Use scheduled events or Durable Object alarms instead of setTimeout in Workers',
-        },
-        {
-          selector: 'CallExpression[callee.name="setInterval"]',
-          message:
-            'Use scheduled events or Durable Object alarms instead of setInterval in Workers',
-        },
-      ],
-
-      // Code complexity and maintainability
       complexity: ['warn', 10],
       'max-depth': ['error', 4],
       'max-lines-per-function': ['warn', { max: 120, skipComments: true }],
       'max-params': ['warn', 4],
-
-      // Import/Export ordering and organization
       'import/order': [
         'error',
         {
           groups: [
-            'builtin', // Node.js built-in modules (minimal in CF Workers)
-            'external', // npm packages (hono, openai, etc.)
-            'internal', // Internal modules (src/*)
-            'parent', // Parent directories (../)
-            'sibling', // Same directory (./)
-            'index', // Index files (./index)
-            'type', // Type-only imports
+            'builtin',
+            'external',
+            'internal',
+            'parent',
+            'sibling',
+            'index',
+            'type',
           ],
           'newlines-between': 'always',
           pathGroups: [
+            {
+              pattern: '@echo-chamber/**',
+              group: 'internal',
+              position: 'before',
+            },
             {
               pattern: '@/**',
               group: 'internal',
@@ -162,7 +159,32 @@ export default tseslint.config(
     },
   },
   {
-    files: ['src/**/*.test.ts'],
+    files: workerFiles,
+    rules: {
+      'no-restricted-globals': [
+        'error',
+        'window',
+        'document',
+        'localStorage',
+        'sessionStorage',
+      ],
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: 'CallExpression[callee.name="setTimeout"]',
+          message:
+            'Use scheduled events or Durable Object alarms instead of setTimeout in Workers',
+        },
+        {
+          selector: 'CallExpression[callee.name="setInterval"]',
+          message:
+            'Use scheduled events or Durable Object alarms instead of setInterval in Workers',
+        },
+      ],
+    },
+  },
+  {
+    files: ['**/*.test.ts', '**/*.test.tsx'],
     rules: {
       'max-lines-per-function': 'off',
     },
