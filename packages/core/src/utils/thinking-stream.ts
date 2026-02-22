@@ -1,6 +1,13 @@
-import { sendChannelMessage } from '../discord';
-
 import type { EchoInstanceConfig } from '../types/echo-config';
+
+async function sendThinkingMessage(
+  token: string,
+  channelId: string,
+  content: string
+): Promise<void> {
+  const { sendChannelMessage } = await import('../discord');
+  await sendChannelMessage(token, channelId, { content });
+}
 
 /**
  * 思考ログ専用のストリームクラス
@@ -28,9 +35,7 @@ export class ThinkingStream {
     const message = this.truncateForDiscord(content);
 
     try {
-      await sendChannelMessage(this.discordToken, this.channelId, {
-        content: message,
-      });
+      await sendThinkingMessage(this.discordToken, this.channelId, message);
     } catch (error) {
       // 思考ログ送信失敗はコンソールにのみ出力（無限ループ防止）
       console.error('Failed to send thinking to Discord:', error);

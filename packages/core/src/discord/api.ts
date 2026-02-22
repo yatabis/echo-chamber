@@ -1,5 +1,4 @@
 import { REST } from '@discordjs/rest';
-import { Routes } from 'discord-api-types/v10';
 
 import type {
   RESTGetAPIChannelMessagesQuery,
@@ -8,6 +7,25 @@ import type {
   RESTPostAPIChannelMessageJSONBody,
   RESTPostAPIChannelMessageResult,
 } from 'discord-api-types/v10';
+
+type DiscordRoute = `/${string}`;
+
+function routeChannelMessages(channelId: string): DiscordRoute {
+  return `/channels/${channelId}/messages` as DiscordRoute;
+}
+
+function routeChannelMessageOwnReaction(
+  channelId: string,
+  messageId: string,
+  reaction: string
+): DiscordRoute {
+  const encodedReaction = encodeURIComponent(reaction);
+  return `/channels/${channelId}/messages/${messageId}/reactions/${encodedReaction}/@me` as DiscordRoute;
+}
+
+function routeCurrentUser(): DiscordRoute {
+  return '/users/@me';
+}
 
 /**
  * チャンネルからメッセージを取得
@@ -22,7 +40,7 @@ export async function getChannelMessages(
   options: RESTGetAPIChannelMessagesQuery = {}
 ): Promise<RESTGetAPIChannelMessagesResult> {
   const rest = new REST().setToken(token);
-  return rest.get(Routes.channelMessages(channelId), {
+  return rest.get(routeChannelMessages(channelId), {
     query: new URLSearchParams(
       Object.entries(options).map(([key, value]) => [key, String(value)])
     ),
@@ -42,7 +60,7 @@ export async function sendChannelMessage(
   options: RESTPostAPIChannelMessageJSONBody
 ): Promise<RESTPostAPIChannelMessageResult> {
   const rest = new REST().setToken(token);
-  return rest.post(Routes.channelMessages(channelId), {
+  return rest.post(routeChannelMessages(channelId), {
     body: options,
   }) as Promise<RESTPostAPIChannelMessageResult>;
 }
@@ -62,7 +80,7 @@ export async function addReactionToMessage(
 ): Promise<void> {
   const rest = new REST().setToken(token);
   await rest.put(
-    Routes.channelMessageOwnReaction(channelId, messageId, reaction)
+    routeChannelMessageOwnReaction(channelId, messageId, reaction)
   );
 }
 
@@ -75,5 +93,5 @@ export async function getCurrentUser(
   token: string
 ): Promise<RESTGetAPICurrentUserResult> {
   const rest = new REST().setToken(token);
-  return rest.get(Routes.user()) as Promise<RESTGetAPICurrentUserResult>;
+  return rest.get(routeCurrentUser()) as Promise<RESTGetAPICurrentUserResult>;
 }

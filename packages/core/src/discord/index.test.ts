@@ -16,6 +16,11 @@ const TOKEN = 'TEST_DISCORD_BOT_TOKEN';
 const CHANNEL_ID = 'test-channel-id';
 const BOT_USER_ID = 'bot-user-123';
 
+vi.mock('./api', () => ({
+  getChannelMessages: vi.fn(),
+  getCurrentUser: vi.fn(),
+}));
+
 describe('getUnreadMessageCount', () => {
   it('すべてのメッセージが未読の場合、取得した数を返す', async () => {
     const mockUser = createDiscordCurrentUserResponse(BOT_USER_ID);
