@@ -21,7 +21,7 @@
 - Worker typegen: `pnpm cf-typegen`
 - Dashboard dev: `pnpm --filter @echo-chamber/dashboard dev`
 - Dashboard build: `pnpm dashboard:build`
-- Tests: `pnpm test`, `pnpm test:run`, `pnpm test:coverage`
+- Tests: `pnpm test:run`, `pnpm test:coverage`
 - Lint/Format/Types: `pnpm lint`, `pnpm lint:check`, `pnpm format`, `pnpm typecheck`, `pnpm check`
 - Deploy: `pnpm deploy`
 

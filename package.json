@@ -15,12 +15,8 @@
     "format": "prettier --check --write \"**/*.{js,ts,jsx,tsx,json,md}\"",
     "format:check": "prettier --check \"**/*.{js,ts,jsx,tsx,json,md}\"",
     "typecheck": "pnpm --filter @echo-chamber/core typecheck && pnpm --filter @echo-chamber/app-cloudflare-workers typecheck && pnpm --filter @echo-chamber/dashboard typecheck",
-    "test": "pnpm --filter @echo-chamber/core test && pnpm --filter @echo-chamber/app-cloudflare-workers test",
-    "test:watch": "pnpm --filter @echo-chamber/app-cloudflare-workers test:watch",
-    "test:ui": "pnpm --filter @echo-chamber/app-cloudflare-workers test:ui",
     "test:run": "pnpm --filter @echo-chamber/core test:run && pnpm --filter @echo-chamber/app-cloudflare-workers test:run",
     "test:coverage": "pnpm --filter @echo-chamber/app-cloudflare-workers test:coverage",
-    "tdd": "pnpm --filter @echo-chamber/app-cloudflare-workers tdd",
     "dashboard:build": "pnpm --filter @echo-chamber/dashboard build"
   },
   "devDependencies": {

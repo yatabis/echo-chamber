@@ -8,12 +8,8 @@
     "dev": "wrangler types --config wrangler.jsonc && wrangler dev --config wrangler.jsonc",
     "start": "wrangler dev --config wrangler.jsonc",
     "cf-typegen": "wrangler types --config wrangler.jsonc",
-    "test": "vitest --config vitest.config.ts",
-    "test:watch": "vitest --watch --config vitest.config.ts",
-    "test:ui": "vitest --ui --config vitest.config.ts",
     "test:run": "vitest run --config vitest.config.ts",
     "test:coverage": "vitest run --coverage --config vitest.config.ts",
-    "tdd": "vitest --watch --ui --config vitest.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
