@@ -1,0 +1,105 @@
+:root {
+  color-scheme: light;
+  font-family: 'Avenir Next', 'Helvetica Neue', sans-serif;
+  line-height: 1.5;
+  color: #141414;
+  background: radial-gradient(circle at top left, #f4f5f8, #d8dbe4);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+.dashboard {
+  margin: 0 auto;
+  max-width: 960px;
+  padding: 32px 20px 56px;
+}
+
+.dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 40px;
+  line-height: 1.05;
+}
+
+h2 {
+  margin: 0 0 12px;
+  font-size: 18px;
+}
+
+.eyebrow {
+  margin: 0 0 6px;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #54576a;
+}
+
+.instance-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.instance-selector select {
+  border: 1px solid #7b7f93;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #ffffff;
+  font: inherit;
+  text-transform: none;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+.card {
+  border-radius: 12px;
+  border: 1px solid #b7bcce;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.card dl {
+  margin: 0;
+}
+
+.card dl div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.card dt {
+  color: #54576a;
+}
+
+.card dd {
+  margin: 0;
+  font-weight: 700;
+}
+
+.error {
+  color: #b00020;
+  font-weight: 700;
+}
