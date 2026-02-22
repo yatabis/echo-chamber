@@ -1,4 +1,4 @@
-# @echo-chamber/app-cloudflare-workers
+# @echo-chamber/cloudflare-workers
 
 Cloudflare Worker / Durable Object の実装本体です。
 エントリ、ルーティング、Cloudflare 依存ロジック、テストをこの workspace に集約しています。
@@ -32,13 +32,13 @@ Cloudflare Worker / Durable Object の実装本体です。
 
 ## コマンド
 
-- `pnpm --filter @echo-chamber/app-cloudflare-workers dev`
-- `pnpm --filter @echo-chamber/app-cloudflare-workers start`
-- `pnpm --filter @echo-chamber/app-cloudflare-workers cf-typegen`
-- `pnpm --filter @echo-chamber/app-cloudflare-workers deploy`
-- `pnpm --filter @echo-chamber/app-cloudflare-workers test:run`
-- `pnpm --filter @echo-chamber/app-cloudflare-workers test:coverage`
-- `pnpm --filter @echo-chamber/app-cloudflare-workers typecheck`
+- `pnpm --filter @echo-chamber/cloudflare-workers dev`
+- `pnpm --filter @echo-chamber/cloudflare-workers start`
+- `pnpm --filter @echo-chamber/cloudflare-workers cf-typegen`
+- `pnpm --filter @echo-chamber/cloudflare-workers deploy`
+- `pnpm --filter @echo-chamber/cloudflare-workers test:run`
+- `pnpm --filter @echo-chamber/cloudflare-workers test:coverage`
+- `pnpm --filter @echo-chamber/cloudflare-workers typecheck`
 
 ## メモ
 

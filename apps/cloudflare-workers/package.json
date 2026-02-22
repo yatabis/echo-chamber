@@ -1,5 +1,5 @@
 {
-  "name": "@echo-chamber/app-cloudflare-workers",
+  "name": "@echo-chamber/cloudflare-workers",
   "version": "0.0.0",
   "private": true,
   "type": "module",

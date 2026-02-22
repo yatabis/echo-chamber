@@ -120,9 +120,9 @@ This project implements **t-wada式TDD (Test-Driven Development)** using the lat
 **CRITICAL**: Always run tests after code changes to ensure functionality is preserved.
 
 - `pnpm test:run` - Run all workspace test suites once (`core` + `app-cloudflare-workers`)
-- `pnpm test:coverage` - Generate coverage report (`@echo-chamber/app-cloudflare-workers`)
+- `pnpm test:coverage` - Generate coverage report (`@echo-chamber/cloudflare-workers`)
 - `pnpm --filter @echo-chamber/core test:run` - Run core package tests only
-- `pnpm --filter @echo-chamber/app-cloudflare-workers test:run` - Run Cloudflare app tests only
+- `pnpm --filter @echo-chamber/cloudflare-workers test:run` - Run Cloudflare app tests only
 
 ### Claude Code Testing Constraints
 
@@ -183,7 +183,7 @@ This approach ensures continuous quality verification while respecting Claude Co
 - Run all tests: `pnpm test:run`
 - Run per package:
   - `pnpm --filter @echo-chamber/core test:run`
-  - `pnpm --filter @echo-chamber/app-cloudflare-workers test:run`
+  - `pnpm --filter @echo-chamber/cloudflare-workers test:run`
 
 ### Testing Patterns
 
