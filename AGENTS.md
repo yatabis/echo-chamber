@@ -2,41 +2,56 @@
 
 ## Project Structure & Modules
 
-- `src/`: TypeScript sources. Entrypoint `src/index.ts` (Cloudflare Worker). Key areas: `discord/`, `echo/` (Durable Object with memory-system, thinking-engine, emotion-engine, view components using `hono/jsx`), `llm/` (OpenAI client, embedding, prompts, function calling tools), `config/`, `utils/`, and `types/`.
-- `test/`: Test setup and helpers (`helpers/`, `mocks/`). Test files are co-located with source in `src/**/*.test.ts`.
-- `public/`: Static assets (optional via Wrangler assets binding).
-- Config: `wrangler.jsonc` (Durable Object `Echo`, KV `ECHO_KV`), `tsconfig.json`, `eslint.config.js`, `vitest.config.ts`.
+- `apps/cloudflare-workers/`: Worker アプリ層（エントリ `src/index.ts`、`wrangler.jsonc`、`public/`）
+- `apps/dashboard/`: React + Vite の Dashboard フロントエンド
+- `packages/core/`: Cloudflare 非依存ロジック（型、usage、datetime、vector、error、Discord API ラッパ、共有 DTO）
+- `packages/cloudflare-workers/`: Cloudflare 依存実装（Durable Object、KV、Workers AI、OpenAI クライアント、ルーティング実装）
+- ルート設定: `pnpm-workspace.yaml`, `tsconfig.json`, `eslint.config.js`
+
+## Dependency Rules
+
+- `packages/core` は Cloudflare 固有型に依存しない
+- `packages/cloudflare-workers` は `packages/core` に依存する
+- `apps/cloudflare-workers` は配線層として `packages/cloudflare-workers` を利用する
+- `apps/dashboard` は `packages/core` の型・変換ロジックを利用する
+- 禁止: `packages/core -> packages/cloudflare-workers` の逆依存
 
 ## Build, Test, and Development
 
-- Install deps: `pnpm install`
-- Local dev (Workers): `pnpm dev` or `pnpm start` — runs Wrangler dev with typegen.
-- Typegen only: `pnpm cf-typegen`
-- Test (watch/UI): `pnpm test`, `pnpm test:watch`, `pnpm test:ui`
-- Coverage: `pnpm test:coverage` — reports to `coverage/`.
-- Lint/Format/Types: `pnpm lint`, `pnpm format`, `pnpm typecheck`, or all: `pnpm check`
-- Deploy (Cloudflare): `pnpm deploy`
+- Install: `pnpm install`
+- Worker local dev: `pnpm dev` / `pnpm start`
+- Worker typegen: `pnpm cf-typegen`
+- Dashboard dev: `pnpm --filter @echo-chamber/dashboard dev`
+- Dashboard build: `pnpm dashboard:build`
+- Tests: `pnpm test`, `pnpm test:run`, `pnpm test:coverage`
+- Lint/Format/Types: `pnpm lint`, `pnpm lint:check`, `pnpm format`, `pnpm typecheck`, `pnpm check`
+- Deploy: `pnpm deploy`
 
 ## Coding Style & Naming
 
-- Language: TypeScript (strict). JSX via `hono/jsx`.
-- Formatting: Prettier (2-space indent, 80 cols, semicolons, single quotes). Run `pnpm format`.
-- Linting: ESLint with TypeScript rules. Enforced: explicit return types, type-only imports, import ordering, no unused vars (prefix unused with `_`). Run `pnpm lint`.
-- Names: files `kebab-case.ts`; React-style components `PascalCase.tsx`; tests `*.test.ts` (co-located with source).
+- Language: TypeScript (strict). JSX via `hono/jsx` (Worker 側)
+- Format: Prettier（2-space, semicolon, single quote）
+- Lint: ESLint + TypeScript rules（explicit return type, type-only import, import order, no unused vars）
+- Naming: `kebab-case.ts`, component は `PascalCase.tsx`, tests は `*.test.ts`
 
 ## Testing Guidelines
 
-- Framework: Vitest with `@cloudflare/vitest-pool-workers` (Workers/miniflare pool). Globals enabled.
-- Location: Tests co-located with source in `src/**/*.test.ts`. Helpers in `test/helpers/`, mocks in `test/mocks/`.
-- Coverage: Istanbul provider includes `src/**/*.ts` (excludes logger/discord API). Aim to keep or raise existing coverage.
-- Run locally: `pnpm test` (watch) or `pnpm test:coverage` for reports.
+- Framework: Vitest + `@cloudflare/vitest-pool-workers`
+- Core tests: `packages/core/src/**/*.test.ts`
+- Cloudflare tests: `packages/cloudflare-workers/src/**/*.test.ts`
+- Test helpers/mocks:
+  - `packages/core/test/**`
+  - `packages/cloudflare-workers/test/**`
+- Coverage は Cloudflare 側を中心に維持・改善する
 
 ## Commits & Pull Requests
 
-- Commits: concise, present tense; English or Japanese acceptable. Prefer scope in subject (e.g., `echo: …`, `llm: …`). Link issues in body when relevant.
-- PRs: include purpose, summary of changes, screenshots/JSON samples for API/view changes, reproduction steps, and linked issues. Ensure `pnpm check` and tests pass.
+- Commits: concise, present tense（英語/日本語可）
+- PRs: 目的、変更概要、確認手順、必要ならスクリーンショットを記載
+- マージ前に `pnpm check` と `pnpm test:run` を通す
 
 ## Security & Config
 
-- Secrets: use Wrangler secrets in cloud; for local dev use `.dev.vars` only. Examples: `wrangler secret put OPENAI_API_KEY`, `wrangler secret put DISCORD_BOT_TOKEN`.
-- Avoid `setTimeout/Interval` in Workers; use Durable Object alarms per ESLint rules.
+- Secrets は Wrangler secrets を使用（ローカルは `.dev.vars`）
+- 例: `wrangler secret put OPENAI_API_KEY`, `wrangler secret put DISCORD_BOT_TOKEN_RIN`
+- Worker では `setTimeout/Interval` を避け、Durable Object alarm を使用する

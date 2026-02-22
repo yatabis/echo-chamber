@@ -83,9 +83,12 @@ Managed by `/kiro:steering` command. Updates here reflect command changes.
 
 ## Development Commands
 
-- `pnpm dev` - Start development server with type generation (combines `wrangler types && wrangler dev`)
-- `pnpm cf-typegen` - Generate TypeScript types from Wrangler configuration
-- `pnpm test:run path/to/specific.test.ts` - Run a specific test file
+- `pnpm dev` - Start Worker dev server with type generation (`apps/cloudflare-workers`)
+- `pnpm start` - Start Worker dev server without type generation
+- `pnpm cf-typegen` - Generate TypeScript types from `apps/cloudflare-workers/wrangler.jsonc`
+- `pnpm deploy` - Deploy Worker from root script
+- `pnpm dashboard:build` - Build dashboard into Worker assets
+- `pnpm --filter @echo-chamber/dashboard dev` - Run dashboard dev server only
 
 ## Quality Assurance Commands
 
@@ -116,8 +119,10 @@ This project implements **t-wada式TDD (Test-Driven Development)** using the lat
 
 **CRITICAL**: Always run tests after code changes to ensure functionality is preserved.
 
-- `pnpm test:run` - Run tests once and exit
-- `pnpm test:coverage` - Generate test coverage report
+- `pnpm test:run` - Run all workspace test suites once (`core` + `cloudflare-workers`)
+- `pnpm test:coverage` - Generate coverage report (`@echo-chamber/cloudflare-workers`)
+- `pnpm --filter @echo-chamber/core test:run` - Run core package tests only
+- `pnpm --filter @echo-chamber/cloudflare-workers test:run` - Run Cloudflare package tests only
 
 ### Claude Code Testing Constraints
 
@@ -162,20 +167,23 @@ This approach ensures continuous quality verification while respecting Claude Co
 
 ### Test Structure
 
-**Co-location Pattern:** Tests are co-located with source code using the `.test.ts` suffix. Each module's tests are placed alongside its implementation files within the `src/` directory.
+**Co-location Pattern:**
+
+- Core logic tests are co-located in `packages/core/src/**/*.test.ts`
+- Cloudflare-dependent tests are co-located in `packages/cloudflare-workers/src/**/*.test.ts`
+- Shared test helpers/mocks are split by boundary:
+  - `packages/core/test/**`
+  - `packages/cloudflare-workers/test/**`
 
 **Discovery & Execution:**
 
-- Use `Glob` tool with pattern `src/**/*.test.ts` to find all test files
-- Run directory tests: `pnpm test:run src/path/to/module/`
-- Run specific file: `pnpm test:run src/path/to/file.test.ts`
+- Use patterns:
+  - `packages/core/src/**/*.test.ts`
+  - `packages/cloudflare-workers/src/**/*.test.ts`
 - Run all tests: `pnpm test:run`
-
-**Key Benefits of Co-location:**
-
-- Tests are immediately discoverable next to their implementation
-- Module boundaries are clear and testable units are obvious
-- Refactoring moves tests and code together naturally
+- Run per package:
+  - `pnpm --filter @echo-chamber/core test:run`
+  - `pnpm --filter @echo-chamber/cloudflare-workers test:run`
 
 ### Testing Patterns
 
@@ -243,66 +251,71 @@ For existing legacy code, we use **Characterization Tests** to:
 
 ## Architecture Overview
 
-This is a Cloudflare Workers application built with Hono framework and TypeScript. The architecture consists of:
+This project is a monorepo Cloudflare Workers application built with TypeScript and Hono.
 
-### Core Components
+### Workspace Components
 
-- **Main Worker** (`src/index.ts`) - Hono application serving as the entry point with basic routing
-- **Echo Durable Object** (`src/echo/index.tsx`) - Implements the core Echo functionality as a Durable Object with RPC methods
-- **Memory System** (`src/echo/memory-system/`) - Semantic and episodic memory with embedding-based retrieval
-- **Thinking Engine** (`src/echo/thinking-engine/`) - Deep thinking and reflection module
-- **Emotion Engine** (`src/echo/emotion-engine/`) - Emotional state management
-- **OpenAI Client** (`src/llm/openai/client.ts`) - GPT-5 Responses API client with usage tracking and recursive function call handling
-- **Discord Integration** (`src/discord/`) - Discord API wrapper for chat functionality
-- **Tool System** (`src/llm/openai/functions/`) - OpenAI function calling tools: chat (Discord messaging), memory (semantic/episodic storage), think (deep thinking), finish (thinking completion)
-- **Embedding Client** (`src/llm/openai/embedding.ts`) - Text embedding generation for semantic search
-- **Prompt Templates** (`src/llm/prompts/`) - Character-specific system prompts (rin.ts, marie.ts)
-- **Instance Registry** (`src/config/echo-registry.ts`) - Echo instance configuration and registration
+- **Worker App** (`apps/cloudflare-workers/`) - Entry point, Wrangler config, static assets
+- **Dashboard App** (`apps/dashboard/`) - React + Vite frontend, built into Worker assets
+- **Core Package** (`packages/core/`) - Cloudflare-independent logic and shared types
+- **Cloudflare Package** (`packages/cloudflare-workers/`) - Cloudflare-dependent runtime implementation
+
+### Runtime Components
+
+- **Worker Entrypoint** (`apps/cloudflare-workers/src/index.ts`) - Routes `/`, `/dashboard/*`, and `/:instanceId/*`
+- **Echo Durable Object** (`packages/cloudflare-workers/src/echo/index.tsx`) - Main agent lifecycle and APIs
+- **Memory / Thinking / Emotion Engines** (`packages/cloudflare-workers/src/echo/*`)
+- **OpenAI Client & Tool System** (`packages/cloudflare-workers/src/llm/openai/*`)
+- **Discord API & Shared DTO/Utils** (`packages/core/src/discord/*`, `packages/core/src/dashboard/*`, `packages/core/src/utils/*`)
+- **Instance Registry** (`packages/cloudflare-workers/src/config/echo-registry.ts`)
 
 ### Cloudflare Resources
 
-- **Durable Object**: `Echo` class bound as `ECHO` - provides persistent state and RPC capabilities
-- **KV Namespace**: `ECHO_KV` - key-value storage for the application
-- **SQLite**: Configured for the Echo Durable Object via migrations
+- **Durable Object**: `Echo` bound as `ECHO`
+- **KV Namespace**: `ECHO_KV`
+- **Workers AI**: `AI`
+- **Static Assets Binding**: `ASSETS`
+- **Config File**: `apps/cloudflare-workers/wrangler.jsonc`
 
 ### Key Patterns
 
-- The main worker routes requests to Durable Object instances using `c.env.ECHO.idFromName()`
-- Durable Objects expose RPC methods that can be called directly from the worker
-- Type definitions are auto-generated by Wrangler and stored in `worker-configuration.d.ts`
-- **Usage Management**: OpenAI API calls are tracked with dynamic hourly limits and daily caps
-- **Function Calling**: Extensive use of OpenAI's function calling for Discord interactions, memory storage/retrieval, and note management
-- **Alarm-based Scheduling**: Durable Objects use alarms for periodic execution (1-minute intervals)
+- `apps/cloudflare-workers` is a thin wiring layer; most runtime logic lives in `packages/cloudflare-workers`
+- `packages/cloudflare-workers` depends on `packages/core`, never vice versa
+- Dashboard build output is emitted to `apps/cloudflare-workers/public/dashboard`
+- Durable Object alarms drive periodic execution
+- OpenAI usage is tracked and accumulated per day
 
 ### Entry Points
 
-- Root path `/` returns a simple status message
-- All paths under `/rin/*` are routed to an Echo Durable Object instance named "Rin"
+- `GET /` - Health check
+- `GET /dashboard` - Redirect to `/dashboard/`
+- `GET /dashboard/*` - Static dashboard assets + SPA fallback
+- `ALL /:instanceId/*` - Forward to corresponding Echo Durable Object
 
-**Debug Endpoints** (local only):
+**Echo Durable Object endpoints** (`/:instanceId/*`):
 
-- `GET /rin/` - Status page (HTML)
-- `GET /rin/json` - Status data (JSON format)
-- `POST /rin/wake` - Wake up Echo instance
-- `POST /rin/sleep` - Put Echo to sleep
-- `POST /rin/run` - Force execution cycle
-- `GET /rin/usage` - Token usage statistics
+- `GET /:instanceId/` - Status page
+- `GET /:instanceId/json` - Status/memory/note/usage JSON
+- `POST /:instanceId/wake` - Force wake
+- `POST /:instanceId/sleep` - Force sleep
+- `POST /:instanceId/run` - Manual run (`ENVIRONMENT=local` only)
+- `GET /:instanceId/usage` - Usage statistics
 
-Always run `wrangler types` when making changes to `wrangler.jsonc` to keep TypeScript definitions up to date.
+Always run `pnpm cf-typegen` when changing `apps/cloudflare-workers/wrangler.jsonc`.
 
 ## OpenAI Usage Management
 
-This application includes comprehensive OpenAI API usage tracking and management to prevent unexpected token consumption.
+This project tracks OpenAI usage to control token consumption across recursive tool-calling flows.
 
 ### Architecture
 
-**OpenAIClient** (`src/llm/openai/client.ts`)
+**OpenAIClient** (`packages/cloudflare-workers/src/llm/openai/client.ts`)
 
-- `call()` method returns cumulative `ResponseUsage` across all recursive function calls
-- Automatically logs warning when API response lacks usage information
+- `call()` returns cumulative `ResponseUsage` across recursive calls
+- Logs a warning when response usage is missing
 
-**Echo Durable Object** (`src/echo/index.ts`)
+**Echo Durable Object** (`packages/cloudflare-workers/src/echo/index.tsx`)
 
-- Accumulates daily usage statistics in Durable Object storage
-- Implements dynamic token limits based on time-proportional allocation
-- Stores usage data by date: `{ "2025-07-28": ResponseUsage, ... }`
+- Accumulates daily usage in Durable Object storage
+- Applies dynamic token limits
+- Stores usage by date key (`YYYY-MM-DD`)
