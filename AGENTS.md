@@ -50,6 +50,6 @@
 
 ## Security & Config
 
-- Secrets は Wrangler secrets を使用（ローカルは `.dev.vars`）
+- Secrets は Wrangler secrets を使用（ローカルは `apps/cloudflare-workers/.dev.vars`）
 - 例: `wrangler secret put OPENAI_API_KEY`, `wrangler secret put DISCORD_BOT_TOKEN_RIN`
 - Worker では `setTimeout/Interval` を避け、Durable Object alarm を使用する

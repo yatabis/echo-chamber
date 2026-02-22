@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "deploy": "wrangler deploy --config wrangler.jsonc",
-    "dev": "ENV_FILE_ARGS=\"\"; if [ -f .dev.vars ]; then ENV_FILE_ARGS=\"--env-file .dev.vars\"; elif [ -f ../../.dev.vars ]; then ENV_FILE_ARGS=\"--env-file ../../.dev.vars\"; fi; wrangler types --config wrangler.jsonc $ENV_FILE_ARGS && wrangler dev --config wrangler.jsonc $ENV_FILE_ARGS",
-    "start": "ENV_FILE_ARGS=\"\"; if [ -f .dev.vars ]; then ENV_FILE_ARGS=\"--env-file .dev.vars\"; elif [ -f ../../.dev.vars ]; then ENV_FILE_ARGS=\"--env-file ../../.dev.vars\"; fi; wrangler dev --config wrangler.jsonc $ENV_FILE_ARGS",
-    "cf-typegen": "ENV_FILE_ARGS=\"\"; if [ -f .dev.vars ]; then ENV_FILE_ARGS=\"--env-file .dev.vars\"; elif [ -f ../../.dev.vars ]; then ENV_FILE_ARGS=\"--env-file ../../.dev.vars\"; fi; wrangler types --config wrangler.jsonc $ENV_FILE_ARGS",
+    "dev": "wrangler types --config wrangler.jsonc && wrangler dev --config wrangler.jsonc",
+    "start": "wrangler dev --config wrangler.jsonc",
+    "cf-typegen": "wrangler types --config wrangler.jsonc",
     "test": "vitest --config vitest.config.ts",
     "test:watch": "vitest --watch --config vitest.config.ts",
     "test:ui": "vitest --ui --config vitest.config.ts",

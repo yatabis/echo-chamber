@@ -42,6 +42,7 @@ Cloudflare Worker / Durable Object の実装本体です。
 
 ## メモ
 
+- ローカル環境変数は `apps/cloudflare-workers/.dev.vars` を利用します。
 - ルートの `pnpm dev` / `pnpm start` / `pnpm deploy` はこの workspace のコマンドを呼び出します。
 - ルートの `pnpm test:run` / `pnpm test:coverage` もこの workspace のテストを実行します。
 - `wrangler.jsonc` 変更時は `pnpm cf-typegen` を実行してください。

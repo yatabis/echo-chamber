@@ -32,7 +32,7 @@ packages/
 
 ```bash
 pnpm install
-pnpm exec wrangler login
+pnpm --filter @echo-chamber/app-cloudflare-workers exec wrangler login
 pnpm dev
 ```
 
@@ -54,16 +54,16 @@ pnpm dev
 | `LOG_CHANNEL_ID`          | ログ通知先チャンネル ID            |
 | `ENVIRONMENT`             | 実行環境判定（`local` / それ以外） |
 
-ローカル開発時は、リポジトリルートの `.dev.vars` に上記キーを設定します。
+ローカル開発時は、`apps/cloudflare-workers/.dev.vars` に上記キーを設定します。
 
 ### Secret 設定例
 
 ```bash
-pnpm exec wrangler secret put OPENAI_API_KEY
-pnpm exec wrangler secret put DISCORD_BOT_TOKEN
-pnpm exec wrangler secret put DISCORD_BOT_TOKEN_RIN
-pnpm exec wrangler secret put DISCORD_BOT_TOKEN_MARIE
-pnpm exec wrangler secret put LOG_CHANNEL_ID
+pnpm --filter @echo-chamber/app-cloudflare-workers exec wrangler secret put OPENAI_API_KEY
+pnpm --filter @echo-chamber/app-cloudflare-workers exec wrangler secret put DISCORD_BOT_TOKEN
+pnpm --filter @echo-chamber/app-cloudflare-workers exec wrangler secret put DISCORD_BOT_TOKEN_RIN
+pnpm --filter @echo-chamber/app-cloudflare-workers exec wrangler secret put DISCORD_BOT_TOKEN_MARIE
+pnpm --filter @echo-chamber/app-cloudflare-workers exec wrangler secret put LOG_CHANNEL_ID
 ```
 
 `ENVIRONMENT=local` のときのみ `POST /{instanceId}/run` が有効です。
@@ -80,8 +80,8 @@ pnpm exec wrangler secret put LOG_CHANNEL_ID
 設定例:
 
 ```bash
-pnpm exec wrangler kv key put --config apps/cloudflare-workers/wrangler.jsonc --binding ECHO_KV --local chat_channel_discord_rin "<CHAT_CHANNEL_ID>"
-pnpm exec wrangler kv key put --config apps/cloudflare-workers/wrangler.jsonc --binding ECHO_KV --local thinking_channel_discord_rin "<THINKING_CHANNEL_ID>"
+pnpm --filter @echo-chamber/app-cloudflare-workers exec wrangler kv key put --binding ECHO_KV --local chat_channel_discord_rin "<CHAT_CHANNEL_ID>"
+pnpm --filter @echo-chamber/app-cloudflare-workers exec wrangler kv key put --binding ECHO_KV --local thinking_channel_discord_rin "<THINKING_CHANNEL_ID>"
 ```
 
 `pnpm dev` で使うローカルKVに投入するため、ローカル開発時は `--local` を付けてください。
