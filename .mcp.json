@@ -9,27 +9,6 @@
       "command": "npx",
       "args": ["mcp-remote", "https://docs.mcp.cloudflare.com/sse"],
       "env": {}
-    },
-    "cloudflare-observability": {
-      "command": "npx",
-      "args": ["mcp-remote", "https://observability.mcp.cloudflare.com/sse"],
-      "env": {}
-    },
-    "cloudflare-browser": {
-      "command": "npx",
-      "args": ["mcp-remote", "https://browser.mcp.cloudflare.com/sse"],
-      "env": {}
-    },
-    "typescript": {
-      "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "@mizchi/lsmcp", "-p", "tsgo"],
-      "env": {}
-    },
-    "playwright": {
-      "command": "npx",
-      "args": ["@playwright/mcp@latest"],
-      "env": {}
     }
   }
 }
