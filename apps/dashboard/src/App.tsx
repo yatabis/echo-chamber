@@ -10,14 +10,18 @@ import { useEffect, useMemo, useState } from 'react';
 
 import {
   ECHO_INSTANCE_IDS,
-  buildUsageSeries,
+  buildUsageRatioMetrics,
+  buildUsageStackedSeries,
   filterNotes,
   isValidInstanceId,
-  sumUsage,
+  sumUsageBreakdown,
 } from '@echo-chamber/core';
 import type {
+  DashboardUsageBreakdownTotals,
   DashboardInstancesResponse,
   DashboardUsageDays,
+  DashboardUsageRatioMetrics,
+  DashboardUsageStackedPoint,
   EchoMemory,
   EchoStatus,
 } from '@echo-chamber/core';
@@ -31,6 +35,13 @@ const MEMORY_PAGE_SIZE = 20;
  */
 function formatNumber(value: number): string {
   return new Intl.NumberFormat('ja-JP').format(value);
+}
+
+/**
+ * 0.0-1.0 の割合をパーセント表示に整形する。
+ */
+function formatPercent(value: number): string {
+  return `${(value * 100).toFixed(1)}%`;
 }
 
 /**
@@ -64,56 +75,219 @@ function formatDateTime(value: string | null): string {
 }
 
 /**
- * usage 時系列の棒グラフを描画する。
+ * usage 積み上げ棒の区分定義。
  */
-function UsageBars(props: {
-  status: EchoStatus;
-  days: DashboardUsageDays;
-}): JSX.Element {
-  const { status, days } = props;
-  const series = useMemo(() => {
-    return buildUsageSeries(status.usage, days);
-  }, [status.usage, days]);
-  const totals = useMemo(() => {
-    return sumUsage(series);
-  }, [series]);
+const USAGE_SEGMENTS: {
+  key: keyof Pick<
+    DashboardUsageStackedPoint,
+    | 'cachedInputTokens'
+    | 'uncachedInputTokens'
+    | 'normalOutputTokens'
+    | 'reasoningOutputTokens'
+  >;
+  label: string;
+  className: string;
+}[] = [
+  {
+    key: 'cachedInputTokens',
+    label: 'Cached input',
+    className: 'usage-segment-cached',
+  },
+  {
+    key: 'uncachedInputTokens',
+    label: 'Uncached input',
+    className: 'usage-segment-uncached',
+  },
+  {
+    key: 'normalOutputTokens',
+    label: 'Normal output',
+    className: 'usage-segment-normal-output',
+  },
+  {
+    key: 'reasoningOutputTokens',
+    label: 'Reasoning output',
+    className: 'usage-segment-reasoning-output',
+  },
+];
 
-  const maxTokens = Math.max(
-    ...series.map((point) => point.usage?.total_tokens ?? 0),
-    1
+/**
+ * usage 棒のホバー時に表示する詳細ツールチップ。
+ */
+function UsageTooltip(props: {
+  point: DashboardUsageStackedPoint;
+}): JSX.Element {
+  const { point } = props;
+
+  return (
+    <div className="usage-tooltip" role="tooltip">
+      <p className="usage-tooltip-date">{point.dateKey}</p>
+      {USAGE_SEGMENTS.map((segment) => {
+        return (
+          <p key={segment.key} className="usage-tooltip-row">
+            <span>{segment.label}</span>
+            <strong>{formatNumber(point[segment.key])}</strong>
+          </p>
+        );
+      })}
+      <p className="usage-tooltip-row usage-tooltip-total">
+        <span>Total tokens</span>
+        <strong>{formatNumber(point.totalTokens)}</strong>
+      </p>
+      <p className="usage-tooltip-row usage-tooltip-total">
+        <span>Cost</span>
+        <strong>${point.totalCost.toFixed(4)}</strong>
+      </p>
+    </div>
   );
+}
+
+/**
+ * usage の積み上げ棒グラフと凡例を描画する。
+ */
+function UsageStackedChart(props: {
+  days: DashboardUsageDays;
+  series: DashboardUsageStackedPoint[];
+  totals: DashboardUsageBreakdownTotals;
+}): JSX.Element {
+  const { days, series, totals } = props;
+  const [activeDateKey, setActiveDateKey] = useState<string | null>(null);
+
+  const maxTokens = Math.max(...series.map((point) => point.totalTokens), 1);
 
   return (
     <section className="card">
       <div className="section-header">
         <h2>Usage ({days} days)</h2>
         <p>
-          total {formatNumber(totals.totalTokens)} tokens / $
+          total {formatNumber(totals.totalTokens)} tokens / cost $
           {totals.totalCost.toFixed(4)}
         </p>
       </div>
 
-      <div className="usage-bars">
-        {series.map((point) => {
-          const tokens = point.usage?.total_tokens ?? 0;
-          const barHeight = Math.max((tokens / maxTokens) * 100, 1);
-
+      <div className="usage-legend">
+        {USAGE_SEGMENTS.map((segment) => {
           return (
-            <div key={point.dateKey} className="usage-bar-item">
-              <div className="usage-bar-track">
-                <div
-                  className="usage-bar-fill"
-                  style={{ height: `${barHeight}%` }}
-                />
-              </div>
-              <div className="usage-label">
-                {formatDateLabel(point.dateKey)}
-              </div>
-              <div className="usage-value">{formatNumber(tokens)}</div>
+            <div key={segment.key} className="usage-legend-item">
+              <span className={`usage-legend-dot ${segment.className}`} />
+              <span>{segment.label}</span>
             </div>
           );
         })}
       </div>
+
+      <div className="usage-bars">
+        {series.map((point) => {
+          const stackHeightRatio = point.totalTokens / maxTokens;
+          const barHeightPercent =
+            point.totalTokens === 0 ? 0 : Math.max(stackHeightRatio * 100, 1);
+          const isActive = point.dateKey === activeDateKey;
+          const segmentBase = point.totalTokens === 0 ? 1 : point.totalTokens;
+
+          return (
+            <div key={point.dateKey} className="usage-bar-item">
+              <div
+                className="usage-bar-track"
+                onMouseEnter={() => {
+                  setActiveDateKey(point.dateKey);
+                }}
+                onMouseLeave={() => {
+                  setActiveDateKey(null);
+                }}
+              >
+                {isActive ? <UsageTooltip point={point} /> : null}
+                <button
+                  type="button"
+                  className="usage-bar-button"
+                  onFocus={() => {
+                    setActiveDateKey(point.dateKey);
+                  }}
+                  onBlur={() => {
+                    setActiveDateKey(null);
+                  }}
+                  aria-label={`${point.dateKey} total ${formatNumber(point.totalTokens)} tokens`}
+                >
+                  <div
+                    className="usage-bar-stack"
+                    style={{ height: `${barHeightPercent}%` }}
+                  >
+                    {USAGE_SEGMENTS.map((segment) => {
+                      const tokenCount = point[segment.key];
+                      if (tokenCount === 0) {
+                        return null;
+                      }
+                      return (
+                        <div
+                          key={segment.key}
+                          className={`usage-bar-segment ${segment.className}`}
+                          style={{
+                            height: `${(tokenCount / segmentBase) * 100}%`,
+                          }}
+                        />
+                      );
+                    })}
+                  </div>
+                </button>
+              </div>
+              <div className="usage-label">
+                {formatDateLabel(point.dateKey)}
+              </div>
+              <div className="usage-value">
+                {formatNumber(point.totalTokens)}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * usage 指標のサマリーカード群を描画する。
+ */
+function UsageMetricsPanel(props: {
+  totals: DashboardUsageBreakdownTotals;
+  ratios: DashboardUsageRatioMetrics;
+}): JSX.Element {
+  const { totals, ratios } = props;
+
+  return (
+    <section className="usage-metrics-grid">
+      <article className="card usage-metric-card">
+        <h3>Total tokens</h3>
+        <p className="usage-metric-emphasis">
+          {formatNumber(totals.totalTokens)}
+        </p>
+      </article>
+
+      <article className="card usage-metric-card">
+        <h3>Total cost</h3>
+        <p className="usage-metric-emphasis">${totals.totalCost.toFixed(4)}</p>
+      </article>
+
+      <article className="card usage-metric-card">
+        <h3>Cache / Uncached (input)</h3>
+        <p>
+          Cached: {formatPercent(ratios.cacheRateInInput)} (
+          {formatNumber(totals.cachedInputTokens)})
+        </p>
+        <p>
+          Uncached: {formatPercent(ratios.uncachedRateInInput)} (
+          {formatNumber(totals.uncachedInputTokens)})
+        </p>
+      </article>
+
+      <article className="card usage-metric-card">
+        <h3>Input / Output (total)</h3>
+        <p>
+          Input: {formatPercent(ratios.inputRateInTotal)} (
+          {formatNumber(totals.totalInputTokens)})
+        </p>
+        <p>
+          Output: {formatPercent(ratios.outputRateInTotal)} (
+          {formatNumber(totals.totalOutputTokens)})
+        </p>
+      </article>
     </section>
   );
 }
@@ -396,6 +570,21 @@ function UsageSection(props: {
   setUsageDays(days: DashboardUsageDays): void;
 }): JSX.Element {
   const { status, usageDays } = props;
+  const usageData = useMemo(() => {
+    try {
+      const series = buildUsageStackedSeries(status.usage, usageDays);
+      const totals = sumUsageBreakdown(series);
+      const ratios = buildUsageRatioMetrics(totals);
+      return {
+        series,
+        totals,
+        ratios,
+      };
+    } catch (error) {
+      console.error('Invalid usage data detected', error);
+      return null;
+    }
+  }, [status.usage, usageDays]);
 
   return (
     <section className="stack">
@@ -418,7 +607,19 @@ function UsageSection(props: {
         })}
       </div>
 
-      <UsageBars status={status} days={usageDays} />
+      {usageData !== null ? (
+        <>
+          <UsageStackedChart
+            days={usageDays}
+            series={usageData.series}
+            totals={usageData.totals}
+          />
+          <UsageMetricsPanel
+            totals={usageData.totals}
+            ratios={usageData.ratios}
+          />
+        </>
+      ) : null}
     </section>
   );
 }

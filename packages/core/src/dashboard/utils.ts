@@ -1,11 +1,12 @@
 import { formatDate } from '../utils/datetime';
 
 import type {
+  DashboardUsageBreakdownTotals,
   DashboardUsageDays,
-  DashboardUsagePoint,
-  DashboardUsageTotals,
+  DashboardUsageRatioMetrics,
+  DashboardUsageStackedPoint,
 } from './types';
-import type { Note, UsageRecord } from '../echo/types';
+import type { Note, Usage, UsageRecord } from '../echo/types';
 
 const USAGE_DAY_BOUNDARY_OFFSET_HOURS = 7;
 
@@ -39,53 +40,171 @@ function buildUsageDateKeys(
   });
 }
 
+function assertValidUsage(dateKey: string, usage: Usage): void {
+  const numericFields: [string, number][] = [
+    ['cached_input_tokens', usage.cached_input_tokens],
+    ['uncached_input_tokens', usage.uncached_input_tokens],
+    ['total_input_tokens', usage.total_input_tokens],
+    ['output_tokens', usage.output_tokens],
+    ['reasoning_tokens', usage.reasoning_tokens],
+    ['total_tokens', usage.total_tokens],
+    ['total_cost', usage.total_cost],
+  ];
+
+  for (const [fieldName, value] of numericFields) {
+    if (!Number.isFinite(value)) {
+      throw new Error(
+        `Invalid usage value for ${dateKey}: ${fieldName} is not finite`
+      );
+    }
+    if (value < 0) {
+      throw new Error(
+        `Invalid usage value for ${dateKey}: ${fieldName} is negative`
+      );
+    }
+  }
+
+  if (usage.reasoning_tokens > usage.output_tokens) {
+    throw new Error(
+      `Invalid usage value for ${dateKey}: reasoning_tokens exceeds output_tokens`
+    );
+  }
+
+  if (
+    usage.cached_input_tokens + usage.uncached_input_tokens !==
+    usage.total_input_tokens
+  ) {
+    throw new Error(
+      `Invalid usage value for ${dateKey}: input token fields are inconsistent`
+    );
+  }
+
+  if (usage.total_input_tokens + usage.output_tokens !== usage.total_tokens) {
+    throw new Error(
+      `Invalid usage value for ${dateKey}: total_tokens is inconsistent with input/output`
+    );
+  }
+}
+
 /**
- * UsageRecord から Dashboard 表示用の時系列配列を構築する。
+ * UsageRecord から Dashboard の積み上げ棒表示用系列を構築する。
  *
- * 指定期間内に usage が存在しない日は `usage: null` で補完するため、
- * フロント側は欠損日を意識せず同一長の配列を描画できる。
+ * 出力は `cached input` / `uncached input` / `normal output` / `reasoning output`
+ * の 4 区分で返し、欠損日は 0 埋めで補完する。
  *
  * @param usageRecord 日付キーごとの usage 集計
  * @param days 表示対象の日数（7 or 30）
  * @param referenceDate 基準日時（省略時は現在時刻）
- * @returns DashboardUsagePoint の日付昇順配列
+ * @returns DashboardUsageStackedPoint の日付昇順配列
  */
-export function buildUsageSeries(
+export function buildUsageStackedSeries(
   usageRecord: UsageRecord,
   days: DashboardUsageDays,
   referenceDate: Date = new Date()
-): DashboardUsagePoint[] {
-  return buildUsageDateKeys(days, referenceDate).map((dateKey) => ({
-    dateKey,
-    usage: usageRecord[dateKey] ?? null,
-  }));
+): DashboardUsageStackedPoint[] {
+  return buildUsageDateKeys(days, referenceDate).map((dateKey) => {
+    const usage = usageRecord[dateKey];
+    if (usage === undefined) {
+      return {
+        dateKey,
+        cachedInputTokens: 0,
+        uncachedInputTokens: 0,
+        normalOutputTokens: 0,
+        reasoningOutputTokens: 0,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        totalTokens: 0,
+        totalCost: 0,
+      };
+    }
+
+    assertValidUsage(dateKey, usage);
+
+    return {
+      dateKey,
+      cachedInputTokens: usage.cached_input_tokens,
+      uncachedInputTokens: usage.uncached_input_tokens,
+      normalOutputTokens: usage.output_tokens - usage.reasoning_tokens,
+      reasoningOutputTokens: usage.reasoning_tokens,
+      totalInputTokens: usage.total_input_tokens,
+      totalOutputTokens: usage.output_tokens,
+      totalTokens: usage.total_tokens,
+      totalCost: usage.total_cost,
+    };
+  });
 }
 
 /**
- * usage 時系列を合算し、ヘッダー表示用の合計値を返す。
+ * 積み上げ系列を期間合計へ集約する。
  *
- * `usage: null` の要素はスキップして、存在する日のみ加算する。
- *
- * @param series `buildUsageSeries()` が返す配列
- * @returns 総トークン数と総コスト
+ * @param series `buildUsageStackedSeries()` の出力
+ * @returns 区分別トークン数と期間合計トークン/コスト
  */
-export function sumUsage(series: DashboardUsagePoint[]): DashboardUsageTotals {
-  return series.reduce<DashboardUsageTotals>(
+export function sumUsageBreakdown(
+  series: DashboardUsageStackedPoint[]
+): DashboardUsageBreakdownTotals {
+  return series.reduce<DashboardUsageBreakdownTotals>(
     (total, point) => {
-      if (point.usage === null) {
-        return total;
-      }
-
       return {
-        totalTokens: total.totalTokens + point.usage.total_tokens,
-        totalCost: total.totalCost + point.usage.total_cost,
+        cachedInputTokens: total.cachedInputTokens + point.cachedInputTokens,
+        uncachedInputTokens:
+          total.uncachedInputTokens + point.uncachedInputTokens,
+        normalOutputTokens: total.normalOutputTokens + point.normalOutputTokens,
+        reasoningOutputTokens:
+          total.reasoningOutputTokens + point.reasoningOutputTokens,
+        totalInputTokens: total.totalInputTokens + point.totalInputTokens,
+        totalOutputTokens: total.totalOutputTokens + point.totalOutputTokens,
+        totalTokens: total.totalTokens + point.totalTokens,
+        totalCost: total.totalCost + point.totalCost,
       };
     },
     {
+      cachedInputTokens: 0,
+      uncachedInputTokens: 0,
+      normalOutputTokens: 0,
+      reasoningOutputTokens: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
       totalTokens: 0,
       totalCost: 0,
     }
   );
+}
+
+function ratioOrZero(value: number, base: number): number {
+  if (base === 0) {
+    return 0;
+  }
+  return value / base;
+}
+
+/**
+ * Dashboard 表示向けのトークン比率指標を作る。
+ *
+ * - cache/uncached は `totalInputTokens` を分母にする
+ * - input/output は `totalTokens` を分母にする
+ *
+ * @param totals 期間合計
+ * @returns 0.0 - 1.0 の比率群
+ */
+export function buildUsageRatioMetrics(
+  totals: DashboardUsageBreakdownTotals
+): DashboardUsageRatioMetrics {
+  return {
+    cacheRateInInput: ratioOrZero(
+      totals.cachedInputTokens,
+      totals.totalInputTokens
+    ),
+    uncachedRateInInput: ratioOrZero(
+      totals.uncachedInputTokens,
+      totals.totalInputTokens
+    ),
+    inputRateInTotal: ratioOrZero(totals.totalInputTokens, totals.totalTokens),
+    outputRateInTotal: ratioOrZero(
+      totals.totalOutputTokens,
+      totals.totalTokens
+    ),
+  };
 }
 
 /**

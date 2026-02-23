@@ -1,4 +1,4 @@
-import type { EchoState, Note, Usage, UsageRecord } from '../echo/types';
+import type { EchoState, Note, UsageRecord } from '../echo/types';
 import type { EchoInstanceId } from '../types/echo-config';
 
 export interface EchoMemory {
@@ -37,12 +37,32 @@ export interface DashboardInstancesResponse {
 
 export type DashboardUsageDays = 7 | 30;
 
-export interface DashboardUsagePoint {
+export interface DashboardUsageStackedPoint {
   dateKey: string;
-  usage: Usage | null;
-}
-
-export interface DashboardUsageTotals {
+  cachedInputTokens: number;
+  uncachedInputTokens: number;
+  normalOutputTokens: number;
+  reasoningOutputTokens: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
   totalTokens: number;
   totalCost: number;
+}
+
+export interface DashboardUsageBreakdownTotals {
+  cachedInputTokens: number;
+  uncachedInputTokens: number;
+  normalOutputTokens: number;
+  reasoningOutputTokens: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalTokens: number;
+  totalCost: number;
+}
+
+export interface DashboardUsageRatioMetrics {
+  cacheRateInInput: number;
+  uncachedRateInInput: number;
+  inputRateInTotal: number;
+  outputRateInTotal: number;
 }
