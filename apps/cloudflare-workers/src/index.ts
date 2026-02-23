@@ -60,10 +60,31 @@ function isDashboardInstanceSummary(
  */
 async function serveDashboardIndex(c: AppContext): Promise<Response> {
   const requestUrl = new URL(c.req.url);
-  requestUrl.pathname = '/dashboard/index.html';
+  requestUrl.pathname = '/dashboard/';
 
   return await c.env.ASSETS.fetch(
     new Request(requestUrl.toString(), c.req.raw)
+  );
+}
+
+/**
+ * `/dashboard/*` パスが静的アセット要求かを判定する。
+ *
+ * SPA ルート（例: `/dashboard/rin`）と区別するため、`assets/` 配下または
+ * 拡張子付きファイル名を持つパスを「静的アセット要求」とみなす。
+ *
+ * @param pathname リクエストの pathname
+ * @returns 静的アセット要求であれば `true`
+ */
+function isDashboardAssetPath(pathname: string): boolean {
+  const relativePath = pathname.replace(/^\/dashboard\/?/, '');
+  if (relativePath.length === 0) {
+    return false;
+  }
+
+  return (
+    relativePath.startsWith('assets/') ||
+    /\/[^/]+\.[a-zA-Z0-9]+$/.test(`/${relativePath}`)
   );
 }
 
@@ -140,8 +161,17 @@ app.get('/dashboard', async (c) => {
 });
 
 app.get('/dashboard/*', async (c) => {
+  const pathname = new URL(c.req.url).pathname;
   const directAssetResponse = await c.env.ASSETS.fetch(c.req.raw);
-  if (directAssetResponse.status !== 404) {
+
+  if (isDashboardAssetPath(pathname)) {
+    return directAssetResponse;
+  }
+
+  if (
+    directAssetResponse.status === 200 ||
+    directAssetResponse.status === 304
+  ) {
     return directAssetResponse;
   }
 

@@ -12,6 +12,7 @@ interface MockInstanceBehavior {
 
 interface MockEnvOptions {
   failSummaryFor?: 'rin' | 'marie';
+  redirectSpaAssetPath?: string;
 }
 
 interface MockEnvResult {
@@ -92,7 +93,35 @@ function createMockEnv(options: MockEnvOptions = {}): MockEnvResult {
     ASSETS: {
       fetch: async (request: Request): Promise<Response> => {
         const pathname = new URL(request.url).pathname;
-        if (pathname === '/dashboard/index.html') {
+        if (pathname === '/dashboard/assets/app.js') {
+          return await Promise.resolve(
+            new Response('console.log("dashboard asset");', {
+              status: 200,
+              headers: {
+                'content-type': 'application/javascript;charset=utf-8',
+              },
+            })
+          );
+        }
+
+        if (
+          options.redirectSpaAssetPath !== undefined &&
+          pathname === options.redirectSpaAssetPath
+        ) {
+          return await Promise.resolve(
+            new Response(null, {
+              status: 307,
+              headers: {
+                location: '/dashboard/',
+              },
+            })
+          );
+        }
+
+        if (
+          pathname === '/dashboard/' ||
+          pathname === '/dashboard/index.html'
+        ) {
           return await Promise.resolve(
             new Response('<!doctype html><title>dashboard</title>', {
               status: 200,
@@ -225,6 +254,30 @@ describe('worker routes', () => {
 
     expect(response.status).toBe(200);
     expect(await response.text()).toContain('dashboard');
+    expect(mock.getDurableObjectFetchCount()).toBe(0);
+  });
+
+  it('/dashboard/rin falls back to index.html when ASSETS returns 307', async () => {
+    const mock = createMockEnv({ redirectSpaAssetPath: '/dashboard/rin' });
+
+    const response = await request('/dashboard/rin', mock.env);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain('text/html');
+    expect(await response.text()).toContain('dashboard');
+    expect(mock.getDurableObjectFetchCount()).toBe(0);
+  });
+
+  it('/dashboard/assets/app.js is served directly from ASSETS', async () => {
+    const mock = createMockEnv();
+
+    const response = await request('/dashboard/assets/app.js', mock.env);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain(
+      'application/javascript'
+    );
+    expect(await response.text()).toContain('dashboard asset');
     expect(mock.getDurableObjectFetchCount()).toBe(0);
   });
 
