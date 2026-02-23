@@ -185,3 +185,7 @@ apps/cloudflare-workers/public/dashboard/
 
 # Vitest HTML reports
 **/html/
+
+# Playwright artifacts
+/.playwright-cli/
+/output/playwright/
