@@ -7,6 +7,7 @@ export * from './utils/datetime';
 export * from './utils/error';
 export * from './utils/vector';
 export * from './dashboard/types';
+export * from './dashboard/utils';
 
 export { default as systemPromptMarie } from './llm/prompts/marie';
 export { default as systemPromptRin } from './llm/prompts/rin';

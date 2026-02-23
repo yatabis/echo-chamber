@@ -8,7 +8,9 @@ Cloudflare Worker / Durable Object の実装本体です。
 - Worker エントリ (`src/index.ts`)
 - ルーティング:
   - `GET /`
+  - `GET /instances`
   - `GET /dashboard` / `GET /dashboard/*`
+  - `ALL /:instanceId`
   - `ALL /:instanceId/*`（Durable Object へフォワード）
 - Durable Object `Echo` 実装 (`src/echo`)
 - Cloudflare KV / Workers AI / OpenAI 連携 (`src/config`, `src/llm`, `src/utils`)

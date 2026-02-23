@@ -1,4 +1,5 @@
-import type { EchoState, Note, UsageRecord } from '../echo/types';
+import type { EchoState, Note, Usage, UsageRecord } from '../echo/types';
+import type { EchoInstanceId } from '../types/echo-config';
 
 export interface EchoMemory {
   content: string;
@@ -21,4 +22,27 @@ export interface EchoStatus {
   memories: EchoMemory[];
   notes: Note[];
   usage: UsageRecord;
+}
+
+export interface DashboardInstanceSummary {
+  id: EchoInstanceId;
+  name: string;
+  state: EchoState | 'Unknown';
+  nextAlarm: string | null;
+}
+
+export interface DashboardInstancesResponse {
+  instances: DashboardInstanceSummary[];
+}
+
+export type DashboardUsageDays = 7 | 30;
+
+export interface DashboardUsagePoint {
+  dateKey: string;
+  usage: Usage | null;
+}
+
+export interface DashboardUsageTotals {
+  totalTokens: number;
+  totalCost: number;
 }

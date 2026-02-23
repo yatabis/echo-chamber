@@ -13,6 +13,8 @@ import {
   isValidInstanceId,
 } from '@echo-chamber/core';
 import type {
+  DashboardInstanceSummary,
+  EchoStatus,
   EchoInstanceConfig,
   EchoInstanceId,
   EchoState,
@@ -28,10 +30,14 @@ import { createLogger } from '../utils/logger';
 import { MemorySystem } from './memory-system';
 import { NoteSystem } from './note-system';
 import { ThinkingEngine } from './thinking-engine';
-import { StatusPage } from './view/pages/StatusPage';
 
 import type { Logger } from '../utils/logger';
 
+/**
+ * Discord チャンネルの未読件数を取得する。
+ *
+ * Discord 依存コードを遅延 import して、初期ロード時の依存解決コストを抑える。
+ */
 async function fetchUnreadMessageCount(
   token: string,
   channelId: string
@@ -81,64 +87,10 @@ export class Echo extends DurableObject<Env> {
         await next();
       })
       .get('/', async (c) => {
-        const id = await this.getId();
-        const name = await this.getName();
-        const state = await this.getState();
-        const nextAlarm = await this.getNextAlarm();
-        const noteQuery = c.req.query('noteQuery')?.trim() ?? '';
-        const notes = await this.getNotes(noteQuery);
-        const usage = await this.getAllUsage();
-        return c.render(
-          <StatusPage
-            id={id}
-            name={name}
-            state={state}
-            nextAlarm={nextAlarm}
-            notes={notes}
-            noteQuery={noteQuery}
-            usage={usage}
-          />
-        );
+        return c.json(await this.getStatus());
       })
-      .get('/json', async (c) => {
-        const id = await this.getId();
-        const name = await this.getName();
-        const state = await this.getState();
-        const nextAlarm = await this.getNextAlarm();
-        const usage = await this.getAllUsage();
-
-        const embeddingService = createEmbeddingService(
-          this._env,
-          this.instanceConfig?.embeddingConfig
-        );
-        const memorySystem = new MemorySystem({
-          sql: this.ctx.storage.sql,
-          embeddingService,
-          logger: this.logger,
-        });
-        const memories = memorySystem.getAllMemories().map((row) => ({
-          content: row.content,
-          type: row.type,
-          emotion: {
-            valence: row.emotion_valence,
-            arousal: row.emotion_arousal,
-            labels: JSON.parse(row.emotion_labels) as string[],
-          },
-          embedding_model: row.embedding_model,
-          createdAt: row.created_at,
-          updatedAt: row.updated_at,
-        }));
-        const notes = await this.getNotes();
-
-        return c.json({
-          id,
-          name,
-          state,
-          nextAlarm,
-          memories,
-          notes,
-          usage,
-        });
+      .get('/summary', async (c) => {
+        return c.json(await this.getSummary());
       })
       .post('/wake', async (c) => {
         await this.wake(true);
@@ -154,10 +106,6 @@ export class Echo extends DurableObject<Env> {
         }
         await this.run();
         return c.text('OK.');
-      })
-      .get('/usage', async (c) => {
-        const allUsage = await this.getAllUsage();
-        return c.json(allUsage);
       });
     void this.logger.info('Echo Durable Object created');
   }
@@ -290,6 +238,68 @@ export class Echo extends DurableObject<Env> {
 
   async setState(newState: EchoState): Promise<void> {
     await this.storage.put('state', newState);
+  }
+
+  /**
+   * Dashboard 詳細画面向けの状態スナップショットを返す。
+   *
+   * `EchoStatus` はインスタンスの表示名・状態・次回実行時刻に加え、
+   * ノート/メモリ/usage の表示に必要な情報を 1 レスポンスで返す DTO。
+   */
+  async getStatus(): Promise<EchoStatus> {
+    const instanceConfig = this.getInstanceConfigOrThrow();
+    const state = await this.getState();
+    const nextAlarm = await this.getNextAlarm();
+    const usage = await this.getAllUsage();
+
+    const embeddingService = createEmbeddingService(
+      this._env,
+      instanceConfig.embeddingConfig
+    );
+    const memorySystem = new MemorySystem({
+      sql: this.ctx.storage.sql,
+      embeddingService,
+      logger: this.logger,
+    });
+    const memories = memorySystem.getAllMemories().map((row) => ({
+      content: row.content,
+      type: row.type,
+      emotion: {
+        valence: row.emotion_valence,
+        arousal: row.emotion_arousal,
+        labels: JSON.parse(row.emotion_labels) as string[],
+      },
+      embedding_model: row.embedding_model,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+    const notes = await this.getNotes();
+
+    return {
+      id: instanceConfig.id,
+      name: instanceConfig.name,
+      state,
+      nextAlarm,
+      memories,
+      notes,
+      usage,
+    };
+  }
+
+  /**
+   * Dashboard 一覧画面向けの軽量サマリーを返す。
+   *
+   * 一覧では name/state/nextAlarm のみ使うため、詳細 DTO より小さい形で返す。
+   */
+  async getSummary(): Promise<DashboardInstanceSummary> {
+    const config = this.getInstanceConfigOrThrow();
+
+    return {
+      id: config.id,
+      name: config.name,
+      state: await this.getState(),
+      nextAlarm: await this.getNextAlarm(),
+    };
   }
 
   async getNotes(query = ''): Promise<Note[]> {

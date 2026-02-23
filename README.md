@@ -88,17 +88,17 @@ pnpm --filter @echo-chamber/cloudflare-workers exec wrangler kv key put --bindin
 
 ## 実行・開発コマンド
 
-| コマンド                                            | 用途                                         |
-| --------------------------------------------------- | -------------------------------------------- |
-| `pnpm dev`                                          | Worker ローカル起動（型生成付き）            |
-| `pnpm start`                                        | Worker ローカル起動                          |
-| `pnpm cf-typegen`                                   | Worker 型定義生成                            |
-| `pnpm deploy`                                       | Cloudflare へデプロイ                        |
-| `pnpm --filter @echo-chamber/dashboard dev`         | Dashboard 単体開発                           |
-| `pnpm dashboard:build`                              | Dashboard ビルド（Worker assets に出力）     |
-| `pnpm test:run`                                     | `core` + `app-cloudflare-workers` テスト実行 |
-| `pnpm test:coverage`                                | Cloudflare 側テストのカバレッジ生成          |
-| `pnpm lint:check` / `pnpm typecheck` / `pnpm check` | 品質チェック                                 |
+| コマンド                                            | 用途                                     |
+| --------------------------------------------------- | ---------------------------------------- |
+| `pnpm dev`                                          | Worker ローカル起動（型生成付き）        |
+| `pnpm start`                                        | Worker ローカル起動                      |
+| `pnpm cf-typegen`                                   | Worker 型定義生成                        |
+| `pnpm deploy`                                       | Cloudflare へデプロイ                    |
+| `pnpm --filter @echo-chamber/dashboard dev`         | Dashboard 単体開発                       |
+| `pnpm dashboard:build`                              | Dashboard ビルド（Worker assets に出力） |
+| `pnpm test:run`                                     | `core` + `cloudflare-workers` テスト実行 |
+| `pnpm test:coverage`                                | Cloudflare 側テストのカバレッジ生成      |
+| `pnpm lint:check` / `pnpm typecheck` / `pnpm check` | 品質チェック                             |
 
 ## HTTP エンドポイント
 
@@ -107,20 +107,21 @@ pnpm --filter @echo-chamber/cloudflare-workers exec wrangler kv key put --bindin
 | Method | Path              | 説明                              |
 | ------ | ----------------- | --------------------------------- |
 | `GET`  | `/`               | ヘルスチェック                    |
-| `GET`  | `/dashboard`      | `/dashboard/` へリダイレクト      |
+| `GET`  | `/instances`      | インスタンス一覧（name/state）    |
+| `GET`  | `/dashboard`      | Dashboard SPA 本体                |
 | `GET`  | `/dashboard/*`    | Dashboard 静的配信 + SPA fallback |
+| `ALL`  | `/{instanceId}`   | 対象 Durable Object にフォワード  |
 | `ALL`  | `/{instanceId}/*` | 対象 Durable Object にフォワード  |
 
 ### Echo Durable Object (`/{instanceId}` 配下)
 
-| Method | Path                  | 説明                                   |
-| ------ | --------------------- | -------------------------------------- |
-| `GET`  | `/{instanceId}/`      | ステータス UI                          |
-| `GET`  | `/{instanceId}/json`  | ステータス/メモリ/ノート/usage の JSON |
-| `POST` | `/{instanceId}/wake`  | 強制 wake                              |
-| `POST` | `/{instanceId}/sleep` | 強制 sleep                             |
-| `POST` | `/{instanceId}/run`   | 手動実行（`ENVIRONMENT=local` のみ）   |
-| `GET`  | `/{instanceId}/usage` | usage 履歴 JSON                        |
+| Method | Path                    | 説明                                                   |
+| ------ | ----------------------- | ------------------------------------------------------ |
+| `GET`  | `/{instanceId}/`        | ステータス/メモリ/ノート/usage の JSON（`EchoStatus`） |
+| `GET`  | `/{instanceId}/summary` | 一覧用サマリー JSON                                    |
+| `POST` | `/{instanceId}/wake`    | 強制 wake                                              |
+| `POST` | `/{instanceId}/sleep`   | 強制 sleep                                             |
+| `POST` | `/{instanceId}/run`     | 手動実行（`ENVIRONMENT=local` のみ）                   |
 
 ## テスト方針（概要）
 
