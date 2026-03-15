@@ -10,15 +10,20 @@ apps/
   cloudflare-workers/        # Worker エントリ・DO実装・wrangler 設定・Cloudflare依存テスト・静的配信
   dashboard/                 # React + Vite ダッシュボード
 packages/
-  core/                      # Cloudflare 非依存ロジック・共有型・Discord API ラッパ
+  core/                      # Echo agent の純粋ドメイン / application 層
+  contracts/                 # Worker / Dashboard 間の API contract
+  openai-adapter/            # OpenAI provider adapter
+  discord-adapter/           # Discord provider adapter
+  cloudflare-runtime/        # Cloudflare runtime adapter
 ```
 
 ## 依存ルール
 
-- `packages/core` は Cloudflare 固有型に依存しない
-- `apps/cloudflare-workers` は Cloudflare 実装を持ち、`packages/core` に依存する
-- `apps/dashboard` は `packages/core` の型を利用する
-- 禁止: `packages/core -> apps/cloudflare-workers` の逆依存
+- `packages/core` は Cloudflare 固有型や provider SDK に依存しない
+- adapter package は `packages/core` に依存する
+- `apps/cloudflare-workers` は composition root として adapter / core を束ねる
+- `apps/dashboard` は agent core ではなく API contract に依存する形へ寄せる
+- 禁止: `packages/core -> adapter/apps` の逆依存
 
 ## 前提条件
 

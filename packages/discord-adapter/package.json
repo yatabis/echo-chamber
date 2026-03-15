@@ -1,0 +1,19 @@
+{
+  "name": "@echo-chamber/discord-adapter",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@discordjs/rest": "2.5.1",
+    "@echo-chamber/core": "workspace:*",
+    "discord-api-types": "0.38.16"
+  }
+}
