@@ -6,6 +6,7 @@ Cloudflare 非依存のコアロジックと共有型を提供する package で
 ## 役割
 
 - Echo の共通型と usage 集計ロジック
+- agent / runtime 分離のための port interface
 - Dashboard DTO 型
 - Discord API ラッパ
 - 日時/ベクトル/エラーなどのユーティリティ
@@ -19,6 +20,7 @@ Cloudflare 非依存のコアロジックと共有型を提供する package で
 ## 主要エクスポート
 
 - Echo 関連の型・定数・usage ロジック（`src/echo/*`）
+- port interface（`src/ports/*`）
 - 共有型（`src/types/*`）
 - ユーティリティ（`src/utils/*`）
 - Dashboard DTO（`src/dashboard/types.ts`）
