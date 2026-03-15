@@ -12,6 +12,7 @@ import {
   formatMessage,
   formatBlock,
   formatFunctionCall,
+  formatFunctionCallOutput,
   OpenAIClient,
 } from './client';
 import { finishThinkingFunction } from './functions/finish';
@@ -63,6 +64,9 @@ describe('OpenAI Client', () => {
         input,
         parallel_tool_calls: true,
         previous_response_id: undefined,
+        reasoning: {
+          effort: 'none',
+        },
         store: true,
         stream: false,
         tool_choice: 'auto',
@@ -204,6 +208,9 @@ describe('OpenAI Client', () => {
           input,
           parallel_tool_calls: true,
           previous_response_id: undefined,
+          reasoning: {
+            effort: 'none',
+          },
           store: true,
           stream: false,
           tool_choice: 'auto',
@@ -955,6 +962,25 @@ describe('formatFunctionCall', () => {
   });
 });
 
+describe('formatFunctionCallOutput', () => {
+  it('文字列JSONを整形する', () => {
+    expect(formatFunctionCallOutput('{"result":"success"}')).toBe(
+      '{\n  "result": "success"\n}'
+    );
+  });
+
+  it('配列出力を整形する', () => {
+    expect(
+      formatFunctionCallOutput([
+        {
+          type: 'input_text',
+          text: 'success',
+        },
+      ])
+    ).toBe('[\n  {\n    "type": "input_text",\n    "text": "success"\n  }\n]');
+  });
+});
+
 describe('formatMessage', () => {
   describe('文字列content', () => {
     it('文字列contentのメッセージを正しくフォーマットする', () => {
@@ -1161,6 +1187,25 @@ describe('formatInputItem', () => {
     const result = formatInputItem(item);
     expect(result).toBe(
       '[function call output] call_123 (completed)\n{\n  "result": "success"\n}'
+    );
+  });
+
+  it('function_call_outputタイプの配列出力を正しくフォーマットする', () => {
+    const item: ResponseInputItem = {
+      type: 'function_call_output',
+      call_id: 'call_123',
+      output: [
+        {
+          type: 'input_text',
+          text: 'success',
+        },
+      ],
+      status: 'completed',
+    };
+
+    const result = formatInputItem(item);
+    expect(result).toBe(
+      '[function call output] call_123 (completed)\n[\n  {\n    "type": "input_text",\n    "text": "success"\n  }\n]'
     );
   });
 

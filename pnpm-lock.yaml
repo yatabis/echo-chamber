@@ -21,8 +21,8 @@ importers:
         specifier: 4.7.11
         version: 4.7.11
       openai:
-        specifier: 5.23.2
-        version: 5.23.2(ws@8.18.0)(zod@4.0.5)
+        specifier: 6.29.0
+        version: 6.29.0(ws@8.18.0)(zod@4.0.5)
       zod:
         specifier: 4.0.5
         version: 4.0.5
@@ -88,8 +88,8 @@ importers:
         specifier: 4.7.11
         version: 4.7.11
       openai:
-        specifier: 5.23.2
-        version: 5.23.2(ws@8.18.0)(zod@4.0.5)
+        specifier: 6.29.0
+        version: 6.29.0(ws@8.18.0)(zod@4.0.5)
       zod:
         specifier: 4.0.5
         version: 4.0.5
@@ -131,8 +131,8 @@ importers:
         specifier: 0.38.16
         version: 0.38.16
       openai:
-        specifier: 5.23.2
-        version: 5.23.2(ws@8.18.0)(zod@3.25.76)
+        specifier: 6.29.0
+        version: 6.29.0(ws@8.18.0)(zod@4.0.5)
 
 packages:
 
@@ -1971,12 +1971,12 @@ packages:
   ohash@2.0.11:
     resolution: {integrity: sha512-RdR9FQrFwNBNXAr4GixM8YaRZRJ5PUWbKYbE5eOsrwAjJW0q2REGcf79oYPsLyskQCZG1PLN+S/K1V00joZAoQ==}
 
-  openai@5.23.2:
-    resolution: {integrity: sha512-MQBzmTulj+MM5O8SKEk/gL8a7s5mktS9zUtAkU257WjvobGc9nKcBuVwjyEEcb9SI8a8Y2G/mzn3vm9n1Jlleg==}
+  openai@6.29.0:
+    resolution: {integrity: sha512-YxoArl2BItucdO89/sN6edksV0x47WUTgkgVfCgX7EuEMhbirENsgYe5oO4LTjBL9PtdKtk2WqND1gSLcTd2yw==}
     hasBin: true
     peerDependencies:
       ws: ^8.18.0
-      zod: ^3.23.8
+      zod: ^3.25 || ^4.0
     peerDependenciesMeta:
       ws:
         optional: true
@@ -4447,12 +4447,7 @@ snapshots:
 
   ohash@2.0.11: {}
 
-  openai@5.23.2(ws@8.18.0)(zod@3.25.76):
-    optionalDependencies:
-      ws: 8.18.0
-      zod: 3.25.76
-
-  openai@5.23.2(ws@8.18.0)(zod@4.0.5):
+  openai@6.29.0(ws@8.18.0)(zod@4.0.5):
     optionalDependencies:
       ws: 8.18.0
       zod: 4.0.5

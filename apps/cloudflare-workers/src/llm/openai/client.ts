@@ -10,6 +10,7 @@ import type { ITool, ToolContext } from './functions';
 import type { Logger } from '../../utils/logger';
 import type {
   Response,
+  ResponseFunctionCallOutputItemList,
   ResponseInput,
   ResponseInputItem,
   ResponseOutputItem,
@@ -55,7 +56,7 @@ export class OpenAIClient {
       parallel_tool_calls: true,
       previous_response_id: this.previousResponseId,
       reasoning: {
-        effort: 'low',
+        effort: 'none',
       },
       store: true,
       stream: false,
@@ -278,7 +279,7 @@ export function formatInputItem(item: ResponseInputItem): string {
     return formatFunctionCall(item);
   }
   if (itemType === 'function_call_output') {
-    return `[function call output] ${item.call_id} (${item.status})\n${JSON.stringify(JSON.parse(item.output), null, 2)}`;
+    return `[function call output] ${item.call_id} (${item.status})\n${formatFunctionCallOutput(item.output)}`;
   }
   return `<${itemType} />`;
 }
@@ -312,8 +313,6 @@ export function formatMessage(
           return formatBlock(role, `<image>${c.image_url}</image>`);
         case 'input_file':
           return formatBlock(role, `<file>${c.file_url ?? c.filename}</file>`);
-        case 'input_audio':
-          return formatBlock(role, `<audio type="${c.input_audio.format}" />`);
         case 'refusal':
           return formatBlock(role, `<refusal>${c.refusal}</refusal>`);
         default:
@@ -331,4 +330,18 @@ export function formatBlock(role: string, content: string): string {
 
 export function formatFunctionCall(item: ResponseFunctionToolCall): string {
   return `[function call] ${item.call_id} (${item.status})\n${item.name}(${item.arguments})`;
+}
+
+export function formatFunctionCallOutput(
+  output: string | ResponseFunctionCallOutputItemList
+): string {
+  if (typeof output !== 'string') {
+    return JSON.stringify(output, null, 2);
+  }
+
+  try {
+    return JSON.stringify(JSON.parse(output), null, 2);
+  } catch {
+    return output;
+  }
 }
