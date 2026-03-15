@@ -52,7 +52,7 @@ export class OpenAIClient {
     const response = await this.client.responses.create({
       input,
 
-      model: 'gpt-5.1',
+      model: 'gpt-5.4',
       parallel_tool_calls: true,
       previous_response_id: this.previousResponseId,
       reasoning: {
