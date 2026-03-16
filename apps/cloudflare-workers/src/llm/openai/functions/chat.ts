@@ -1,6 +1,10 @@
-import { z } from 'zod';
-
 import { formatDatetimeForAgent, getErrorMessage } from '@echo-chamber/core';
+import {
+  addReactionToChatMessageToolSpec,
+  checkNotificationsToolSpec,
+  readChatMessagesToolSpec,
+  sendChatMessageToolSpec,
+} from '@echo-chamber/core/agent/tools/chat';
 import type * as DiscordApi from '@echo-chamber/core/discord';
 
 import { Tool } from '.';
@@ -10,9 +14,9 @@ async function getDiscordApi(): Promise<typeof DiscordApi> {
 }
 
 export const checkNotificationsFunction = new Tool(
-  'check_notifications',
-  'チャットチャンネルの新しい通知を確認する。未読メッセージ数と最新メッセージのプレビューを返す。通知が見つかった場合は、内容を確認し、必要に応じて対応することを推奨する。',
-  {},
+  checkNotificationsToolSpec.name,
+  checkNotificationsToolSpec.description,
+  checkNotificationsToolSpec.parameters,
   async (_, ctx) => {
     try {
       const { chatChannelId, discordBotToken } = ctx.instanceConfig;
@@ -47,11 +51,9 @@ export const checkNotificationsFunction = new Tool(
 );
 
 export const readChatMessagesFunction = new Tool(
-  'read_chat_messages',
-  'チャットチャンネルからチャットメッセージを読み取る。最新のメッセージをタイムスタンプの昇順で返す。会話の文脈を理解するために、十分な数のメッセージを取得するのが良い。取得したメッセージ数では状況を完全に把握できない場合は、より大きな制限値でこのツールを再度呼び出すことができる。',
-  {
-    limit: z.int().min(1).max(100).describe('取得するメッセージ数'),
-  },
+  readChatMessagesToolSpec.name,
+  readChatMessagesToolSpec.description,
+  readChatMessagesToolSpec.parameters,
   async ({ limit }, ctx) => {
     try {
       const { chatChannelId, discordBotToken } = ctx.instanceConfig;
@@ -92,15 +94,9 @@ export const readChatMessagesFunction = new Tool(
 );
 
 export const sendChatMessageFunction = new Tool(
-  'send_chat_message',
-  'チャットチャンネルにメッセージを送信する。あなたの考えは、それを伝える行動を起こさなければ伝わらない。チャットにメッセージを送ることはその方法の一つである。',
-  {
-    message: z
-      .string()
-      .min(1)
-      .max(2000)
-      .describe('送信するメッセージ内容。最大2000文字。'),
-  },
+  sendChatMessageToolSpec.name,
+  sendChatMessageToolSpec.description,
+  sendChatMessageToolSpec.parameters,
   async ({ message }, ctx) => {
     try {
       const { chatChannelId, discordBotToken } = ctx.instanceConfig;
@@ -126,12 +122,9 @@ export const sendChatMessageFunction = new Tool(
 );
 
 export const addReactionToChatMessageFunction = new Tool(
-  'add_reaction_to_chat_message',
-  '特定のチャットメッセージにリアクションを追加する。リアクションは有効な絵文字文字列である必要がある。メッセージにリアクションすると、そこまでのメッセージは既読としてマークされる。メッセージに返信する必要性を感じないが、読んだことを示したい場合は、リアクションを付けることができる。返信もリアクションもしなければ、他者はあなたがそのメッセージを読んだかどうかすら分からない。',
-  {
-    messageId: z.string().describe('リアクションを付けるメッセージのID'),
-    reaction: z.string().describe('追加するリアクション（絵文字文字列）'),
-  },
+  addReactionToChatMessageToolSpec.name,
+  addReactionToChatMessageToolSpec.description,
+  addReactionToChatMessageToolSpec.parameters,
   async ({ messageId, reaction }, ctx) => {
     try {
       const { chatChannelId, discordBotToken } = ctx.instanceConfig;

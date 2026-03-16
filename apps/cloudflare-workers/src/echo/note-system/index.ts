@@ -1,4 +1,9 @@
 import type { Note } from '@echo-chamber/core';
+import {
+  MAX_NOTE_CONTENT_LENGTH,
+  MAX_NOTE_QUERY_LENGTH,
+  MAX_NOTE_TITLE_LENGTH,
+} from '@echo-chamber/core/echo/note-constraints';
 
 import type { Logger } from '../../utils/logger';
 
@@ -6,9 +11,6 @@ const NOTE_ITEM_PREFIX = 'note:item:';
 const NOTE_ID_PATTERN = /^note-(\d+)$/;
 
 export const MAX_NOTE_COUNT = 200;
-export const MAX_NOTE_TITLE_LENGTH = 120;
-export const MAX_NOTE_CONTENT_LENGTH = 2000;
-export const MAX_NOTE_QUERY_LENGTH = 200;
 
 interface CreateNoteInput {
   title: string;

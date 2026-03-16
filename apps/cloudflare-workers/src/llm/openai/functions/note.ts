@@ -1,50 +1,22 @@
-import { z } from 'zod';
-
-import { getErrorMessage } from '@echo-chamber/core';
 import type { Note } from '@echo-chamber/core';
-
+import { getErrorMessage } from '@echo-chamber/core';
 import {
-  MAX_NOTE_CONTENT_LENGTH,
-  MAX_NOTE_QUERY_LENGTH,
-  MAX_NOTE_TITLE_LENGTH,
-} from '../../../echo/note-system';
+  createNoteToolSpec,
+  deleteNoteToolSpec,
+  getNoteToolSpec,
+  listNotesToolSpec,
+  searchNotesToolSpec,
+  updateNoteToolSpec,
+} from '@echo-chamber/core/agent/tools/note';
 
 import { Tool } from './index';
-
-const noteIdSchema = z.string().min(1).trim().describe('ノートID。例: note-12');
-
-const noteTitleSchema = z
-  .string()
-  .min(1)
-  .max(MAX_NOTE_TITLE_LENGTH)
-  .trim()
-  .describe(`ノートタイトル。最大${MAX_NOTE_TITLE_LENGTH}文字。`);
-
-const noteContentSchema = z
-  .string()
-  .min(1)
-  .max(MAX_NOTE_CONTENT_LENGTH)
-  .trim()
-  .describe(`ノート本文。最大${MAX_NOTE_CONTENT_LENGTH}文字。`);
-
-const noteQuerySchema = z
-  .string()
-  .min(1)
-  .max(MAX_NOTE_QUERY_LENGTH)
-  .trim()
-  .describe(
-    `検索クエリ。title/contentに対して部分一致で検索する。最大${MAX_NOTE_QUERY_LENGTH}文字。`
-  );
 
 type NoteSummary = Pick<Note, 'id' | 'title' | 'createdAt' | 'updatedAt'>;
 
 export const createNoteFunction = new Tool(
-  'create_note',
-  '新しいノートを作成する。タイトルと本文を保存し、作成日時と更新日時を自動で設定する。',
-  {
-    title: noteTitleSchema,
-    content: noteContentSchema,
-  },
+  createNoteToolSpec.name,
+  createNoteToolSpec.description,
+  createNoteToolSpec.parameters,
   async ({ title, content }, ctx) => {
     try {
       const note = await ctx.noteSystem.createNote({ title, content });
@@ -64,9 +36,9 @@ export const createNoteFunction = new Tool(
 );
 
 export const listNotesFunction = new Tool(
-  'list_notes',
-  '保存済みノートを一覧取得する。更新日時の降順で返す。本文は含めずメタ情報のみ返す。',
-  {},
+  listNotesToolSpec.name,
+  listNotesToolSpec.description,
+  listNotesToolSpec.parameters,
   async (_, ctx) => {
     try {
       const notes = await ctx.noteSystem.listNotes();
@@ -92,11 +64,9 @@ export const listNotesFunction = new Tool(
 );
 
 export const getNoteFunction = new Tool(
-  'get_note',
-  'IDを指定してノート1件を取得する。本文を含む完全なノート情報を返す。',
-  {
-    id: noteIdSchema,
-  },
+  getNoteToolSpec.name,
+  getNoteToolSpec.description,
+  getNoteToolSpec.parameters,
   async ({ id }, ctx) => {
     try {
       const note = await ctx.noteSystem.getNote(id);
@@ -122,11 +92,9 @@ export const getNoteFunction = new Tool(
 );
 
 export const searchNotesFunction = new Tool(
-  'search_notes',
-  'ノートを検索する。タイトルと本文に対して大文字小文字を区別しない部分一致で検索する。',
-  {
-    query: noteQuerySchema,
-  },
+  searchNotesToolSpec.name,
+  searchNotesToolSpec.description,
+  searchNotesToolSpec.parameters,
   async ({ query }, ctx) => {
     try {
       const notes = await ctx.noteSystem.searchNotes(query);
@@ -146,13 +114,9 @@ export const searchNotesFunction = new Tool(
 );
 
 export const updateNoteFunction = new Tool(
-  'update_note',
-  '既存ノートを更新する。title または content の少なくとも一方を指定する。',
-  {
-    id: noteIdSchema,
-    title: noteTitleSchema.optional(),
-    content: noteContentSchema.optional(),
-  },
+  updateNoteToolSpec.name,
+  updateNoteToolSpec.description,
+  updateNoteToolSpec.parameters,
   async ({ id, title, content }, ctx) => {
     if (title === undefined && content === undefined) {
       return {
@@ -185,11 +149,9 @@ export const updateNoteFunction = new Tool(
 );
 
 export const deleteNoteFunction = new Tool(
-  'delete_note',
-  '既存ノートを削除する。',
-  {
-    id: noteIdSchema,
-  },
+  deleteNoteToolSpec.name,
+  deleteNoteToolSpec.description,
+  deleteNoteToolSpec.parameters,
   async ({ id }, ctx) => {
     try {
       const deleted = await ctx.noteSystem.deleteNote(id);

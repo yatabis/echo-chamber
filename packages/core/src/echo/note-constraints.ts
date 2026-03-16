@@ -1,0 +1,3 @@
+export const MAX_NOTE_TITLE_LENGTH = 120;
+export const MAX_NOTE_CONTENT_LENGTH = 2000;
+export const MAX_NOTE_QUERY_LENGTH = 200;
