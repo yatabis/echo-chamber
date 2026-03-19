@@ -1,11 +1,14 @@
 import { env } from 'cloudflare:test';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { mockThinkingStream } from '../../../test/mocks/thinking-stream';
-import { mockToolContext } from '../../../test/mocks/tool';
+import type { ModelRequest } from '@echo-chamber/core/ports/model';
 
 import {
-  accumulateUsage,
+  mockThinkingStream,
+  mockThinkingStreamSend,
+} from '../../../test/mocks/thinking-stream';
+
+import {
   formatLogOutput,
   formatInputItem,
   formatOutputItem,
@@ -15,11 +18,9 @@ import {
   formatFunctionCallOutput,
   OpenAIClient,
 } from './client';
-import { finishThinkingFunction } from './functions/finish';
 import { thinkDeeplyFunction } from './functions/think';
 
 import type {
-  ResponseUsage,
   ResponseInputItem,
   ResponseOutputItem,
   EasyInputMessage,
@@ -44,26 +45,56 @@ describe('OpenAI Client', () => {
     vi.resetAllMocks();
   });
 
-  it('createResponse', async () => {
-    const client = new OpenAIClient(
-      env,
-      [thinkDeeplyFunction],
-      mockToolContext,
-      mockThinkingStream
-    );
-    const input = [
-      {
-        role: 'user' as const,
-        content: 'Hello, how are you?',
-      },
-    ];
-    mockCreateResponse.mockResolvedValue({});
-    await client.createResponse(input);
+  it('createResponse は provider-neutral request を Responses API 形式へ変換する', async () => {
+    const client = new OpenAIClient(env, mockThinkingStream);
+    const request: ModelRequest = {
+      input: [
+        {
+          role: 'developer',
+          content: 'You are helpful.',
+        },
+        {
+          type: 'tool_call',
+          callId: 'call_123',
+          toolName: 'think_deeply',
+          input: '{"thought":"test"}',
+        },
+        {
+          type: 'tool_result',
+          callId: 'call_123',
+          output: '{"success":true}',
+        },
+      ],
+      tools: [thinkDeeplyFunction.contract],
+      previousResponseToken: 'response_prev',
+    };
+    mockCreateResponse.mockResolvedValue({
+      output: [],
+    });
+
+    await client.createResponse(request);
+
     expect(mockCreateResponse).toHaveBeenCalledWith(
       expect.objectContaining({
-        input,
+        input: [
+          {
+            role: 'developer',
+            content: 'You are helpful.',
+          },
+          {
+            type: 'function_call',
+            call_id: 'call_123',
+            name: 'think_deeply',
+            arguments: '{"thought":"test"}',
+          },
+          {
+            type: 'function_call_output',
+            call_id: 'call_123',
+            output: '{"success":true}',
+          },
+        ],
         parallel_tool_calls: true,
-        previous_response_id: undefined,
+        previous_response_id: 'response_prev',
         reasoning: {
           effort: 'none',
         },
@@ -76,495 +107,104 @@ describe('OpenAI Client', () => {
     );
   });
 
-  describe('executeFunction', () => {
-    it('正常なツール使用', async () => {
-      const client = new OpenAIClient(
-        env,
-        [thinkDeeplyFunction],
-        mockToolContext,
-        mockThinkingStream
-      );
-      const result = await client.executeFunction({
-        type: 'function_call',
-        name: 'think_deeply',
-        call_id: 'call_123',
-        arguments: JSON.stringify({ thought: 'What is the meaning of life?' }),
-      });
-      expect(result).toBe(
-        JSON.stringify({
-          success: true,
-        })
-      );
-    });
-
-    it('未登録のツール使用', async () => {
-      const client = new OpenAIClient(
-        env,
-        [thinkDeeplyFunction],
-        mockToolContext,
-        mockThinkingStream
-      );
-      const result = await client.executeFunction({
-        type: 'function_call',
-        name: 'unknown_function',
-        call_id: 'call_456',
-        arguments: JSON.stringify({ param: 'value' }),
-      });
-      expect(result).toBe(
-        JSON.stringify({
-          error: "Function 'unknown_function' is not registered",
-          available_functions: ['think_deeply'],
-        })
-      );
-    });
-
-    it('引数のパースエラー', async () => {
-      const client = new OpenAIClient(
-        env,
-        [thinkDeeplyFunction],
-        mockToolContext,
-        mockThinkingStream
-      );
-      const result = await client.executeFunction({
-        type: 'function_call',
-        name: 'think_deeply',
-        call_id: 'call_789',
-        arguments: 'invalid_json',
-      });
-      expect(result).toEqual(
-        JSON.stringify({
-          success: false,
-          error: 'arguments is not valid JSON',
-        })
-      );
-    });
-
-    it('ツールの実行中にエラーが発生', async () => {
-      const errorFunction = {
-        name: 'error_function',
-        description: 'A function that always fails',
-        definition: {
-          type: 'function',
-          name: 'error_function',
-          description: 'A function that always fails',
-          parameters: {},
-          strict: true,
-        },
-        execute: () => {
-          throw new Error('Function execution error');
-        },
-      } as const;
-      const client = new OpenAIClient(
-        env,
-        [errorFunction],
-        mockToolContext,
-        mockThinkingStream
-      );
-      const result = await client.executeFunction({
-        type: 'function_call',
-        name: 'error_function',
-        call_id: 'call_999',
-        arguments: JSON.stringify({}),
-      });
-      expect(result).toEqual(
-        JSON.stringify({
-          success: false,
-          error: 'Function execution error',
-        })
-      );
-    });
-  });
-
-  describe('call', () => {
-    it('シンプルな応答', async () => {
-      const client = new OpenAIClient(
-        env,
-        [thinkDeeplyFunction],
-        mockToolContext,
-        mockThinkingStream
-      );
-      const input: ResponseInputItem[] = [
+  it('generate は OpenAI response を core model response へ変換する', async () => {
+    const client = new OpenAIClient(env, mockThinkingStream);
+    mockCreateResponse.mockResolvedValue({
+      id: 'response_123',
+      output: [
         {
-          role: 'user',
-          content: 'Hello, how are you?',
+          type: 'message',
+          role: 'assistant',
+          id: 'msg_1',
+          status: 'completed',
+          content: [
+            {
+              type: 'output_text',
+              text: 'Thinking complete',
+              annotations: [],
+            },
+          ],
         },
-      ];
-      const usage = {
-        input_tokens: 0,
-        input_tokens_details: { cached_tokens: 0 },
-        output_tokens: 0,
-        output_tokens_details: { reasoning_tokens: 0 },
-        total_tokens: 0,
-      };
-      mockCreateResponse.mockResolvedValue({
-        id: 'response_123',
-        output: [],
-        usage,
-      });
-
-      const response = await client.call(input);
-      expect(mockCreateResponse).toHaveBeenCalledWith(
-        expect.objectContaining({
-          input,
-          parallel_tool_calls: true,
-          previous_response_id: undefined,
-          reasoning: {
-            effort: 'none',
-          },
-          store: true,
-          stream: false,
-          tool_choice: 'auto',
-          tools: [thinkDeeplyFunction.definition],
-          truncation: 'auto',
-        })
-      );
-      expect(mockCreateResponse).toHaveBeenCalledTimes(1);
-      expect(response).toEqual(usage);
-    });
-
-    it('ツールコールを含む応答', async () => {
-      const client = new OpenAIClient(
-        env,
-        [thinkDeeplyFunction],
-        mockToolContext,
-        mockThinkingStream
-      );
-      const input: ResponseInputItem[] = [
         {
-          role: 'user',
-          content: 'What is the meaning of life?',
-        },
-      ];
-      const usage1 = {
-        input_tokens: 10,
-        input_tokens_details: { cached_tokens: 0 },
-        output_tokens: 10,
-        output_tokens_details: { reasoning_tokens: 0 },
-        total_tokens: 20,
-      };
-      const usage2 = {
-        input_tokens: 10,
-        input_tokens_details: { cached_tokens: 5 },
-        output_tokens: 15,
-        output_tokens_details: { reasoning_tokens: 10 },
-        total_tokens: 25,
-      };
-      const totalUsage = {
-        input_tokens: 20,
-        input_tokens_details: {
-          cached_tokens: 5,
-        },
-        output_tokens: 25,
-        output_tokens_details: {
-          reasoning_tokens: 10,
-        },
-        total_tokens: 45,
-      };
-      mockCreateResponse.mockResolvedValueOnce({
-        id: 'response_123',
-        output: [
-          {
-            type: 'function_call',
-            call_id: 'call_123',
-            name: 'think_deeply',
-            arguments: JSON.stringify({
-              thought: 'What is the meaning of life?',
-            }),
-          },
-        ],
-        usage: usage1,
-      });
-      mockCreateResponse.mockResolvedValueOnce({
-        id: 'response_456',
-        output: [
-          {
-            type: 'message',
-            role: 'assistant',
-            content: [
-              {
-                type: 'output_text',
-                text: 'The meaning of life is a philosophical question that has been asked for centuries. Different cultures and philosophies have offered various answers, but it ultimately depends on individual beliefs and values.',
-              },
-            ],
-          },
-        ],
-        usage: usage2,
-      });
-      const nextInput = [
-        {
-          type: 'function_call_output',
+          type: 'function_call',
           call_id: 'call_123',
-          output: JSON.stringify({ success: true }),
+          name: 'think_deeply',
+          arguments: '{"thought":"test"}',
+          status: 'completed',
         },
-      ];
-      const response = await client.call(input);
-      expect(mockCreateResponse).toHaveBeenNthCalledWith(
-        1,
-        expect.objectContaining({
-          input,
-          parallel_tool_calls: true,
-          previous_response_id: undefined,
-          store: true,
-          stream: false,
-          tool_choice: 'auto',
-          tools: [thinkDeeplyFunction.definition],
-          truncation: 'auto',
-        })
-      );
-      expect(mockCreateResponse).toHaveBeenNthCalledWith(
-        2,
-        expect.objectContaining({
-          input: nextInput,
-          parallel_tool_calls: true,
-          previous_response_id: 'response_123',
-          store: true,
-          stream: false,
-          tool_choice: 'auto',
-          tools: [thinkDeeplyFunction.definition],
-          truncation: 'auto',
-        })
-      );
-      expect(response).toEqual(totalUsage);
-      expect(mockCreateResponse).toHaveBeenCalledTimes(2);
-    });
-
-    it('finish_thinkingでループが終了する', async () => {
-      const client = new OpenAIClient(
-        env,
-        [thinkDeeplyFunction, finishThinkingFunction],
-        mockToolContext,
-        mockThinkingStream
-      );
-      const input: ResponseInputItem[] = [
-        {
-          role: 'user',
-          content: 'Hello, how are you?',
-        },
-      ];
-      const usage1 = {
+      ],
+      usage: {
         input_tokens: 10,
-        input_tokens_details: { cached_tokens: 0 },
-        output_tokens: 10,
-        output_tokens_details: { reasoning_tokens: 0 },
-        total_tokens: 20,
-      };
-      // finish_thinking が呼ばれる
-      mockCreateResponse.mockResolvedValueOnce({
-        id: 'response_123',
-        output: [
-          {
-            type: 'function_call',
-            call_id: 'call_finish',
-            name: 'finish_thinking',
-            arguments: JSON.stringify({
-              reason: '十分な情報を得た',
-            }),
-            status: 'completed',
-          },
-        ],
-        usage: usage1,
-      });
-
-      const response = await client.call(input);
-
-      // finish_thinking が呼ばれたので、1回のみで終了
-      expect(mockCreateResponse).toHaveBeenCalledTimes(1);
-      expect(response).toEqual(usage1);
+        input_tokens_details: { cached_tokens: 4 },
+        output_tokens: 7,
+        output_tokens_details: { reasoning_tokens: 2 },
+        total_tokens: 17,
+      },
     });
 
-    it('finish_thinkingと他のfunction_callが同時に呼ばれた場合', async () => {
-      const client = new OpenAIClient(
-        env,
-        [thinkDeeplyFunction, finishThinkingFunction],
-        mockToolContext,
-        mockThinkingStream
-      );
-      const input: ResponseInputItem[] = [
+    const response = await client.generate({
+      input: [
         {
           role: 'user',
-          content: 'Hello, how are you?',
+          content: 'hello',
         },
-      ];
-      const usage = {
-        input_tokens: 10,
-        input_tokens_details: { cached_tokens: 0 },
-        output_tokens: 10,
-        output_tokens_details: { reasoning_tokens: 0 },
-        total_tokens: 20,
-      };
-      // finish_thinking と think_deeply が同時に呼ばれる
-      mockCreateResponse.mockResolvedValueOnce({
-        id: 'response_123',
-        output: [
-          {
-            type: 'function_call',
-            call_id: 'call_think',
-            name: 'think_deeply',
-            arguments: JSON.stringify({
-              thought: 'Some thought',
-            }),
-            status: 'completed',
-          },
-          {
-            type: 'function_call',
-            call_id: 'call_finish',
-            name: 'finish_thinking',
-            arguments: JSON.stringify({
-              reason: '十分な情報を得た',
-            }),
-            status: 'completed',
-          },
-        ],
-        usage,
-      });
-
-      const response = await client.call(input);
-
-      // finish_thinking が含まれているので、1回のみで終了
-      expect(mockCreateResponse).toHaveBeenCalledTimes(1);
-      expect(response).toEqual(usage);
+      ],
+      tools: [thinkDeeplyFunction.contract],
     });
 
-    it('MAX_TURNSを超える呼び出し', async () => {
-      const client = new OpenAIClient(
-        env,
-        [thinkDeeplyFunction],
-        mockToolContext,
-        mockThinkingStream
-      );
-      const input: ResponseInputItem[] = [
+    expect(response).toEqual({
+      output: [
         {
-          role: 'user',
-          content: 'Hello, how are you?',
+          type: 'message',
+          role: 'assistant',
+          content: 'Thinking complete',
         },
-      ];
-      mockCreateResponse.mockResolvedValue({
-        id: 'response_123',
-        output: [
-          {
-            type: 'function_call',
-            call_id: 'call_123',
-            name: 'think_deeply',
-            arguments: JSON.stringify({
-              thought: 'What is the meaning of life?',
-            }),
-            status: 'completed',
-          },
-        ],
-        usage: {
-          input_tokens: 4,
-          input_tokens_details: { cached_tokens: 3 },
-          output_tokens: 2,
-          output_tokens_details: { reasoning_tokens: 1 },
-          total_tokens: 10,
+        {
+          type: 'tool_call',
+          callId: 'call_123',
+          toolName: 'think_deeply',
+          input: '{"thought":"test"}',
         },
-      });
-
-      const response = await client.call(input);
-      expect(mockCreateResponse).toHaveBeenCalledTimes(10);
-      expect(response).toEqual({
-        input_tokens: 40,
-        input_tokens_details: { cached_tokens: 30 },
-        output_tokens: 20,
-        output_tokens_details: { reasoning_tokens: 10 },
-        total_tokens: 100,
-      });
+      ],
+      usage: {
+        cachedInputTokens: 4,
+        uncachedInputTokens: 6,
+        totalInputTokens: 10,
+        outputTokens: 7,
+        reasoningTokens: 2,
+        totalTokens: 17,
+      },
+      responseToken: 'response_123',
     });
+    expect(mockThinkingStreamSend).toHaveBeenCalledWith(
+      '*thinking: Thinking complete*\n\n*think_deeply: test*'
+    );
   });
-});
 
-describe('accumulateUsage', () => {
-  describe('基本的な累積', () => {
-    it('2つのUsageオブジェクトを正しく累積する', () => {
-      const total: ResponseUsage = {
-        input_tokens: 100,
-        input_tokens_details: { cached_tokens: 10 },
-        output_tokens: 50,
-        output_tokens_details: { reasoning_tokens: 5 },
-        total_tokens: 150,
-      };
-
-      const additional: ResponseUsage = {
-        input_tokens: 200,
-        input_tokens_details: { cached_tokens: 20 },
-        output_tokens: 75,
-        output_tokens_details: { reasoning_tokens: 15 },
-        total_tokens: 275,
-      };
-
-      const result = accumulateUsage(total, additional);
-
-      expect(result).toEqual({
-        input_tokens: 300,
-        input_tokens_details: { cached_tokens: 30 },
-        output_tokens: 125,
-        output_tokens_details: { reasoning_tokens: 20 },
-        total_tokens: 425,
-      });
+  it('usage がない response はゼロ usage として扱う', async () => {
+    const client = new OpenAIClient(env, mockThinkingStream);
+    mockCreateResponse.mockResolvedValue({
+      id: 'response_123',
+      output: [],
     });
 
-    it('一方がゼロ値の場合でも正しく動作する', () => {
-      const total: ResponseUsage = {
-        input_tokens: 100,
-        input_tokens_details: { cached_tokens: 10 },
-        output_tokens: 50,
-        output_tokens_details: { reasoning_tokens: 5 },
-        total_tokens: 150,
-      };
-
-      const zero: ResponseUsage = {
-        input_tokens: 0,
-        input_tokens_details: { cached_tokens: 0 },
-        output_tokens: 0,
-        output_tokens_details: { reasoning_tokens: 0 },
-        total_tokens: 0,
-      };
-
-      const result = accumulateUsage(total, zero);
-
-      expect(result).toEqual(total);
+    const response = await client.generate({
+      input: [
+        {
+          role: 'user',
+          content: 'hello',
+        },
+      ],
+      tools: [],
     });
 
-    it('両方ゼロ値の場合でもエラーにならない', () => {
-      const zero: ResponseUsage = {
-        input_tokens: 0,
-        input_tokens_details: { cached_tokens: 0 },
-        output_tokens: 0,
-        output_tokens_details: { reasoning_tokens: 0 },
-        total_tokens: 0,
-      };
-
-      const result = accumulateUsage(zero, zero);
-
-      expect(result).toEqual(zero);
-    });
-
-    it('大きな数値でも正しく累積される', () => {
-      const large1: ResponseUsage = {
-        input_tokens: 999999,
-        input_tokens_details: { cached_tokens: 123456 },
-        output_tokens: 888888,
-        output_tokens_details: { reasoning_tokens: 654321 },
-        total_tokens: 1888887,
-      };
-
-      const large2: ResponseUsage = {
-        input_tokens: 111111,
-        input_tokens_details: { cached_tokens: 22222 },
-        output_tokens: 333333,
-        output_tokens_details: { reasoning_tokens: 44444 },
-        total_tokens: 444444,
-      };
-
-      const result = accumulateUsage(large1, large2);
-
-      expect(result).toEqual({
-        input_tokens: 1111110,
-        input_tokens_details: { cached_tokens: 145678 },
-        output_tokens: 1222221,
-        output_tokens_details: { reasoning_tokens: 698765 },
-        total_tokens: 2333331,
-      });
+    expect(response.usage).toEqual({
+      cachedInputTokens: 0,
+      uncachedInputTokens: 0,
+      totalInputTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+      totalTokens: 0,
     });
   });
 });

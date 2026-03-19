@@ -18,11 +18,12 @@
   - 状態: レビュー済み / コミット済み
   - コミット: `af934b0`
   - レビュー対象: handler が concrete 実装ではなく port を使う構造
-- [ ] Checkpoint 5: prompt builder を core に寄せる
-  - 状態: 実装完了 / レビュー待ち / 未コミット
+- [x] Checkpoint 5: prompt builder を core に寄せる
+  - 状態: レビュー済み / コミット済み
+  - コミット: `84a3026`
   - レビュー対象: prompt と tool spec の単一ソース化
 - [ ] Checkpoint 6: agent loop の意味論を core に寄せる
-  - 状態: 未着手
+  - 状態: 実装完了 / レビュー待ち / 未コミット
   - レビュー対象: loop / finish 条件 / usage 管理の core 移設
 - [ ] Checkpoint 7: OpenAI adapter 分離
   - 状態: 未着手
@@ -130,7 +131,7 @@
 
 ## 現在のチェックポイント
 
-### Checkpoint 5: prompt builder を core に寄せる
+### Checkpoint 6: agent loop の意味論を core に寄せる
 
 状態:
 
@@ -140,33 +141,37 @@
 
 内容:
 
-- `core` に prompt builder を追加し、generated tool catalog と runtime context block を組み立てるようにした
-- `ThinkingEngine` の初期 developer message 構築を `core` の prompt builder 経由に変更した
-- `marie` の手書きツール一覧を撤去し、静的 prompt から generated catalog を正として扱う形に寄せた
+- `core` に provider 非依存の agent session loop を追加し、turn loop / tool dispatch / finish 条件 / usage 累積を移した
+- worker 側の `OpenAIClient` は `ModelPort` 実装へ縮退させ、OpenAI Responses API の入出力変換と thought log 送信に責務を絞った
+- `ThinkingEngine` は composition root として tool 群、runtime context、初期 input を束ねて `runAgentSession` を呼ぶ形に変えた
+- `Tool` は provider 向け `contract` を持つようにし、OpenAI function tool 定義は contract から組み立てるようにした
 
 新設した主なファイル:
 
-- `packages/core/src/agent/prompt-builder.ts`
-- `packages/core/src/agent/prompt-builder.test.ts`
+- `packages/core/src/agent/session.ts`
+- `packages/core/src/agent/session.test.ts`
 
 変更した主なファイル:
 
 - `apps/cloudflare-workers/src/echo/thinking-engine/index.ts`
-- `apps/cloudflare-workers/src/echo/memory-system/index.test.ts`
+- `apps/cloudflare-workers/src/llm/openai/client.ts`
+- `apps/cloudflare-workers/src/llm/openai/client.test.ts`
+- `apps/cloudflare-workers/src/llm/openai/functions/index.ts`
+- `apps/cloudflare-workers/test/mocks/thinking-stream.ts`
 - `packages/core/package.json`
-- `packages/core/src/llm/prompts/rin.ts`
-- `packages/core/src/llm/prompts/marie.ts`
+- `packages/core/src/ports/model.ts`
 
 この段階で達成したこと:
 
-- prompt の中で canonical tool definitions から生成した `<available_tools>` を必ず差し込むようになった
-- latest memory と current datetime の runtime context block を `core` 側で組み立てるようになった
-- worker 側の初期 prompt 組み立ては `core` builder を呼ぶだけの形になった
+- agent loop の停止条件と usage 累積が OpenAI 実装から切り離された
+- worker 側の OpenAI 実装は `ModelRequest` / `ModelResponse` 変換に集中する構造になった
+- 初期 prompt / 初期 notification seed / tool handlers をつないで session を動かす責務が `ThinkingEngine` に整理された
 
 この段階ではまだやっていないこと:
 
-- agent loop の意味論の `core` 移設
-- OpenAI / Discord / Cloudflare runtime package への本格的な実装移設
+- `OpenAIClient` の package 分離
+- Discord / Cloudflare runtime package への本格的な実装移設
+- `core` から OpenAI 型 import を完全に追い出す整理
 
 品質チェック:
 
@@ -179,9 +184,9 @@
 
 レビュー観点:
 
-- generated tool catalog の表現が prompt の正規ソースとして妥当か
-- runtime context block の粒度と文面が適切か
-- static prompt と generated prompt の責務分担が妥当か
+- loop の意味論が `core` に寄ったことで責務分割が明確になっているか
+- `OpenAIClient` が adapter として十分に薄くなっているか
+- `ThinkingEngine` の composition root としての形が次の package 分離に耐えるか
 
 ## 次のチェックポイント候補と横断タスク
 

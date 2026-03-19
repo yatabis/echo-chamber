@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { getErrorMessage } from '@echo-chamber/core';
 import type { ToolExecutionContext } from '@echo-chamber/core/agent/tool-context';
+import type { ModelToolContract } from '@echo-chamber/core/ports/model';
 
 export type ToolContext = ToolExecutionContext;
 
@@ -9,7 +10,7 @@ interface FunctionToolDefinition {
   type: 'function';
   name: string;
   description: string;
-  parameters: Record<string, unknown>;
+  parameters: unknown;
   strict: boolean;
 }
 
@@ -28,6 +29,7 @@ export type ToolResult = ToolResultSuccess | ToolResultError;
 export interface ITool {
   name: string;
   description: string;
+  contract: ModelToolContract;
   definition: FunctionToolDefinition;
   execute(args: string, ctx: ToolContext): Promise<string>;
 }
@@ -43,20 +45,27 @@ export class Tool<Args extends z.ZodRawShape> implements ITool {
     ) => ToolResult | Promise<ToolResult>
   ) {}
 
-  get definition(): FunctionToolDefinition {
+  get contract(): ModelToolContract {
     const strict = Object.values(this.parameters).every((param) => {
       return !z.safeParse(param, undefined).success;
     });
 
     return {
-      type: 'function',
       name: this.name,
       description: this.description,
-      parameters: z.toJSONSchema(z.object(this.parameters)) as Record<
-        string,
-        unknown
-      >,
+      inputSchema: z.toJSONSchema(z.object(this.parameters)),
       strict,
+    };
+  }
+
+  get definition(): FunctionToolDefinition {
+    const { name, description, inputSchema, strict } = this.contract;
+    return {
+      type: 'function',
+      name,
+      description,
+      parameters: inputSchema,
+      strict: strict ?? false,
     };
   }
 

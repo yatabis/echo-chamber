@@ -1,60 +1,70 @@
 import OpenAI from 'openai';
 
-import { getErrorMessage } from '@echo-chamber/core';
 import type { Emotion } from '@echo-chamber/core';
+import type {
+  ModelInputItem,
+  ModelMessage,
+  ModelOutputItem,
+  ModelPort,
+  ModelRequest,
+  ModelResponse,
+  ModelToolContract,
+  ModelUsage,
+} from '@echo-chamber/core/ports/model';
 import type { ThinkingStream } from '@echo-chamber/core/utils/thinking-stream';
 
 import { createLogger } from '../../utils/logger';
 
-import type { ITool, ToolContext } from './functions';
 import type { Logger } from '../../utils/logger';
 import type {
+  EasyInputMessage,
   Response,
   ResponseFunctionCallOutputItemList,
-  ResponseInput,
+  ResponseFunctionToolCall,
   ResponseInputItem,
   ResponseOutputItem,
-  ResponseFunctionToolCall,
-  EasyInputMessage,
   ResponseOutputMessage,
   ResponseUsage,
 } from 'openai/resources/responses/responses';
 
-const MAX_TURNS = 10;
+interface FunctionToolDefinition {
+  type: 'function';
+  name: string;
+  description: string;
+  parameters: Record<string, unknown> | null;
+  strict: boolean;
+}
 
-export class OpenAIClient {
+const EMPTY_RESPONSE_USAGE: ResponseUsage = {
+  input_tokens: 0,
+  input_tokens_details: { cached_tokens: 0 },
+  output_tokens: 0,
+  output_tokens_details: { reasoning_tokens: 0 },
+  total_tokens: 0,
+};
+
+export class OpenAIClient implements ModelPort {
   private readonly client: OpenAI;
-  private readonly tools: ITool[];
-  private readonly toolContext: ToolContext;
   private readonly logger: Logger;
   private readonly thinkingStream: ThinkingStream;
-  private previousResponseId: string | undefined;
 
-  constructor(
-    env: Env,
-    tools: ITool[],
-    toolContext: ToolContext,
-    thinkingStream: ThinkingStream
-  ) {
+  constructor(env: Env, thinkingStream: ThinkingStream) {
     this.client = new OpenAI({
       apiKey: env.OPENAI_API_KEY,
     });
-    this.tools = tools;
-    this.toolContext = toolContext;
     this.logger = createLogger(env);
     this.thinkingStream = thinkingStream;
   }
 
   /**
-   * Responses APIを実行
+   * Responses API を実行する。
    */
-  async createResponse(input: ResponseInput): Promise<Response> {
+  async createResponse(request: ModelRequest): Promise<Response> {
     const response = await this.client.responses.create({
-      input,
-
+      input: request.input.map(toResponseInputItem),
       model: 'gpt-5.4',
       parallel_tool_calls: true,
-      previous_response_id: this.previousResponseId,
+      previous_response_id: request.previousResponseToken,
       reasoning: {
         effort: 'none',
       },
@@ -67,11 +77,10 @@ export class OpenAIClient {
         verbosity: 'medium',
       },
       tool_choice: 'auto',
-      tools: this.tools.map((tool) => tool.definition),
+      tools: request.tools.map(toFunctionToolDefinition),
       truncation: 'auto',
     });
 
-    // Usage情報の確認（undefinedの場合のみwarnログ）
     if (!response.usage) {
       await this.logger.warn('Response usage information is undefined');
     }
@@ -79,116 +88,165 @@ export class OpenAIClient {
     return response;
   }
 
-  /**
-   * Function Callを実行
-   */
-  async executeFunction(
-    functionCall: ResponseFunctionToolCall
-  ): Promise<string> {
-    const tool = this.tools.find(({ name }) => functionCall.name === name);
-    if (!tool) {
-      return JSON.stringify({
-        error: `Function '${functionCall.name}' is not registered`,
-        available_functions: this.tools.map(({ name }) => name),
-      });
-    }
+  async generate(request: ModelRequest): Promise<ModelResponse> {
+    const responseInput = request.input.map(toResponseInputItem);
+    await this.logger.debug(responseInput.map(formatInputItem).join('\n\n'));
 
-    try {
-      return await tool.execute(functionCall.arguments, this.toolContext);
-    } catch (error) {
-      return JSON.stringify({
-        success: false,
-        error: getErrorMessage(error),
-      });
-    }
-  }
-
-  /**
-   * 完全な会話フロー（Function Calling含む）を実行
-   */
-  async call(input: ResponseInput, turn = 1): Promise<ResponseUsage> {
-    if (turn > MAX_TURNS) {
-      await this.logger.warn('Maximum turns exceeded');
-      return {
-        input_tokens: 0,
-        input_tokens_details: { cached_tokens: 0 },
-        output_tokens: 0,
-        output_tokens_details: { reasoning_tokens: 0 },
-        total_tokens: 0,
-      };
-    }
-
-    await this.logger.debug(input.map(formatInputItem).join('\n\n'));
-
-    const response = await this.createResponse(input);
-
-    if (response.id) {
-      this.previousResponseId = response.id;
-    }
+    const response = await this.createResponse(request);
 
     await this.logger.debug(response.output.map(formatOutputItem).join('\n\n'));
-
-    // 思考ログをThinkingStreamで送信（Loggerとは独立）
     await this.thinkingStream.send(formatLogOutput(response.output));
 
-    // 現在のレスポンスのusageを取得
-    let totalUsage: ResponseUsage = response.usage ?? {
-      input_tokens: 0,
-      input_tokens_details: { cached_tokens: 0 },
-      output_tokens: 0,
-      output_tokens_details: { reasoning_tokens: 0 },
-      total_tokens: 0,
+    return {
+      output: response.output.flatMap(toModelOutputItem),
+      usage: toModelUsage(response.usage),
+      responseToken: response.id,
     };
-
-    const functionCalls = response.output.filter(
-      (item) => item.type === 'function_call'
-    );
-
-    // finish_thinking が呼ばれた場合はループを終了
-    const hasFinishThinking = functionCalls.some(
-      (item) => item.name === 'finish_thinking'
-    );
-
-    const nextInput: ResponseInput = await Promise.all(
-      functionCalls.map(async (item) => ({
-        type: 'function_call_output',
-        call_id: item.call_id,
-        output: await this.executeFunction(item),
-      }))
-    );
-
-    if (nextInput.length > 0 && !hasFinishThinking) {
-      const recursiveUsage = await this.call(nextInput, turn + 1);
-      totalUsage = accumulateUsage(totalUsage, recursiveUsage);
-    }
-
-    return totalUsage;
   }
 }
 
-/**
- * 複数のUsageオブジェクトを累積する
- */
-export function accumulateUsage(
-  total: ResponseUsage,
-  additional: ResponseUsage
-): ResponseUsage {
+function toFunctionToolDefinition(
+  tool: ModelToolContract
+): FunctionToolDefinition {
   return {
-    input_tokens: total.input_tokens + additional.input_tokens,
-    input_tokens_details: {
-      cached_tokens:
-        total.input_tokens_details.cached_tokens +
-        additional.input_tokens_details.cached_tokens,
-    },
-    output_tokens: total.output_tokens + additional.output_tokens,
-    output_tokens_details: {
-      reasoning_tokens:
-        total.output_tokens_details.reasoning_tokens +
-        additional.output_tokens_details.reasoning_tokens,
-    },
-    total_tokens: total.total_tokens + additional.total_tokens,
+    type: 'function',
+    name: tool.name,
+    description: tool.description,
+    parameters: toFunctionParameters(tool.inputSchema),
+    strict: tool.strict ?? false,
   };
 }
+
+function toFunctionParameters(
+  inputSchema: unknown
+): Record<string, unknown> | null {
+  if (inputSchema === null) {
+    return null;
+  }
+
+  if (typeof inputSchema === 'object' && !Array.isArray(inputSchema)) {
+    return Object.fromEntries(Object.entries(inputSchema));
+  }
+
+  return null;
+}
+
+function toResponseInputItem(item: ModelInputItem): ResponseInputItem {
+  if (isModelMessage(item)) {
+    return {
+      role: item.role,
+      content: item.content,
+    };
+  }
+
+  if (item.type === 'tool_call') {
+    return {
+      type: 'function_call',
+      call_id: item.callId,
+      name: item.toolName,
+      arguments: item.input,
+    };
+  }
+
+  return {
+    type: 'function_call_output',
+    call_id: item.callId,
+    output: item.output,
+  };
+}
+
+function isModelMessage(item: ModelInputItem): item is ModelMessage {
+  return 'role' in item;
+}
+
+function toModelUsage(usage: ResponseUsage | undefined): ModelUsage {
+  const safeUsage = usage ?? EMPTY_RESPONSE_USAGE;
+  const cachedInputTokens = safeUsage.input_tokens_details.cached_tokens;
+  const totalInputTokens = safeUsage.input_tokens;
+
+  return {
+    cachedInputTokens,
+    uncachedInputTokens: totalInputTokens - cachedInputTokens,
+    totalInputTokens,
+    outputTokens: safeUsage.output_tokens,
+    reasoningTokens: safeUsage.output_tokens_details.reasoning_tokens,
+    totalTokens: safeUsage.total_tokens,
+  };
+}
+
+function toModelOutputItem(item: ResponseOutputItem): ModelOutputItem[] {
+  if (item.type === 'function_call') {
+    return [
+      {
+        type: 'tool_call',
+        callId: item.call_id,
+        toolName: item.name,
+        input: item.arguments,
+      },
+    ];
+  }
+
+  if (item.type === 'message') {
+    return [
+      {
+        type: 'message',
+        role: 'assistant',
+        content: extractOutputMessageText(item),
+      },
+    ];
+  }
+
+  return [];
+}
+
+function extractOutputMessageText(message: ResponseOutputMessage): string {
+  return message.content
+    .map((content) => {
+      const contentType = content.type;
+      switch (contentType) {
+        case 'output_text':
+          return content.text;
+        case 'refusal':
+          return `<refusal>${content.refusal}</refusal>`;
+        default:
+          throw new Error(
+            `Unexpected contentType: ${contentType satisfies never}`
+          );
+      }
+    })
+    .join('\n\n');
+}
+
+const functionCallFormatters: Record<
+  string,
+  (args: Record<string, unknown>) => string
+> = {
+  read_chat_messages: (args) => `*read_chat_messages: ${args.limit as number}*`,
+  think_deeply: (args) => `*think_deeply: ${args.thought as string}*`,
+  store_memory: (args) => {
+    const content = args.content as string;
+    const type = args.type as string;
+    const { valence, arousal, labels } = args.emotion as Emotion;
+    return `*store_memory [${type}]: ${content}\n(${valence}, ${arousal}) [${labels.join(', ')}]*`;
+  },
+  search_memory: (args) => {
+    const query = args.query as string;
+    const type = args.type as string | undefined;
+    return type !== undefined && type !== ''
+      ? `*search_memory [${type}]: ${query}*`
+      : `*search_memory: ${query}*`;
+  },
+  create_note: (args) => `*create_note: ${args.title as string}*`,
+  list_notes: () => `*list_notes*`,
+  get_note: (args) => `*get_note: ${args.id as string}*`,
+  search_notes: (args) => `*search_notes: ${args.query as string}*`,
+  update_note: (args) => `*update_note: ${args.id as string}*`,
+  delete_note: (args) => `*delete_note: ${args.id as string}*`,
+  finish_thinking: (args) => {
+    const nextWakeAt = args.next_wake_at as string | undefined;
+    return `*finish_thinking: ${args.reason as string}(next_wake_at: ${nextWakeAt})*`;
+  },
+};
 
 export function formatLogOutput(output: ResponseOutputItem[]): string {
   return output
@@ -232,37 +290,6 @@ export function formatLogOutput(output: ResponseOutputItem[]): string {
     .join('\n\n')
     .trim();
 }
-
-const functionCallFormatters: Record<
-  string,
-  (args: Record<string, unknown>) => string
-> = {
-  read_chat_messages: (args) => `*read_chat_messages: ${args.limit as number}*`,
-  think_deeply: (args) => `*think_deeply: ${args.thought as string}*`,
-  store_memory: (args) => {
-    const content = args.content as string;
-    const type = args.type as string;
-    const { valence, arousal, labels } = args.emotion as Emotion;
-    return `*store_memory [${type}]: ${content}\n(${valence}, ${arousal}) [${labels.join(', ')}]*`;
-  },
-  search_memory: (args) => {
-    const query = args.query as string;
-    const type = args.type as string | undefined;
-    return type !== undefined && type !== ''
-      ? `*search_memory [${type}]: ${query}*`
-      : `*search_memory: ${query}*`;
-  },
-  create_note: (args) => `*create_note: ${args.title as string}*`,
-  list_notes: () => `*list_notes*`,
-  get_note: (args) => `*get_note: ${args.id as string}*`,
-  search_notes: (args) => `*search_notes: ${args.query as string}*`,
-  update_note: (args) => `*update_note: ${args.id as string}*`,
-  delete_note: (args) => `*delete_note: ${args.id as string}*`,
-  finish_thinking: (args) => {
-    const nextWakeAt = args.next_wake_at as string | undefined;
-    return `*finish_thinking: ${args.reason as string}(next_wake_at: ${nextWakeAt})*`;
-  },
-};
 
 export function formatInputItem(item: ResponseInputItem): string {
   const itemType = item.type;

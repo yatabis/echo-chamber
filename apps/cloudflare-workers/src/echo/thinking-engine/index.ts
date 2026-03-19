@@ -1,6 +1,13 @@
 import { getTodayUsageKey } from '@echo-chamber/core';
 import type { EchoInstanceConfig, UsageRecord } from '@echo-chamber/core';
 import { buildAgentPromptMessages } from '@echo-chamber/core/agent/prompt-builder';
+import { runAgentSession } from '@echo-chamber/core/agent/session';
+import type {
+  ModelInputItem,
+  ModelToolCall,
+  ModelToolResult,
+  ModelUsage,
+} from '@echo-chamber/core/ports/model';
 import { ThinkingStream } from '@echo-chamber/core/utils/thinking-stream';
 
 import { createEmbeddingService } from '../../llm/embedding-factory';
@@ -31,13 +38,7 @@ import { NoteSystem } from '../note-system';
 
 import type { ITool, ToolContext } from '../../llm/openai/functions';
 import type { Logger } from '../../utils/logger';
-import type {
-  EasyInputMessage,
-  ResponseFunctionToolCall,
-  ResponseInput,
-  ResponseInputItem,
-  ResponseUsage,
-} from 'openai/resources/responses/responses';
+import type { ResponseUsage } from 'openai/resources/responses/responses';
 
 /**
  * Echo の思考エンジン
@@ -87,9 +88,19 @@ export class ThinkingEngine {
   async think(): Promise<ResponseUsage> {
     const thinkingStream = new ThinkingStream(this.instanceConfig);
     await thinkingStream.send('*Thinking started...*');
-    const openai = this.createOpenAIClient(thinkingStream);
-    const messages = await this.buildInitialMessages();
-    const usage = await openai.call(messages);
+    const tools = this.createTools();
+    const session = await runAgentSession({
+      model: this.createOpenAIClient(thinkingStream),
+      tools: tools.map((tool) => ({
+        name: tool.name,
+        contract: tool.contract,
+        execute: async (input: string): Promise<string> =>
+          await tool.execute(input, this.toolContext),
+      })),
+      initialInput: await this.buildInitialInput(),
+      logger: this.toolContext.logger,
+    });
+    const usage = toResponseUsage(session.usage);
     await thinkingStream.send(
       `*Thinking completed.*\nUsage: ${usage.total_tokens} tokens (Total: ${
         (await this.getCurrentUsage()) + usage.total_tokens
@@ -99,30 +110,29 @@ export class ThinkingEngine {
   }
 
   private createOpenAIClient(thinkingStream: ThinkingStream): OpenAIClient {
-    return new OpenAIClient(
-      this.env,
-      [
-        checkNotificationsFunction,
-        readChatMessagesFunction,
-        sendChatMessageFunction,
-        addReactionToChatMessageFunction,
-        storeMemoryFunction,
-        searchMemoryFunction,
-        createNoteFunction,
-        listNotesFunction,
-        getNoteFunction,
-        searchNotesFunction,
-        updateNoteFunction,
-        deleteNoteFunction,
-        thinkDeeplyFunction,
-        finishThinkingFunction,
-      ],
-      this.toolContext,
-      thinkingStream
-    );
+    return new OpenAIClient(this.env, thinkingStream);
   }
 
-  private async buildInitialMessages(): Promise<ResponseInput> {
+  private createTools(): ITool[] {
+    return [
+      checkNotificationsFunction,
+      readChatMessagesFunction,
+      sendChatMessageFunction,
+      addReactionToChatMessageFunction,
+      storeMemoryFunction,
+      searchMemoryFunction,
+      createNoteFunction,
+      listNotesFunction,
+      getNoteFunction,
+      searchNotesFunction,
+      updateNoteFunction,
+      deleteNoteFunction,
+      thinkDeeplyFunction,
+      finishThinkingFunction,
+    ];
+  }
+
+  private async buildInitialInput(): Promise<ModelInputItem[]> {
     const latestMemory = this.memorySystem.getLatestMemory();
     const promptMessages = buildAgentPromptMessages({
       systemPrompt: this.instanceConfig.systemPrompt,
@@ -136,33 +146,31 @@ export class ThinkingEngine {
               emotion: latestMemory.emotion,
             },
     });
-    const promptInputs: EasyInputMessage[] = promptMessages.map((message) => ({
+    const promptInputs: ModelInputItem[] = promptMessages.map((message) => ({
       role: message.role,
       content: message.content,
     }));
 
     return [
       ...promptInputs,
-      this.createFunctionCallMessage(checkNotificationsFunction),
-      await this.createFunctionCallOutputMessage(checkNotificationsFunction),
+      this.createToolCallInput(checkNotificationsFunction),
+      await this.createToolResultInput(checkNotificationsFunction),
     ];
   }
 
-  private createFunctionCallMessage(tool: ITool): ResponseFunctionToolCall {
+  private createToolCallInput(tool: ITool): ModelToolCall {
     return {
-      type: 'function_call',
-      call_id: tool.name,
-      name: tool.name,
-      arguments: '{}',
+      type: 'tool_call',
+      callId: tool.name,
+      toolName: tool.name,
+      input: '{}',
     };
   }
 
-  private async createFunctionCallOutputMessage(
-    tool: ITool
-  ): Promise<ResponseInputItem.FunctionCallOutput> {
+  private async createToolResultInput(tool: ITool): Promise<ModelToolResult> {
     return {
-      type: 'function_call_output',
-      call_id: tool.name,
+      type: 'tool_result',
+      callId: tool.name,
       output: await tool.execute('{}', this.toolContext),
     };
   }
@@ -180,4 +188,18 @@ export class ThinkingEngine {
 
     return todayUsage.total_tokens;
   }
+}
+
+function toResponseUsage(usage: ModelUsage): ResponseUsage {
+  return {
+    input_tokens: usage.totalInputTokens,
+    input_tokens_details: {
+      cached_tokens: usage.cachedInputTokens,
+    },
+    output_tokens: usage.outputTokens,
+    output_tokens_details: {
+      reasoning_tokens: usage.reasoningTokens,
+    },
+    total_tokens: usage.totalTokens,
+  };
 }
