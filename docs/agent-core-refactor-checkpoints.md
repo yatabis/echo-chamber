@@ -14,11 +14,12 @@
   - 状態: レビュー済み / コミット済み
   - コミット: `7651bb2`
   - レビュー対象: tool spec を `core` の正規定義源として置く設計
-- [ ] Checkpoint 4: tool runtime context を port に寄せる
-  - 状態: 実装完了 / レビュー待ち / 未コミット
+- [x] Checkpoint 4: tool runtime context を port に寄せる
+  - 状態: レビュー済み / コミット済み
+  - コミット: `af934b0`
   - レビュー対象: handler が concrete 実装ではなく port を使う構造
 - [ ] Checkpoint 5: prompt builder を core に寄せる
-  - 状態: 未着手
+  - 状態: 実装完了 / レビュー待ち / 未コミット
   - レビュー対象: prompt と tool spec の単一ソース化
 - [ ] Checkpoint 6: agent loop の意味論を core に寄せる
   - 状態: 未着手
@@ -129,7 +130,7 @@
 
 ## 現在のチェックポイント
 
-### Checkpoint 4: tool runtime context を port に寄せる
+### Checkpoint 5: prompt builder を core に寄せる
 
 状態:
 
@@ -139,38 +140,31 @@
 
 内容:
 
-- `ToolContext` を `core` の `ToolExecutionContext` 基準に変更
-- Worker 側で chat / notification / memory / note / logger の port adapter を組み立てるよう変更
-- tool handler から `instanceConfig`, `MemorySystem`, `NoteSystem`, `DurableObjectStorage` への直接依存を外した
+- `core` に prompt builder を追加し、generated tool catalog と runtime context block を組み立てるようにした
+- `ThinkingEngine` の初期 developer message 構築を `core` の prompt builder 経由に変更した
+- `marie` の手書きツール一覧を撤去し、静的 prompt から generated catalog を正として扱う形に寄せた
 
 新設した主なファイル:
 
-- `packages/core/src/agent/tool-context.ts`
-- `apps/cloudflare-workers/src/llm/openai/functions/tool-context.ts`
+- `packages/core/src/agent/prompt-builder.ts`
+- `packages/core/src/agent/prompt-builder.test.ts`
 
 変更した主なファイル:
 
 - `apps/cloudflare-workers/src/echo/thinking-engine/index.ts`
-- `apps/cloudflare-workers/src/echo/memory-system/index.ts`
-- `apps/cloudflare-workers/src/llm/openai/functions/chat.ts`
-- `apps/cloudflare-workers/src/llm/openai/functions/index.ts`
-- `apps/cloudflare-workers/src/llm/openai/functions/memory.ts`
-- `apps/cloudflare-workers/src/llm/openai/functions/note.ts`
-- `apps/cloudflare-workers/src/llm/openai/functions/chat.test.ts`
-- `apps/cloudflare-workers/src/llm/openai/functions/memory.test.ts`
-- `apps/cloudflare-workers/src/llm/openai/functions/note.test.ts`
-- `apps/cloudflare-workers/test/mocks/tool.ts`
+- `apps/cloudflare-workers/src/echo/memory-system/index.test.ts`
 - `packages/core/package.json`
+- `packages/core/src/llm/prompts/rin.ts`
+- `packages/core/src/llm/prompts/marie.ts`
 
 この段階で達成したこと:
 
-- handler が `ctx.chat`, `ctx.notifications`, `ctx.memory`, `ctx.notes`, `ctx.logger` の port 経由で動くようになった
-- `ThinkingEngine` は concrete 実装を生成しても、tool へは port だけを渡す形になった
-- OpenAI function definition の型は OpenAI 固有型ではなくローカルな shape として扱うように整理した
+- prompt の中で canonical tool definitions から生成した `<available_tools>` を必ず差し込むようになった
+- latest memory と current datetime の runtime context block を `core` 側で組み立てるようになった
+- worker 側の初期 prompt 組み立ては `core` builder を呼ぶだけの形になった
 
 この段階ではまだやっていないこと:
 
-- prompt builder の `core` 移設
 - agent loop の意味論の `core` 移設
 - OpenAI / Discord / Cloudflare runtime package への本格的な実装移設
 
@@ -179,49 +173,17 @@
 - `pnpm format`
 - `pnpm lint:check`
 - `pnpm typecheck`
+- `pnpm test:run`
 
 は通過済み。
 
 レビュー観点:
 
-- `ToolExecutionContext` の粒度が妥当か
-- `ThinkingEngine` が composition root として自然な形になっているか
-- `handler -> port -> concrete implementation` の依存方向が妥当か
+- generated tool catalog の表現が prompt の正規ソースとして妥当か
+- runtime context block の粒度と文面が適切か
+- static prompt と generated prompt の責務分担が妥当か
 
 ## 次のチェックポイント候補と横断タスク
-
-### Checkpoint 4: tool runtime context を port に寄せる
-
-目的:
-
-- `ToolContext` から具体実装依存を外す
-- `MemorySystem`, `NoteSystem`, `Logger`, `DurableObjectStorage` などを直接持たないようにする
-
-やること:
-
-- Worker 側 `ToolContext` の見直し
-- `core` の port を使う context interface の導入
-- handler から Cloudflare 具体型を追い出す準備
-
-完了条件:
-
-- tool handler が `core` port 経由で必要な機能に触れる構造になる
-
-### Checkpoint 5: prompt builder を core に寄せる
-
-目的:
-
-- prompt と tool 実装の drift を止める
-
-やること:
-
-- static prompt 素材の整理
-- tool catalog を使ったツール説明生成
-- runtime context block の差し込みポイント整理
-
-完了条件:
-
-- prompt の中で手書きの tool 一覧を持たない形に寄せられる
 
 ### Checkpoint 6: agent loop の意味論を core に寄せる
 
@@ -332,13 +294,12 @@
 
 優先順位:
 
-1. Checkpoint 4 のレビュー完了
-2. Checkpoint 5 で prompt と tool catalog の接続を整理する
-3. Checkpoint 6 で agent loop の意味論を core に寄せる
-4. その後に adapter 分離へ進む
+1. Checkpoint 5 のレビュー完了
+2. Checkpoint 6 で agent loop の意味論を core に寄せる
+3. その後に adapter 分離へ進む
 
 ## 再開時の注意
 
-- 直近の未コミット差分は Checkpoint 4 のみ
-- 直近のレビュー対象は tool runtime context の port 化
+- 直近の未コミット差分は Checkpoint 5 のみ
+- 直近のレビュー対象は prompt builder の core 移設
 - barrel export 廃止は横断タスクとして扱うが、まだ未着手

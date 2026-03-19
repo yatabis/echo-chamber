@@ -1,5 +1,6 @@
-import { formatJapaneseDatetime, getTodayUsageKey } from '@echo-chamber/core';
+import { getTodayUsageKey } from '@echo-chamber/core';
 import type { EchoInstanceConfig, UsageRecord } from '@echo-chamber/core';
+import { buildAgentPromptMessages } from '@echo-chamber/core/agent/prompt-builder';
 import { ThinkingStream } from '@echo-chamber/core/utils/thinking-stream';
 
 import { createEmbeddingService } from '../../llm/embedding-factory';
@@ -31,6 +32,7 @@ import { NoteSystem } from '../note-system';
 import type { ITool, ToolContext } from '../../llm/openai/functions';
 import type { Logger } from '../../utils/logger';
 import type {
+  EasyInputMessage,
   ResponseFunctionToolCall,
   ResponseInput,
   ResponseInputItem,
@@ -121,34 +123,26 @@ export class ThinkingEngine {
   }
 
   private async buildInitialMessages(): Promise<ResponseInput> {
-    const now = new Date();
-    const currentDatetime = formatJapaneseDatetime(now);
     const latestMemory = this.memorySystem.getLatestMemory();
-    const context = latestMemory
-      ? `context loaded: ${JSON.stringify(
-          {
-            content: latestMemory.content,
-            created_at: latestMemory.createdAt,
-            emotion: {
-              valence: latestMemory.emotion.valence,
-              arousal: latestMemory.emotion.arousal,
-              labels: latestMemory.emotion.labels,
+    const promptMessages = buildAgentPromptMessages({
+      systemPrompt: this.instanceConfig.systemPrompt,
+      currentDatetime: new Date(),
+      latestMemory:
+        latestMemory === null
+          ? null
+          : {
+              content: latestMemory.content,
+              createdAt: latestMemory.createdAt,
+              emotion: latestMemory.emotion,
             },
-          },
-          null,
-          2
-        )}`
-      : 'No context loaded.';
+    });
+    const promptInputs: EasyInputMessage[] = promptMessages.map((message) => ({
+      role: message.role,
+      content: message.content,
+    }));
 
     return [
-      {
-        role: 'developer',
-        content: this.instanceConfig.systemPrompt,
-      },
-      {
-        role: 'developer',
-        content: `${context}\nCurrent datetime: ${currentDatetime}`,
-      },
+      ...promptInputs,
       this.createFunctionCallMessage(checkNotificationsFunction),
       await this.createFunctionCallOutputMessage(checkNotificationsFunction),
     ];

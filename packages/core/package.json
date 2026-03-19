@@ -15,6 +15,7 @@
     "./ports/note": "./src/ports/note.ts",
     "./ports/notification": "./src/ports/notification.ts",
     "./agent/tool-context": "./src/agent/tool-context.ts",
+    "./agent/prompt-builder": "./src/agent/prompt-builder.ts",
     "./agent/tools/shared": "./src/agent/tools/shared.ts",
     "./agent/tools/chat": "./src/agent/tools/chat.ts",
     "./agent/tools/memory": "./src/agent/tools/memory.ts",

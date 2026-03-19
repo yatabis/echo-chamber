@@ -1,0 +1,155 @@
+import { z } from 'zod';
+
+import { formatJapaneseDatetime } from '../utils/datetime';
+
+import { canonicalToolSpecifications } from './tools/catalog';
+
+import type { Emotion } from '../echo/types';
+
+/**
+ * Prompt builder が参照する最小限のツール仕様。
+ * canonical tool definitions 全体を持ち込まずに、
+ * prompt 生成に必要なメタ情報だけを扱う。
+ */
+interface PromptToolSpecification {
+  name: string;
+  description: string;
+  parameters: z.ZodRawShape;
+}
+
+/**
+ * 起動時に prompt へ注入する最新 memory の要約。
+ * 永続層や runtime 実装の詳細は含めず、agent が再開判断に必要な情報だけを持つ。
+ */
+export interface PromptMemoryContext {
+  content: string;
+  createdAt: string;
+  emotion: Emotion;
+}
+
+/**
+ * Agent の初期 developer prompt を組み立てるための入力。
+ * static prompt、本時刻、直近 memory、利用可能ツール一覧をまとめて受け取る。
+ */
+export interface BuildAgentPromptInput {
+  systemPrompt: string;
+  currentDatetime: Date;
+  latestMemory: PromptMemoryContext | null;
+  toolSpecifications?: readonly PromptToolSpecification[];
+}
+
+/**
+ * prompt builder が返す developer message。
+ * 現在は OpenAI Responses API の入力に変換する前段の中間表現として使う。
+ */
+export interface AgentPromptMessage {
+  role: 'developer';
+  content: string;
+}
+
+/**
+ * Zod schema から、prompt に埋め込める引数説明の箇条書きを生成する。
+ * required/optional を明示して、LLM が tool 呼び出し時の前提を読み取りやすくする。
+ */
+function buildToolParameterDescriptions(parameters: z.ZodRawShape): string[] {
+  const schema = z.toJSONSchema(z.object(parameters)) as {
+    properties?: Record<string, { description?: string }>;
+    required?: string[];
+  };
+  const properties = schema.properties ?? {};
+  const required = new Set(schema.required ?? []);
+
+  return Object.entries(properties).map(([name, property]) => {
+    const requiredLabel = required.has(name) ? 'required' : 'optional';
+    const description =
+      typeof property.description === 'string'
+        ? property.description
+        : 'No description provided.';
+
+    return `  - ${name} (${requiredLabel}): ${description}`;
+  });
+}
+
+/**
+ * canonical tool definitions をもとに `<available_tools>` ブロックを生成する。
+ * prompt 内のツール仕様の正規ソースをコード定義へ揃えるために使う。
+ */
+export function buildToolCatalogPrompt(
+  toolSpecifications: readonly PromptToolSpecification[] = canonicalToolSpecifications
+): string {
+  const lines = toolSpecifications.flatMap((tool) => {
+    const parameterLines = buildToolParameterDescriptions(tool.parameters);
+
+    return [
+      `- ${tool.name}: ${tool.description}`,
+      ...(parameterLines.length > 0 ? parameterLines : ['  - arguments: none']),
+    ];
+  });
+
+  return [
+    '<available_tools>',
+    'You have access to the following tools:',
+    ...lines,
+    '</available_tools>',
+  ].join('\n');
+}
+
+/**
+ * 起動時の runtime context を表す `<runtime_context>` ブロックを生成する。
+ * 直近 memory と現在時刻をひとまとめにし、思考再開時の足掛かりとして prompt に差し込む。
+ */
+export function buildRuntimeContextPrompt(
+  currentDatetime: Date,
+  latestMemory: PromptMemoryContext | null
+): string {
+  const currentDatetimeText = formatJapaneseDatetime(currentDatetime);
+  const latestMemoryBlock =
+    latestMemory === null
+      ? 'No persisted context loaded.'
+      : `Latest memory:\n${JSON.stringify(
+          {
+            content: latestMemory.content,
+            created_at: latestMemory.createdAt,
+            emotion: {
+              valence: latestMemory.emotion.valence,
+              arousal: latestMemory.emotion.arousal,
+              labels: latestMemory.emotion.labels,
+            },
+          },
+          null,
+          2
+        )}`;
+
+  return [
+    '<runtime_context>',
+    latestMemoryBlock,
+    `Current datetime: ${currentDatetimeText}`,
+    '</runtime_context>',
+  ].join('\n');
+}
+
+/**
+ * Agent 起動時に渡す developer messages を組み立てる。
+ * 1通目に static prompt と generated tool catalog、
+ * 2通目に runtime context block を載せる構成にしている。
+ */
+export function buildAgentPromptMessages(
+  input: BuildAgentPromptInput
+): AgentPromptMessage[] {
+  const toolCatalog = buildToolCatalogPrompt(input.toolSpecifications);
+  const runtimeContext = buildRuntimeContextPrompt(
+    input.currentDatetime,
+    input.latestMemory
+  );
+
+  return [
+    {
+      role: 'developer',
+      content: `${input.systemPrompt}\n\n${toolCatalog}`,
+    },
+    {
+      role: 'developer',
+      content: runtimeContext,
+    },
+  ];
+}

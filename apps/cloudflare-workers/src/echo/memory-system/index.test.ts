@@ -285,6 +285,7 @@ describe('MemorySystem', () => {
           labels: ['neutral'],
         },
         createdAt: '2日前 (2025年01月26日 00:00:00)',
+        updatedAt: '2日前 (2025年01月26日 00:00:00)',
       });
     });
 
