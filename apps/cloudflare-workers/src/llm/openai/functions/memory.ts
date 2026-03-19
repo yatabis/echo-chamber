@@ -12,7 +12,7 @@ export const storeMemoryFunction = new Tool(
   storeMemoryToolSpec.parameters,
   async ({ content, type, emotion }, ctx) => {
     try {
-      await ctx.memorySystem.storeMemory(content, emotion, type);
+      await ctx.memory.store(content, emotion, type);
       return { success: true };
     } catch (error) {
       await ctx.logger.error(`Error storing memory: ${getErrorMessage(error)}`);
@@ -30,7 +30,7 @@ export const searchMemoryFunction = new Tool(
   searchMemoryToolSpec.parameters,
   async ({ query, type }, ctx) => {
     try {
-      const results = await ctx.memorySystem.searchMemory(query, type);
+      const results = await ctx.memory.search(query, type);
       return {
         success: true,
         results: results.map(({ content, type, emotion, createdAt }) => ({

@@ -20,6 +20,7 @@ export interface MemorySnapshot {
   type: MemoryType;
   emotion: Emotion;
   createdAt: string;
+  updatedAt: string;
 }
 
 /**
@@ -360,6 +361,7 @@ export class MemorySystem {
         labels: JSON.parse(row.emotion_labels) as string[],
       },
       createdAt: formatDatetimeForAgent(new Date(row.created_at)),
+      updatedAt: formatDatetimeForAgent(new Date(row.updated_at)),
     };
   }
 }

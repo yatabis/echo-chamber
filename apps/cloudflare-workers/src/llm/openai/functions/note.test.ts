@@ -12,8 +12,6 @@ import {
 } from './note';
 
 import type { ToolContext } from './index';
-import type { MemorySystem } from '../../../echo/memory-system';
-import type { NoteSystem } from '../../../echo/note-system';
 
 const createNoteMock =
   vi.fn<(input: { title: string; content: string }) => Promise<Note>>();
@@ -29,31 +27,32 @@ const updateNoteMock =
   >();
 const deleteNoteMock = vi.fn<(id: string) => Promise<boolean>>();
 
-const mockedNoteSystem: NoteSystem = {
-  createNote: createNoteMock,
-  listNotes: listNotesMock,
-  getNote: getNoteMock,
-  searchNotes: searchNotesMock,
-  updateNote: updateNoteMock,
-  deleteNote: deleteNoteMock,
-} as unknown as NoteSystem;
-
 const mockToolContext: ToolContext = {
-  instanceConfig: {
-    id: 'rin',
-    name: 'テスト用リン',
-    systemPrompt: 'Test system prompt',
-    discordBotToken: 'mock-token',
-    chatChannelId: 'mock-chat-channel-id',
-    thinkingChannelId: 'mock-thinking-channel-id',
+  chat: {
+    readMessages: vi.fn().mockResolvedValue([]),
+    sendMessage: vi.fn().mockResolvedValue(undefined),
+    addReaction: vi.fn().mockResolvedValue(undefined),
   },
-  storage: {} as DurableObjectStorage,
-  memorySystem: {
-    storeMemory: vi.fn(),
-    searchMemory: vi.fn().mockResolvedValue([]),
-  } as unknown as MemorySystem,
-  noteSystem: mockedNoteSystem,
+  notifications: {
+    getNotificationSummary: vi.fn().mockResolvedValue({
+      unreadCount: 0,
+      latestMessagePreview: null,
+    }),
+  },
+  memory: {
+    store: vi.fn().mockResolvedValue(undefined),
+    search: vi.fn().mockResolvedValue([]),
+  },
+  notes: {
+    create: createNoteMock,
+    list: listNotesMock,
+    get: getNoteMock,
+    search: searchNotesMock,
+    update: updateNoteMock,
+    delete: deleteNoteMock,
+  },
   logger: {
+    log: vi.fn().mockResolvedValue(undefined),
     debug: vi.fn(),
     info: vi.fn(),
     warn: vi.fn(),

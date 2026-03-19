@@ -24,6 +24,7 @@ import {
   updateNoteFunction,
 } from '../../llm/openai/functions/note';
 import { thinkDeeplyFunction } from '../../llm/openai/functions/think';
+import { createToolExecutionContext } from '../../llm/openai/functions/tool-context';
 import { MemorySystem } from '../memory-system';
 import { NoteSystem } from '../note-system';
 
@@ -41,8 +42,10 @@ import type {
  */
 export class ThinkingEngine {
   private readonly env: Env;
+  private readonly storage: DurableObjectStorage;
   private readonly toolContext: ToolContext;
   private readonly instanceConfig: EchoInstanceConfig;
+  private readonly memorySystem: MemorySystem;
 
   constructor(options: {
     env: Env;
@@ -52,12 +55,13 @@ export class ThinkingEngine {
     instanceConfig: EchoInstanceConfig;
   }) {
     this.env = options.env;
+    this.storage = options.storage;
     this.instanceConfig = options.instanceConfig;
     const embeddingService = createEmbeddingService(
       options.env,
       options.instanceConfig.embeddingConfig
     );
-    const memorySystem = new MemorySystem({
+    this.memorySystem = new MemorySystem({
       sql: options.sql,
       embeddingService,
       logger: options.logger,
@@ -66,17 +70,16 @@ export class ThinkingEngine {
       storage: options.storage,
       logger: options.logger,
     });
-    this.toolContext = {
+    this.toolContext = createToolExecutionContext({
       instanceConfig: options.instanceConfig,
-      storage: options.storage,
-      memorySystem,
+      memorySystem: this.memorySystem,
       noteSystem,
       logger: options.logger,
-    };
+    });
   }
 
   async initialize(): Promise<void> {
-    await this.toolContext.memorySystem.reEmbedStaleMemories();
+    await this.memorySystem.reEmbedStaleMemories();
   }
 
   async think(): Promise<ResponseUsage> {
@@ -120,7 +123,7 @@ export class ThinkingEngine {
   private async buildInitialMessages(): Promise<ResponseInput> {
     const now = new Date();
     const currentDatetime = formatJapaneseDatetime(now);
-    const latestMemory = this.toolContext.memorySystem.getLatestMemory();
+    const latestMemory = this.memorySystem.getLatestMemory();
     const context = latestMemory
       ? `context loaded: ${JSON.stringify(
           {
@@ -171,7 +174,7 @@ export class ThinkingEngine {
   }
 
   private async getCurrentUsage(): Promise<number> {
-    const usage = await this.toolContext.storage.get<UsageRecord>('usage');
+    const usage = await this.storage.get<UsageRecord>('usage');
     if (!usage) {
       return 0;
     }

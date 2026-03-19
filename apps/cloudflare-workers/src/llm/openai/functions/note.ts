@@ -19,7 +19,7 @@ export const createNoteFunction = new Tool(
   createNoteToolSpec.parameters,
   async ({ title, content }, ctx) => {
     try {
-      const note = await ctx.noteSystem.createNote({ title, content });
+      const note = await ctx.notes.create({ title, content });
       return {
         success: true,
         note,
@@ -41,7 +41,7 @@ export const listNotesFunction = new Tool(
   listNotesToolSpec.parameters,
   async (_, ctx) => {
     try {
-      const notes = await ctx.noteSystem.listNotes();
+      const notes = await ctx.notes.list();
       const summaries: NoteSummary[] = notes.map((note) => ({
         id: note.id,
         title: note.title,
@@ -69,7 +69,7 @@ export const getNoteFunction = new Tool(
   getNoteToolSpec.parameters,
   async ({ id }, ctx) => {
     try {
-      const note = await ctx.noteSystem.getNote(id);
+      const note = await ctx.notes.get(id);
       if (note === null) {
         return {
           success: false,
@@ -97,7 +97,7 @@ export const searchNotesFunction = new Tool(
   searchNotesToolSpec.parameters,
   async ({ query }, ctx) => {
     try {
-      const notes = await ctx.noteSystem.searchNotes(query);
+      const notes = await ctx.notes.search(query);
       return {
         success: true,
         notes,
@@ -126,7 +126,7 @@ export const updateNoteFunction = new Tool(
     }
 
     try {
-      const note = await ctx.noteSystem.updateNote(id, { title, content });
+      const note = await ctx.notes.update(id, { title, content });
       if (note === null) {
         return {
           success: false,
@@ -154,7 +154,7 @@ export const deleteNoteFunction = new Tool(
   deleteNoteToolSpec.parameters,
   async ({ id }, ctx) => {
     try {
-      const deleted = await ctx.noteSystem.deleteNote(id);
+      const deleted = await ctx.notes.delete(id);
       if (!deleted) {
         return {
           success: false,

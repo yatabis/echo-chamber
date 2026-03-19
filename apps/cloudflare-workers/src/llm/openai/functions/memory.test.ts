@@ -6,9 +6,8 @@ import { mockToolContext } from '../../../../test/mocks/tool';
 
 import { storeMemoryFunction, searchMemoryFunction } from './memory';
 
-import type { MemorySearchResult } from '../../../echo/memory-system';
-
-const mockedMemorySystem = vi.mocked(mockToolContext.memorySystem);
+const mockedStoreMemory = vi.mocked(mockToolContext.memory.store);
+const mockedSearchMemory = vi.mocked(mockToolContext.memory.search);
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -56,8 +55,7 @@ describe('Memory Functions', () => {
 
         const result = await storeMemoryFunction.handler(args, mockToolContext);
 
-        // eslint-disable-next-line @typescript-eslint/unbound-method
-        expect(mockedMemorySystem.storeMemory).toHaveBeenCalledWith(
+        expect(mockedStoreMemory).toHaveBeenCalledWith(
           'Had a great conversation about AI',
           {
             valence: 0.7,
@@ -78,8 +76,7 @@ describe('Memory Functions', () => {
 
         const result = await storeMemoryFunction.handler(args, mockToolContext);
 
-        // eslint-disable-next-line @typescript-eslint/unbound-method
-        expect(mockedMemorySystem.storeMemory).toHaveBeenCalledWith(
+        expect(mockedStoreMemory).toHaveBeenCalledWith(
           'General knowledge about AI',
           createMockEmotion(),
           'semantic'
@@ -88,9 +85,7 @@ describe('Memory Functions', () => {
       });
 
       it('MemorySystemエラー時はエラーを返す', async () => {
-        mockedMemorySystem.storeMemory.mockRejectedValue(
-          new Error('Memory System Error')
-        );
+        mockedStoreMemory.mockRejectedValue(new Error('Memory System Error'));
 
         const args = {
           content: 'Memory that will fail',
@@ -126,23 +121,25 @@ describe('Memory Functions', () => {
 
     describe('handler', () => {
       it('MemorySystem.searchMemoryを呼び出して結果を返す', async () => {
-        const mockResults: MemorySearchResult[] = [
+        const mockResults = [
           {
             content: 'High similarity memory',
-            type: 'episode',
+            type: 'episode' as const,
             emotion: createMockEmotion({ valence: 0.8 }),
             createdAt: '2025-08-04T08:00:00.000Z',
+            updatedAt: '2025-08-04T08:00:00.000Z',
             similarity: 0.95,
           },
           {
             content: 'Medium similarity memory',
-            type: 'semantic',
+            type: 'semantic' as const,
             emotion: createMockEmotion({ valence: 0.5 }),
             createdAt: '2025-08-03T08:00:00.000Z',
+            updatedAt: '2025-08-03T08:00:00.000Z',
             similarity: 0.75,
           },
         ];
-        mockedMemorySystem.searchMemory.mockResolvedValue(mockResults);
+        mockedSearchMemory.mockResolvedValue(mockResults);
 
         const args = { query: 'test query' };
         const result = await searchMemoryFunction.handler(
@@ -150,8 +147,7 @@ describe('Memory Functions', () => {
           mockToolContext
         );
 
-        // eslint-disable-next-line @typescript-eslint/unbound-method
-        expect(mockedMemorySystem.searchMemory).toHaveBeenCalledWith(
+        expect(mockedSearchMemory).toHaveBeenCalledWith(
           'test query',
           undefined
         );
@@ -175,7 +171,7 @@ describe('Memory Functions', () => {
       });
 
       it('メモリが存在しない場合は空配列を返す', async () => {
-        mockedMemorySystem.searchMemory.mockResolvedValue([]);
+        mockedSearchMemory.mockResolvedValue([]);
 
         const args = { query: 'test query' };
         const result = await searchMemoryFunction.handler(
@@ -190,9 +186,7 @@ describe('Memory Functions', () => {
       });
 
       it('MemorySystemエラー時はエラーを返す', async () => {
-        mockedMemorySystem.searchMemory.mockRejectedValue(
-          new Error('Memory System Error')
-        );
+        mockedSearchMemory.mockRejectedValue(new Error('Memory System Error'));
 
         const args = { query: 'test query' };
         const result = await searchMemoryFunction.handler(
@@ -207,26 +201,24 @@ describe('Memory Functions', () => {
       });
 
       it('type指定時はMemorySystem.searchMemoryにtypeを渡す', async () => {
-        mockedMemorySystem.searchMemory.mockResolvedValue([]);
+        mockedSearchMemory.mockResolvedValue([]);
 
         const args = { query: 'test query', type: 'episode' as const };
         await searchMemoryFunction.handler(args, mockToolContext);
 
-        // eslint-disable-next-line @typescript-eslint/unbound-method
-        expect(mockedMemorySystem.searchMemory).toHaveBeenCalledWith(
+        expect(mockedSearchMemory).toHaveBeenCalledWith(
           'test query',
           'episode'
         );
       });
 
       it('type未指定時はMemorySystem.searchMemoryにundefinedを渡す', async () => {
-        mockedMemorySystem.searchMemory.mockResolvedValue([]);
+        mockedSearchMemory.mockResolvedValue([]);
 
         const args = { query: 'test query' };
         await searchMemoryFunction.handler(args, mockToolContext);
 
-        // eslint-disable-next-line @typescript-eslint/unbound-method
-        expect(mockedMemorySystem.searchMemory).toHaveBeenCalledWith(
+        expect(mockedSearchMemory).toHaveBeenCalledWith(
           'test query',
           undefined
         );

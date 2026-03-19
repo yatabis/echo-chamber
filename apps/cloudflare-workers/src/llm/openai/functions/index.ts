@@ -1,19 +1,16 @@
 import { z } from 'zod';
 
 import { getErrorMessage } from '@echo-chamber/core';
-import type { EchoInstanceConfig } from '@echo-chamber/core';
+import type { ToolExecutionContext } from '@echo-chamber/core/agent/tool-context';
 
-import type { MemorySystem } from '../../../echo/memory-system';
-import type { NoteSystem } from '../../../echo/note-system';
-import type { Logger } from '../../../utils/logger';
-import type { FunctionTool } from 'openai/resources/responses/responses';
+export type ToolContext = ToolExecutionContext;
 
-export interface ToolContext {
-  instanceConfig: EchoInstanceConfig;
-  storage: DurableObjectStorage;
-  memorySystem: MemorySystem;
-  noteSystem: NoteSystem;
-  logger: Logger;
+interface FunctionToolDefinition {
+  type: 'function';
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  strict: boolean;
 }
 
 interface ToolResultSuccess {
@@ -31,7 +28,7 @@ export type ToolResult = ToolResultSuccess | ToolResultError;
 export interface ITool {
   name: string;
   description: string;
-  definition: FunctionTool;
+  definition: FunctionToolDefinition;
   execute(args: string, ctx: ToolContext): Promise<string>;
 }
 
@@ -46,7 +43,7 @@ export class Tool<Args extends z.ZodRawShape> implements ITool {
     ) => ToolResult | Promise<ToolResult>
   ) {}
 
-  get definition(): FunctionTool {
+  get definition(): FunctionToolDefinition {
     const strict = Object.values(this.parameters).every((param) => {
       return !z.safeParse(param, undefined).success;
     });
@@ -55,7 +52,10 @@ export class Tool<Args extends z.ZodRawShape> implements ITool {
       type: 'function',
       name: this.name,
       description: this.description,
-      parameters: z.toJSONSchema(z.object(this.parameters)),
+      parameters: z.toJSONSchema(z.object(this.parameters)) as Record<
+        string,
+        unknown
+      >,
       strict,
     };
   }

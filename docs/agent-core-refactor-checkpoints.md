@@ -10,11 +10,12 @@
   - 状態: レビュー済み / コミット済み
   - コミット: `1c97d1b`
   - レビュー対象: port の粒度と概念分離
-- [ ] Checkpoint 3: canonical tool definitions in core
-  - 状態: 実装完了 / レビュー待ち / 未コミット
+- [x] Checkpoint 3: canonical tool definitions in core
+  - 状態: レビュー済み / コミット済み
+  - コミット: `7651bb2`
   - レビュー対象: tool spec を `core` の正規定義源として置く設計
 - [ ] Checkpoint 4: tool runtime context を port に寄せる
-  - 状態: 未着手
+  - 状態: 実装完了 / レビュー待ち / 未コミット
   - レビュー対象: handler が concrete 実装ではなく port を使う構造
 - [ ] Checkpoint 5: prompt builder を core に寄せる
   - 状態: 未着手
@@ -128,7 +129,7 @@
 
 ## 現在のチェックポイント
 
-### Checkpoint 3: canonical tool definitions in core
+### Checkpoint 4: tool runtime context を port に寄せる
 
 状態:
 
@@ -138,44 +139,40 @@
 
 内容:
 
-- tool の canonical definition を `packages/core` に追加
-- Worker 側の tool 実装が `core` の definition を参照するよう変更
-- Note の入力制約を `core` に移動
+- `ToolContext` を `core` の `ToolExecutionContext` 基準に変更
+- Worker 側で chat / notification / memory / note / logger の port adapter を組み立てるよう変更
+- tool handler から `instanceConfig`, `MemorySystem`, `NoteSystem`, `DurableObjectStorage` への直接依存を外した
 
 新設した主なファイル:
 
-- `packages/core/src/agent/tools/shared.ts`
-- `packages/core/src/agent/tools/chat.ts`
-- `packages/core/src/agent/tools/memory.ts`
-- `packages/core/src/agent/tools/note.ts`
-- `packages/core/src/agent/tools/thinking.ts`
-- `packages/core/src/agent/tools/catalog.ts`
-- `packages/core/src/echo/note-constraints.ts`
+- `packages/core/src/agent/tool-context.ts`
+- `apps/cloudflare-workers/src/llm/openai/functions/tool-context.ts`
 
 変更した主なファイル:
 
+- `apps/cloudflare-workers/src/echo/thinking-engine/index.ts`
+- `apps/cloudflare-workers/src/echo/memory-system/index.ts`
 - `apps/cloudflare-workers/src/llm/openai/functions/chat.ts`
+- `apps/cloudflare-workers/src/llm/openai/functions/index.ts`
 - `apps/cloudflare-workers/src/llm/openai/functions/memory.ts`
 - `apps/cloudflare-workers/src/llm/openai/functions/note.ts`
-- `apps/cloudflare-workers/src/llm/openai/functions/think.ts`
-- `apps/cloudflare-workers/src/llm/openai/functions/finish.ts`
-- `apps/cloudflare-workers/src/echo/note-system/index.ts`
+- `apps/cloudflare-workers/src/llm/openai/functions/chat.test.ts`
+- `apps/cloudflare-workers/src/llm/openai/functions/memory.test.ts`
+- `apps/cloudflare-workers/src/llm/openai/functions/note.test.ts`
+- `apps/cloudflare-workers/test/mocks/tool.ts`
 - `packages/core/package.json`
 
 この段階で達成したこと:
 
-- tool 名
-- tool 説明
-- input schema
-- output schema
-
-の正規ソースを `core` 側に寄せた。
+- handler が `ctx.chat`, `ctx.notifications`, `ctx.memory`, `ctx.notes`, `ctx.logger` の port 経由で動くようになった
+- `ThinkingEngine` は concrete 実装を生成しても、tool へは port だけを渡す形になった
+- OpenAI function definition の型は OpenAI 固有型ではなくローカルな shape として扱うように整理した
 
 この段階ではまだやっていないこと:
 
-- handler 本体の `core` 移設
-- tool 実行文脈の port 化
-- OpenAI 向け変換の adapter 分離
+- prompt builder の `core` 移設
+- agent loop の意味論の `core` 移設
+- OpenAI / Discord / Cloudflare runtime package への本格的な実装移設
 
 品質チェック:
 
@@ -187,9 +184,9 @@
 
 レビュー観点:
 
-- tool spec の責務が `core` に置くべき粒度になっているか
-- 入出力 schema の持ち方が今後の adapter 化に耐えるか
-- `core` が唯一の仕様源として使えるか
+- `ToolExecutionContext` の粒度が妥当か
+- `ThinkingEngine` が composition root として自然な形になっているか
+- `handler -> port -> concrete implementation` の依存方向が妥当か
 
 ## 次のチェックポイント候補と横断タスク
 
@@ -335,13 +332,13 @@
 
 優先順位:
 
-1. Checkpoint 3 のレビュー完了
-2. Checkpoint 4 で tool runtime context を port に寄せる
-3. Checkpoint 5 で prompt と tool catalog の接続を整理する
-4. その後に agent loop / adapter 分離へ進む
+1. Checkpoint 4 のレビュー完了
+2. Checkpoint 5 で prompt と tool catalog の接続を整理する
+3. Checkpoint 6 で agent loop の意味論を core に寄せる
+4. その後に adapter 分離へ進む
 
 ## 再開時の注意
 
-- 直近の未コミット差分は Checkpoint 3 のみ
-- 直近のレビュー対象は canonical tool definition の妥当性
+- 直近の未コミット差分は Checkpoint 4 のみ
+- 直近のレビュー対象は tool runtime context の port 化
 - barrel export 廃止は横断タスクとして扱うが、まだ未着手

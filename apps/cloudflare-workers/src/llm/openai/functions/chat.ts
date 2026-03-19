@@ -1,17 +1,12 @@
-import { formatDatetimeForAgent, getErrorMessage } from '@echo-chamber/core';
+import { getErrorMessage } from '@echo-chamber/core';
 import {
   addReactionToChatMessageToolSpec,
   checkNotificationsToolSpec,
   readChatMessagesToolSpec,
   sendChatMessageToolSpec,
 } from '@echo-chamber/core/agent/tools/chat';
-import type * as DiscordApi from '@echo-chamber/core/discord';
 
 import { Tool } from '.';
-
-async function getDiscordApi(): Promise<typeof DiscordApi> {
-  return import('@echo-chamber/core/discord');
-}
 
 export const checkNotificationsFunction = new Tool(
   checkNotificationsToolSpec.name,
@@ -19,13 +14,8 @@ export const checkNotificationsFunction = new Tool(
   checkNotificationsToolSpec.parameters,
   async (_, ctx) => {
     try {
-      const { chatChannelId, discordBotToken } = ctx.instanceConfig;
-      const { getNotificationDetails } = await getDiscordApi();
-
-      const notificationDetails = await getNotificationDetails(
-        discordBotToken,
-        chatChannelId
-      );
+      const notificationDetails =
+        await ctx.notifications.getNotificationSummary();
 
       return {
         success: true,
@@ -35,7 +25,16 @@ export const checkNotificationsFunction = new Tool(
             notificationDetails.unreadCount > 99
               ? '99+'
               : notificationDetails.unreadCount,
-          latestMessagePreview: notificationDetails.latestMessagePreview,
+          latestMessagePreview:
+            notificationDetails.latestMessagePreview === null
+              ? null
+              : {
+                  messageId: notificationDetails.latestMessagePreview.messageId,
+                  user: notificationDetails.latestMessagePreview.user,
+                  message: notificationDetails.latestMessagePreview.message,
+                  created_at:
+                    notificationDetails.latestMessagePreview.createdAt,
+                },
         },
       };
     } catch (error) {
@@ -56,29 +55,16 @@ export const readChatMessagesFunction = new Tool(
   readChatMessagesToolSpec.parameters,
   async ({ limit }, ctx) => {
     try {
-      const { chatChannelId, discordBotToken } = ctx.instanceConfig;
-      const { getChannelMessages } = await getDiscordApi();
-
-      const messages = await getChannelMessages(
-        discordBotToken,
-        chatChannelId,
-        {
-          limit,
-        }
-      );
+      const messages = await ctx.chat.readMessages(limit);
 
       return {
         success: true,
-        // 投稿日時の昇順
-        messages: messages.reverse().map((message) => ({
-          messageId: message.id,
-          user: message.author.username,
-          message: message.content,
-          created_at: formatDatetimeForAgent(new Date(message.timestamp)),
-          reactions: message.reactions?.map((reaction) => ({
-            emoji: reaction.emoji.name,
-            me: reaction.me,
-          })),
+        messages: messages.map((message) => ({
+          messageId: message.messageId,
+          user: message.user,
+          message: message.message,
+          created_at: message.createdAt,
+          reactions: message.reactions,
         })),
       };
     } catch (error) {
@@ -99,12 +85,7 @@ export const sendChatMessageFunction = new Tool(
   sendChatMessageToolSpec.parameters,
   async ({ message }, ctx) => {
     try {
-      const { chatChannelId, discordBotToken } = ctx.instanceConfig;
-      const { sendChannelMessage } = await getDiscordApi();
-
-      await sendChannelMessage(discordBotToken, chatChannelId, {
-        content: message,
-      });
+      await ctx.chat.sendMessage(message);
 
       return {
         success: true,
@@ -127,15 +108,7 @@ export const addReactionToChatMessageFunction = new Tool(
   addReactionToChatMessageToolSpec.parameters,
   async ({ messageId, reaction }, ctx) => {
     try {
-      const { chatChannelId, discordBotToken } = ctx.instanceConfig;
-      const { addReactionToMessage } = await getDiscordApi();
-
-      await addReactionToMessage(
-        discordBotToken,
-        chatChannelId,
-        messageId,
-        reaction
-      );
+      await ctx.chat.addReaction(messageId, reaction);
 
       return {
         success: true,
