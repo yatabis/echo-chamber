@@ -10,19 +10,22 @@ apps/
   cloudflare-workers/        # Worker エントリ・DO実装・wrangler 設定・Cloudflare依存テスト・静的配信
   dashboard/                 # React + Vite ダッシュボード
 packages/
-  core/                      # Echo agent の純粋ドメイン / application 層
-  contracts/                 # Worker / Dashboard 間の API contract
-  openai-adapter/            # OpenAI provider adapter
-  discord-adapter/           # Discord provider adapter
-  cloudflare-runtime/        # Cloudflare runtime adapter
+  core/                      # Echo agent のドメイン / application 層（tool spec, prompt, session, ports）
+  contracts/                 # Worker / Dashboard 間の API contract（DTO + zod schema）
+  openai-adapter/            # ModelPort の OpenAI Responses 実装
+  discord-adapter/           # Chat / Notification / ThoughtLog の Discord 実装
+  cloudflare-runtime/        # Memory / Note / logger など Cloudflare runtime 実装
 ```
 
 ## 依存ルール
 
 - `packages/core` は Cloudflare 固有型や provider SDK に依存しない
+- `packages/contracts` は API 境界の型と schema を持ち、UI 実装や runtime 実装を持たない
 - adapter package は `packages/core` に依存する
+- `packages/cloudflare-runtime` は `packages/core` に依存し、Cloudflare 固有実装を閉じ込める
 - `apps/cloudflare-workers` は composition root として adapter / core を束ねる
 - `apps/dashboard` は agent core ではなく API contract に依存する形へ寄せる
+- workspace package は root barrel ではなく subpath import で参照する
 - 禁止: `packages/core -> adapter/apps` の逆依存
 
 ## 前提条件
@@ -93,17 +96,17 @@ pnpm --filter @echo-chamber/cloudflare-workers exec wrangler kv key put --bindin
 
 ## 実行・開発コマンド
 
-| コマンド                                            | 用途                                     |
-| --------------------------------------------------- | ---------------------------------------- |
-| `pnpm dev`                                          | Worker ローカル起動（型生成付き）        |
-| `pnpm start`                                        | Worker ローカル起動                      |
-| `pnpm cf-typegen`                                   | Worker 型定義生成                        |
-| `pnpm deploy`                                       | Cloudflare へデプロイ                    |
-| `pnpm --filter @echo-chamber/dashboard dev`         | Dashboard 単体開発                       |
-| `pnpm dashboard:build`                              | Dashboard ビルド（Worker assets に出力） |
-| `pnpm test:run`                                     | `core` + `cloudflare-workers` テスト実行 |
-| `pnpm test:coverage`                                | Cloudflare 側テストのカバレッジ生成      |
-| `pnpm lint:check` / `pnpm typecheck` / `pnpm check` | 品質チェック                             |
+| コマンド                                            | 用途                                                           |
+| --------------------------------------------------- | -------------------------------------------------------------- |
+| `pnpm dev`                                          | Worker ローカル起動（型生成付き）                              |
+| `pnpm start`                                        | Worker ローカル起動                                            |
+| `pnpm cf-typegen`                                   | Worker 型定義生成                                              |
+| `pnpm deploy`                                       | Cloudflare へデプロイ                                          |
+| `pnpm --filter @echo-chamber/dashboard dev`         | Dashboard 単体開発                                             |
+| `pnpm dashboard:build`                              | Dashboard ビルド（Worker assets に出力）                       |
+| `pnpm test:run`                                     | `core` / `contracts` / adapter / runtime / worker のテスト実行 |
+| `pnpm test:coverage`                                | Cloudflare 側テストのカバレッジ生成                            |
+| `pnpm lint:check` / `pnpm typecheck` / `pnpm check` | 品質チェック                                                   |
 
 ## HTTP エンドポイント
 
@@ -130,12 +133,16 @@ pnpm --filter @echo-chamber/cloudflare-workers exec wrangler kv key put --bindin
 
 ## テスト方針（概要）
 
-- Cloudflare 依存ロジックのテスト: `apps/cloudflare-workers/src/**/*.test.ts`
-- 純粋ロジックのテスト: `packages/core/src/**/*.test.ts`
-- 共通モックは依存境界に合わせて `packages/core/test` と `apps/cloudflare-workers/test` に分離
+- agent ドメイン / 純粋ロジック: `packages/core/src/**/*.test.ts`
+- API contract / schema: `packages/contracts/src/**/*.test.ts`
+- provider adapter: `packages/openai-adapter/src/**/*.test.ts`, `packages/discord-adapter/src/**/*.test.ts`
+- Cloudflare runtime: `packages/cloudflare-runtime/src/**/*.test.ts`
+- Worker / Durable Object / route: `apps/cloudflare-workers/src/**/*.test.ts`
+- Dashboard は現状、専用 test script ではなく build / typecheck と contract parser で整合を保つ
 
 ## 運用メモ
 
 - Worker 設定ファイル: `apps/cloudflare-workers/wrangler.jsonc`
 - Worker 型定義: `apps/cloudflare-workers/worker-configuration.d.ts`
 - Dashboard build 出力先: `apps/cloudflare-workers/public/dashboard`
+- dashboard 系 API contract は `packages/contracts/src/dashboard/schemas.ts` を正とする

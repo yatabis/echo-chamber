@@ -2,16 +2,23 @@
 
 ## Project Structure & Modules
 
-- `apps/cloudflare-workers/`: Cloudflare 実装本体（エントリ、Durable Object、KV/Workers AI 連携、tests、`wrangler.jsonc`、`public/`）
+- `apps/cloudflare-workers/`: composition root / HTTP entry / Durable Object entry（Cloudflare binding, wrangler, tests, `public/`）
 - `apps/dashboard/`: React + Vite の Dashboard フロントエンド
-- `packages/core/`: Cloudflare 非依存ロジック（型、usage、datetime、vector、error、Discord API ラッパ、共有 DTO）
+- `packages/core/`: Cloudflare 非依存の agent domain / application（tool spec, prompt builder, session loop, ports, shared utils）
+- `packages/contracts/`: Worker / Dashboard 間の API contract（DTO, zod schema, dashboard util）
+- `packages/openai-adapter/`: `ModelPort` の OpenAI Responses 実装
+- `packages/discord-adapter/`: `ChatPort` / `NotificationPort` / `ThoughtLogPort` の Discord 実装
+- `packages/cloudflare-runtime/`: Memory / Note / logger など Cloudflare runtime 実装
 - ルート設定: `pnpm-workspace.yaml`, `tsconfig.json`, `eslint.config.js`
 
 ## Dependency Rules
 
-- `packages/core` は Cloudflare 固有型に依存しない
-- `apps/cloudflare-workers` は `packages/core` に依存する
-- `apps/dashboard` は `packages/core` の型・変換ロジックを利用する
+- `packages/core` は Cloudflare 固有型や provider SDK に依存しない
+- `packages/contracts` は API 境界の型 / schema を持ち、runtime 実装を持たない
+- adapter / runtime package は `packages/core` に依存する
+- `apps/cloudflare-workers` は `core` / `contracts` / adapter / runtime を束ねる
+- `apps/dashboard` は `packages/core` ではなく `packages/contracts` を参照する
+- workspace package は root barrel ではなく subpath import で参照する
 - 禁止: `packages/core -> apps/cloudflare-workers` の逆依存
 
 ## Build, Test, and Development
@@ -36,7 +43,11 @@
 
 - Framework: Vitest + `@cloudflare/vitest-pool-workers`
 - Core tests: `packages/core/src/**/*.test.ts`
+- Contracts tests: `packages/contracts/src/**/*.test.ts`
+- Adapter tests: `packages/openai-adapter/src/**/*.test.ts`, `packages/discord-adapter/src/**/*.test.ts`
+- Runtime tests: `packages/cloudflare-runtime/src/**/*.test.ts`
 - Cloudflare tests: `apps/cloudflare-workers/src/**/*.test.ts`
+- Dashboard は現状、専用 test script ではなく build / typecheck と contract parser で整合を保つ
 - Test helpers/mocks:
   - `packages/core/test/**`
   - `apps/cloudflare-workers/test/**`
