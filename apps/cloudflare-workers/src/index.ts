@@ -1,6 +1,9 @@
 import { Hono, type Context } from 'hono';
 
-import { parseDashboardInstanceSummary } from '@echo-chamber/contracts/dashboard/schemas';
+import {
+  parseDashboardInstanceSummary,
+  parseDashboardInstancesResponse,
+} from '@echo-chamber/contracts/dashboard/schemas';
 import type {
   DashboardInstanceSummary,
   DashboardInstancesResponse,
@@ -117,7 +120,9 @@ app.get('/instances', async (c) => {
     )
   );
 
-  return c.json<DashboardInstancesResponse>({ instances });
+  return c.json<DashboardInstancesResponse>(
+    parseDashboardInstancesResponse({ instances })
+  );
 });
 
 app.get('/dashboard', async (c) => {

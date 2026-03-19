@@ -3,6 +3,10 @@ import { Hono } from 'hono';
 
 import { MemorySystem } from '@echo-chamber/cloudflare-runtime/memory-system';
 import { NoteSystem } from '@echo-chamber/cloudflare-runtime/note-system';
+import {
+  parseDashboardInstanceSummary,
+  parseEchoStatus,
+} from '@echo-chamber/contracts/dashboard/schemas';
 import type {
   DashboardInstanceSummary,
   EchoStatus,
@@ -273,7 +277,7 @@ export class Echo extends DurableObject<Env> {
     }));
     const notes = await this.getNotes();
 
-    return {
+    return parseEchoStatus({
       id: instanceConfig.id,
       name: instanceConfig.name,
       state,
@@ -281,7 +285,7 @@ export class Echo extends DurableObject<Env> {
       memories,
       notes,
       usage,
-    };
+    });
   }
 
   /**
@@ -292,12 +296,12 @@ export class Echo extends DurableObject<Env> {
   async getSummary(): Promise<DashboardInstanceSummary> {
     const config = this.getInstanceConfigOrThrow();
 
-    return {
+    return parseDashboardInstanceSummary({
       id: config.id,
       name: config.name,
       state: await this.getState(),
       nextAlarm: await this.getNextAlarm(),
-    };
+    });
   }
 
   async getNotes(query = ''): Promise<Note[]> {

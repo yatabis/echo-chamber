@@ -205,6 +205,7 @@
 - `packages/contracts/src/dashboard/types.ts` は schema から型を導出する形に変え、dashboard 契約の単一ソースを schema に寄せた
 - worker 側の `/instances` response 検証は手書き type guard ではなく `parseDashboardInstanceSummary()` を使う形に変えた
 - dashboard 側の fetch 結果も `parseDashboardInstancesResponse()` / `parseEchoStatus()` を通して受ける形に変えた
+- worker 側の response 生成時にも `parseDashboardInstancesResponse()` / `parseDashboardInstanceSummary()` / `parseEchoStatus()` を通し、producer 側でも schema を正とする形に寄せた
 - contracts package に schema test を追加し、契約の正常系/異常系を package 単位で確認できるようにした
 
 新設した主なファイル:
@@ -223,6 +224,7 @@
 - `packages/contracts/package.json`
 - `packages/contracts/vitest.config.ts`
 - `apps/cloudflare-workers/src/index.ts`
+- `apps/cloudflare-workers/src/echo/index.tsx`
 - `apps/cloudflare-workers/src/index.test.ts`
 - `apps/dashboard/src/App.tsx`
 - `pnpm-lock.yaml`
@@ -232,6 +234,7 @@
 
 - dashboard 契約の runtime validation を `contracts` package に集約できた
 - worker / dashboard の fetch 境界で契約 parser を共通利用できるようになった
+- worker の producer 側レスポンスも schema を通して返す形に寄せられた
 - 手書き type guard / unsafe cast を contracts schema に置き換えられた
 
 この段階ではまだやっていないこと:
