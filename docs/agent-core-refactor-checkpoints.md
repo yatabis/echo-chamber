@@ -187,7 +187,7 @@
 
 ## 現在のチェックポイント
 
-### 横断タスク: barrel export 廃止（core root import reduction）
+### 横断タスク: barrel export 廃止（root entrypoint removal）
 
 状態:
 
@@ -198,9 +198,10 @@
 内容:
 
 - 直前の `worker shim cleanup` は `b18dfbc` (`reduce worker adapter shims`) でコミット済み
-- `packages/core/package.json` に `echo/constants`, `echo/usage`, `llm/prompts/*` などの subpath export を追加した
-- worker / dashboard / runtime package に残っていた `@echo-chamber/core` のルート import を subpath import へ置き換えた
-- この段階で `apps` / `packages` 配下の `@echo-chamber/core` ルート import は 0 件になった
+- `core root import reduction` は `4f6eeff` (`replace core root imports with subpath imports`) でコミット済み
+- `packages/core/src/ports/index.ts` を削除し、`ports/context` と `ports/runtime` も subpath export で直接公開する形に変えた
+- 各 package の `src/index.ts` と `"."` export を削除し、subpath のみを正式な公開面にした
+- `packages/core/README.md` を subpath import 前提の公開方針に更新した
 
 新設した主なファイル:
 
@@ -208,25 +209,32 @@
 
 削除した主なファイル:
 
-- なし
+- `packages/cloudflare-runtime/src/index.ts`
+- `packages/contracts/src/index.ts`
+- `packages/core/src/index.ts`
+- `packages/core/src/ports/index.ts`
+- `packages/discord-adapter/src/index.ts`
+- `packages/openai-adapter/src/index.ts`
 
 変更した主なファイル:
 
+- `packages/core/src/index.ts`
 - `packages/core/package.json`
-- `apps/cloudflare-workers/src/index.ts`
-- `apps/cloudflare-workers/src/**`
-- `apps/dashboard/src/App.tsx`
-- `packages/cloudflare-runtime/src/**`
+- `packages/core/README.md`
+- `packages/cloudflare-runtime/package.json`
+- `packages/contracts/package.json`
+- `packages/discord-adapter/package.json`
+- `packages/openai-adapter/package.json`
 
 この段階で達成したこと:
 
-- `@echo-chamber/core` のルート import に依存せず、必要な記号を subpath 単位で参照する形へ寄せられた
-- `core/src/index.ts` に依存しなくても worker / dashboard / runtime package が組み上がる状態を作れた
+- package root entrypoint への依存を前提にしない構成に寄せられた
+- `core/src/index.ts` と `core/src/ports/index.ts` に加えて、各 package の空 `src/index.ts` も不要化できた
 
 この段階ではまだやっていないこと:
 
-- `core/src/index.ts` と `core/src/ports/index.ts` の依存解消
 - request / response schema の本格導入
+- Discord 互換 shim の最終判断
 
 品質チェック:
 
@@ -304,5 +312,6 @@
 ## 再開時の注意
 
 - 直近のコミット済み checkpoint は barrel export 廃止の一部である worker shim cleanup（`b18dfbc`）
-- 直近の作業対象は `core/src/index.ts` / `core/src/ports/index.ts` 依存の縮小
-- 次のレビュー対象は subpath import 置換後の import 境界
+- 直近のコミット済み checkpoint には `core root import reduction`（`4f6eeff`）も含まれる
+- 直近の作業対象は `core` バレルファイルの実体削除
+- 次のレビュー対象は root entrypoint を完全に消しても運用上問題ないかどうか

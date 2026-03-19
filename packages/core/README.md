@@ -17,11 +17,16 @@ Cloudflare 非依存のコアロジックと共有型を提供する package で
 
 ## 主要エクスポート
 
-- Echo 関連の型・定数・usage ロジック（`src/echo/*`）
-- port interface（`src/ports/*`）
-- 共有型（`src/types/*`）
-- ユーティリティ（`src/utils/*`）
-- `systemPromptRin` / `systemPromptMarie`
+- Echo 関連の型・定数・usage ロジック（`@echo-chamber/core/echo/*`）
+- port interface（`@echo-chamber/core/ports/*`）
+- 共有型（`@echo-chamber/core/types/*`）
+- ユーティリティ（`@echo-chamber/core/utils/*`）
+- システムプロンプト（`@echo-chamber/core/llm/prompts/*`）
+
+## 公開方針
+
+- ルート import（`@echo-chamber/core`）は使わない
+- 必要な記号は必ず subpath import で参照する
 
 ## コマンド
 
