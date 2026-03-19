@@ -1,94 +1,17 @@
-import { formatDatetimeForAgent } from '@echo-chamber/core';
 import type { EchoInstanceConfig, Note } from '@echo-chamber/core';
 import type { ToolExecutionContext } from '@echo-chamber/core/agent/tool-context';
-import type * as DiscordApi from '@echo-chamber/core/discord';
-import type { ChatMessage, ChatPort } from '@echo-chamber/core/ports/chat';
 import type { LoggerPort } from '@echo-chamber/core/ports/logger';
 import type { MemorySearchResult } from '@echo-chamber/core/ports/memory';
 import type { NotePort } from '@echo-chamber/core/ports/note';
-import type {
-  NotificationPort,
-  NotificationSummary,
-} from '@echo-chamber/core/ports/notification';
+
+import {
+  createDiscordChatPort,
+  createDiscordNotificationPort,
+} from '../../../discord/client';
 
 import type { MemorySystem } from '../../../echo/memory-system';
 import type { NoteSystem } from '../../../echo/note-system';
 import type { Logger } from '../../../utils/logger';
-
-async function getDiscordApi(): Promise<typeof DiscordApi> {
-  return import('@echo-chamber/core/discord');
-}
-
-function createChatPort(instanceConfig: EchoInstanceConfig): ChatPort {
-  return {
-    async readMessages(limit): Promise<ChatMessage[]> {
-      const { getChannelMessages } = await getDiscordApi();
-      const messages = await getChannelMessages(
-        instanceConfig.discordBotToken,
-        instanceConfig.chatChannelId,
-        { limit }
-      );
-
-      return messages.reverse().map((message) => ({
-        messageId: message.id,
-        user: message.author.username,
-        message: message.content,
-        createdAt: formatDatetimeForAgent(new Date(message.timestamp)),
-        reactions:
-          message.reactions?.map((reaction) => ({
-            emoji: reaction.emoji.name,
-            me: reaction.me,
-          })) ?? [],
-      }));
-    },
-
-    async sendMessage(message): Promise<void> {
-      const { sendChannelMessage } = await getDiscordApi();
-      await sendChannelMessage(
-        instanceConfig.discordBotToken,
-        instanceConfig.chatChannelId,
-        { content: message }
-      );
-    },
-
-    async addReaction(messageId, reaction): Promise<void> {
-      const { addReactionToMessage } = await getDiscordApi();
-      await addReactionToMessage(
-        instanceConfig.discordBotToken,
-        instanceConfig.chatChannelId,
-        messageId,
-        reaction
-      );
-    },
-  };
-}
-
-function createNotificationPort(
-  instanceConfig: EchoInstanceConfig
-): NotificationPort {
-  return {
-    async getNotificationSummary(): Promise<NotificationSummary> {
-      const { getNotificationDetails } = await getDiscordApi();
-      const notificationDetails = await getNotificationDetails(
-        instanceConfig.discordBotToken,
-        instanceConfig.chatChannelId
-      );
-
-      return {
-        unreadCount: notificationDetails.unreadCount,
-        latestMessagePreview:
-          notificationDetails.latestMessagePreview === null
-            ? null
-            : {
-                messageId: notificationDetails.latestMessagePreview.messageId,
-                user: notificationDetails.latestMessagePreview.user,
-                message: notificationDetails.latestMessagePreview.message,
-                createdAt: notificationDetails.latestMessagePreview.created_at,
-              },
-      };
-    },
-  };
-}
 
 function createMemoryPort(
   memorySystem: MemorySystem
@@ -176,8 +99,14 @@ export function createToolExecutionContext(options: {
   logger: Logger;
 }): ToolExecutionContext {
   return {
-    chat: createChatPort(options.instanceConfig),
-    notifications: createNotificationPort(options.instanceConfig),
+    chat: createDiscordChatPort({
+      token: options.instanceConfig.discordBotToken,
+      channelId: options.instanceConfig.chatChannelId,
+    }),
+    notifications: createDiscordNotificationPort({
+      token: options.instanceConfig.discordBotToken,
+      channelId: options.instanceConfig.chatChannelId,
+    }),
     memory: createMemoryPort(options.memorySystem),
     notes: createNotePort(options.noteSystem),
     logger: createLoggerPort(options.logger),

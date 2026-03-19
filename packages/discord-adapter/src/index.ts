@@ -1,5 +1,13 @@
-/**
- * Discord adapter package scaffold.
- *
- * Discord chat / notification / thought-log 実装は後続のステップでここへ移設する。
- */
+export {
+  addReactionToMessage,
+  getChannelMessages,
+  getCurrentUser,
+  sendChannelMessage,
+} from './api';
+export { createDiscordChatPort } from './chat-port';
+export { DiscordThoughtLog } from './discord-thought-log';
+export {
+  getNotificationDetails,
+  getUnreadMessageCount,
+} from './notification-utils';
+export { createDiscordNotificationPort } from './notification-port';

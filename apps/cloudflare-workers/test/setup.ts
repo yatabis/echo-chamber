@@ -1,17 +1,29 @@
 import { vi } from 'vitest';
 
 // Discord 関連の依存関係をグローバルにモック
-vi.mock('@echo-chamber/core/discord', async (importOriginal) => {
-  const actual =
-    // eslint-disable-next-line @typescript-eslint/consistent-type-imports
-    await importOriginal<typeof import('@echo-chamber/core/discord')>();
+const mockChatPort = {
+  readMessages: vi.fn().mockResolvedValue([]),
+  sendMessage: vi.fn().mockResolvedValue(undefined),
+  addReaction: vi.fn().mockResolvedValue(undefined),
+};
 
+const mockNotificationPort = {
+  getNotificationSummary: vi.fn().mockResolvedValue({
+    unreadCount: 0,
+    latestMessagePreview: null,
+  }),
+};
+
+const mockThoughtLog = {
+  send: vi.fn().mockResolvedValue(undefined),
+};
+
+vi.mock('../src/discord/client', () => {
   return {
-    ...actual,
-    addReactionToMessage: vi.fn(),
-    getChannelMessages: vi.fn(),
-    getCurrentUser: vi.fn(),
-    getNotificationDetails: vi.fn(),
+    createDiscordChatPort: vi.fn(() => mockChatPort),
+    createDiscordNotificationPort: vi.fn(() => mockNotificationPort),
+    DiscordThoughtLog: vi.fn(() => mockThoughtLog),
+    getUnreadMessageCount: vi.fn(),
     sendChannelMessage: vi.fn(),
   };
 });

@@ -5,12 +5,13 @@ import type {
   LoggerConfig,
 } from '@echo-chamber/core';
 
+import { sendChannelMessage } from '../discord/client';
+
 async function sendDiscordMessage(
   token: string,
   channelId: string,
   content: string
 ): Promise<void> {
-  const { sendChannelMessage } = await import('@echo-chamber/core/discord');
   await sendChannelMessage(token, channelId, { content });
 }
 

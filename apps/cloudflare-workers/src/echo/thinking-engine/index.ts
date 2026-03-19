@@ -8,8 +8,8 @@ import type {
   ModelToolResult,
   ModelUsage,
 } from '@echo-chamber/core/ports/model';
-import { ThinkingStream } from '@echo-chamber/core/utils/thinking-stream';
 
+import { DiscordThoughtLog } from '../../discord/client';
 import { createEmbeddingService } from '../../llm/embedding-factory';
 import { OpenAIResponsesModel } from '../../llm/openai/client';
 import {
@@ -85,11 +85,14 @@ export class ThinkingEngine {
   }
 
   async think(): Promise<ModelUsage> {
-    const thinkingStream = new ThinkingStream(this.instanceConfig);
-    await thinkingStream.send('*Thinking started...*');
+    const thoughtLog = new DiscordThoughtLog({
+      token: this.instanceConfig.discordBotToken,
+      channelId: this.instanceConfig.thinkingChannelId,
+    });
+    await thoughtLog.send('*Thinking started...*');
     const tools = this.createTools();
     const session = await runAgentSession({
-      model: this.createOpenAIClient(thinkingStream),
+      model: this.createOpenAIClient(thoughtLog),
       tools: tools.map((tool) => ({
         name: tool.name,
         contract: tool.contract,
@@ -100,7 +103,7 @@ export class ThinkingEngine {
       logger: this.toolContext.logger,
     });
     const usage = session.usage;
-    await thinkingStream.send(
+    await thoughtLog.send(
       `*Thinking completed.*\nUsage: ${usage.totalTokens} tokens (Total: ${
         (await this.getCurrentUsage()) + usage.totalTokens
       } tokens)`
@@ -109,12 +112,12 @@ export class ThinkingEngine {
   }
 
   private createOpenAIClient(
-    thinkingStream: ThinkingStream
+    thoughtLog: DiscordThoughtLog
   ): OpenAIResponsesModel {
     return new OpenAIResponsesModel({
       apiKey: this.env.OPENAI_API_KEY,
       logger: this.toolContext.logger,
-      thoughtLog: thinkingStream,
+      thoughtLog,
     });
   }
 

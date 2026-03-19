@@ -28,11 +28,7 @@ function routeCurrentUser(): DiscordRoute {
 }
 
 /**
- * チャンネルからメッセージを取得
- * @param token Discord Bot Token
- * @param channelId チャンネルID
- * @param options オプション（limitなど）
- * @returns メッセージの配列
+ * チャンネルからメッセージを取得する。
  */
 export async function getChannelMessages(
   token: string,
@@ -48,11 +44,7 @@ export async function getChannelMessages(
 }
 
 /**
- * チャンネルにメッセージを送信
- * @param token Discord Bot Token
- * @param channelId チャンネルID
- * @param options 送信するメッセージの内容
- * @returns 送信したメッセージの結果
+ * チャンネルにメッセージを送信する。
  */
 export async function sendChannelMessage(
   token: string,
@@ -66,11 +58,7 @@ export async function sendChannelMessage(
 }
 
 /**
- * メッセージにリアクションを追加
- * @param token Discord Bot Token
- * @param channelId チャンネルID
- * @param messageId メッセージID
- * @param reaction 追加するリアクション（絵文字など）
+ * メッセージにリアクションを追加する。
  */
 export async function addReactionToMessage(
   token: string,
@@ -85,9 +73,7 @@ export async function addReactionToMessage(
 }
 
 /**
- * ボットの情報を取得（認証テスト用）
- * @param token Discord Bot Token
- * @returns ボットのユーザー情報
+ * Bot 自身のユーザー情報を取得する。
  */
 export async function getCurrentUser(
   token: string

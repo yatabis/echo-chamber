@@ -1,9 +1,9 @@
 import type {
+  APIMessage,
+  APIReaction,
+  APIUser,
   RESTGetAPIChannelMessagesResult,
   RESTGetAPICurrentUserResult,
-  APIMessage,
-  APIUser,
-  APIReaction,
 } from 'discord-api-types/v10';
 
 interface MessageInput {
@@ -20,19 +20,19 @@ interface MessageInput {
 export function createDiscordMessagesResponse(
   messages: MessageInput[]
 ): RESTGetAPIChannelMessagesResult {
-  return messages.map((msg, index) => {
+  return messages.map((message, index) => {
     const author: APIUser = {
-      id: msg.userId ?? `user-${index + 1}`,
-      username: msg.user,
+      id: message.userId ?? `user-${index + 1}`,
+      username: message.user,
       discriminator: '0000',
-      global_name: msg.user,
+      global_name: message.user,
       avatar: null,
       bot: false,
       system: false,
       mfa_enabled: false,
     };
 
-    const reactions: APIReaction[] | undefined = msg.reactions?.map(
+    const reactions: APIReaction[] | undefined = message.reactions?.map(
       ({ emoji, me }) => ({
         count: 1,
         count_details: {
@@ -50,13 +50,13 @@ export function createDiscordMessagesResponse(
       })
     );
 
-    const message: APIMessage = {
+    const discordMessage: APIMessage = {
       id: `message-${index + 1}`,
       type: 0,
-      content: msg.message,
+      content: message.message,
       channel_id: 'test-channel-id',
       author,
-      timestamp: msg.timestamp,
+      timestamp: message.timestamp,
       edited_timestamp: null,
       tts: false,
       mention_everyone: false,
@@ -69,13 +69,10 @@ export function createDiscordMessagesResponse(
       pinned: false,
     };
 
-    return message;
+    return discordMessage;
   });
 }
 
-/**
- * Discordボットユーザーのレスポンスを作成
- */
 export function createDiscordCurrentUserResponse(
   user: string
 ): RESTGetAPICurrentUserResult {

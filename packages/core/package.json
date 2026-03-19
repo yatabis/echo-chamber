@@ -7,8 +7,6 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./discord": "./src/discord/index.ts",
-    "./utils/thinking-stream": "./src/utils/thinking-stream.ts",
     "./ports/chat": "./src/ports/chat.ts",
     "./ports/logger": "./src/ports/logger.ts",
     "./ports/memory": "./src/ports/memory.ts",
@@ -25,6 +23,7 @@
     "./agent/tools/note": "./src/agent/tools/note.ts",
     "./agent/tools/thinking": "./src/agent/tools/thinking.ts",
     "./agent/tools/catalog": "./src/agent/tools/catalog.ts",
+    "./utils/datetime": "./src/utils/datetime.ts",
     "./echo/note-constraints": "./src/echo/note-constraints.ts"
   },
   "scripts": {
@@ -33,8 +32,6 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@discordjs/rest": "2.5.1",
-    "discord-api-types": "0.38.16",
     "zod": "4.0.5"
   }
 }

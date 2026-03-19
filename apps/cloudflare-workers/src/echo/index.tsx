@@ -24,6 +24,7 @@ import type {
 } from '@echo-chamber/core';
 
 import { getInstanceConfig } from '../config/echo-registry';
+import { getUnreadMessageCount } from '../discord/client';
 import { createEmbeddingService } from '../llm/embedding-factory';
 import { createLogger } from '../utils/logger';
 
@@ -33,16 +34,10 @@ import { ThinkingEngine } from './thinking-engine';
 
 import type { Logger } from '../utils/logger';
 
-/**
- * Discord チャンネルの未読件数を取得する。
- *
- * Discord 依存コードを遅延 import して、初期ロード時の依存解決コストを抑える。
- */
 async function fetchUnreadMessageCount(
   token: string,
   channelId: string
 ): Promise<number> {
-  const { getUnreadMessageCount } = await import('@echo-chamber/core/discord');
   return getUnreadMessageCount(token, channelId);
 }
 

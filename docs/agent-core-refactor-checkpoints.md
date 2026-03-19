@@ -26,11 +26,12 @@
   - 状態: レビュー済み / コミット済み
   - コミット: `302241f`
   - レビュー対象: loop / finish 条件 / usage 管理の core 移設
-- [ ] Checkpoint 7: OpenAI adapter 分離
-  - 状態: 実装完了 / レビュー待ち / 未コミット
+- [x] Checkpoint 7: OpenAI adapter 分離
+  - 状態: レビュー済み / コミット済み
+  - コミット: `c7baa96`
   - レビュー対象: `ModelPort` の OpenAI 実装と変換層
 - [ ] Checkpoint 8: Discord adapter 分離
-  - 状態: 未着手
+  - 状態: 実装完了 / レビュー待ち / 未コミット
   - レビュー対象: chat / notification / thought-log の分離
 - [ ] Checkpoint 9: Cloudflare runtime 分離
   - 状態: 未着手
@@ -130,9 +131,34 @@
 - port の粒度がドメイン概念に沿っているか
 - runtime 実装都合の型が `core` に漏れていないか
 
+### Checkpoint 7: OpenAI adapter 分離
+
+状態:
+
+- 実装完了
+- ユーザーレビュー済み
+- コミット済み
+
+コミット:
+
+- `c7baa96` `extract openai adapter package`
+
+内容:
+
+- OpenAI Responses API 実装を `packages/openai-adapter` へ移し、`OpenAIResponsesModel` を `ModelPort` adapter として切り出した
+- worker 側の `ThinkingEngine` は package 側 adapter を使うだけにし、OpenAI 実装本体は workspace package に閉じ込めた
+- `core` の `convertUsage` を `ModelUsage` 基準へ変更し、`core` から OpenAI 型 import を除去した
+- OpenAI adapter のテストを package 側へ移し、ルート `test:run` に組み込んだ
+
+レビュー観点:
+
+- OpenAI 実装が package 単位で独立した責務になっているか
+- `core` から OpenAI 型依存が実際に消えているか
+- worker 側に残した shim と package 境界の取り方が次段階の分離に耐えるか
+
 ## 現在のチェックポイント
 
-### Checkpoint 7: OpenAI adapter 分離
+### Checkpoint 8: Discord adapter 分離
 
 状態:
 
@@ -142,38 +168,47 @@
 
 内容:
 
-- OpenAI Responses API 実装を `packages/openai-adapter` へ移し、`OpenAIResponsesModel` を `ModelPort` adapter として切り出した
-- worker 側の `ThinkingEngine` は package 側 adapter を使うだけにし、OpenAI 実装本体は workspace package に閉じ込めた
-- `core` の `convertUsage` を `ModelUsage` 基準へ変更し、`core` から OpenAI 型 import を除去した
-- OpenAI adapter のテストを package 側へ移し、ルート `test:run` に組み込んだ
+- Discord REST 実装と port adapter を `packages/discord-adapter` へ移した
+- worker 側の `tool-context` は `createDiscordChatPort` / `createDiscordNotificationPort` を組み立てるだけにし、chat / notification の実装詳細を adapter に閉じ込めた
+- `ThinkingStream` 相当は `DiscordThoughtLog` として adapter に移し、worker 側は `ThoughtLogPort` 実装を使うだけにした
+- `core` に残っていた Discord 実装ファイルと test helper を削除した
+- `discord-adapter` 側に `chat-port` / `notification-utils` / `discord-thought-log` のテストを追加した
+- worker test setup は Discord client を完全 mock に切り替え、workerd が `discord-api-types` を解決しにいかないようにした
 
 新設した主なファイル:
 
-- `packages/openai-adapter/src/openai-responses-model.ts`
-- `packages/openai-adapter/src/openai-responses-model.test.ts`
+- `packages/discord-adapter/src/api.ts`
+- `packages/discord-adapter/src/chat-port.ts`
+- `packages/discord-adapter/src/chat-port.test.ts`
+- `packages/discord-adapter/src/notification-port.ts`
+- `packages/discord-adapter/src/notification-utils.ts`
+- `packages/discord-adapter/src/notification-utils.test.ts`
+- `packages/discord-adapter/src/discord-thought-log.ts`
+- `packages/discord-adapter/src/discord-thought-log.test.ts`
+- `packages/discord-adapter/test/helpers/discord.ts`
+- `packages/discord-adapter/vitest.config.ts`
+- `apps/cloudflare-workers/src/discord/client.ts`
 
 変更した主なファイル:
 
-- `apps/cloudflare-workers/src/echo/thinking-engine/index.ts`
-- `apps/cloudflare-workers/src/llm/openai/client.ts`
 - `apps/cloudflare-workers/src/echo/index.tsx`
-- `apps/cloudflare-workers/package.json`
+- `apps/cloudflare-workers/src/echo/thinking-engine/index.ts`
+- `apps/cloudflare-workers/src/llm/openai/functions/tool-context.ts`
+- `apps/cloudflare-workers/src/utils/logger.ts`
+- `apps/cloudflare-workers/test/setup.ts`
 - `package.json`
 - `packages/core/package.json`
-- `packages/core/src/echo/usage.ts`
-- `packages/core/src/echo/usage.test.ts`
-- `packages/core/src/ports/model.ts`
+- `packages/discord-adapter/package.json`
 
 この段階で達成したこと:
 
-- OpenAI 実装本体が worker workspace の外に出て、package 単位で差し替え可能な位置に置かれた
-- OpenAI 固有の request / response / log formatting は adapter package に集約された
-- `core` の usage 変換は provider-neutral になり、OpenAI 型への依存が消えた
+- chat / notification / thought-log の Discord 実装が `core` から消えた
+- Discord 固有のデータ変換と REST 呼び出しは `discord-adapter` に集約された
 - worker 側には package source を参照する薄い shim だけを残し、entry 側の変更を最小化した
+- 新しい adapter 層の責務に応じた package 単位のテストが追加された
 
 この段階ではまだやっていないこと:
 
-- Discord adapter への分離
 - Cloudflare runtime package への本格的な実装移設
 - worker 側の shim を不要にする import 解決の最終整理
 
@@ -188,62 +223,11 @@
 
 レビュー観点:
 
-- OpenAI 実装が package 単位で独立した責務になっているか
-- `core` から OpenAI 型依存が実際に消えているか
-- worker 側に残した shim と package 境界の取り方が次段階の分離に耐えるか
+- Discord 実装が `core` から実際に消えているか
+- chat / notification / thought-log の概念分離が adapter でも保たれているか
+- worker 側に残した shim と test setup が次段階の runtime 分離に耐えるか
 
 ## 次のチェックポイント候補と横断タスク
-
-### Checkpoint 6: agent loop の意味論を core に寄せる
-
-目的:
-
-- `ThinkingEngine` の中核ロジックを `core` に移す
-
-やること:
-
-- 初期メッセージ構築の抽象化
-- turn loop / finish 条件 / usage 累積の責務分解
-- OpenAI 依存を抜いた agent session 形式の導入
-
-完了条件:
-
-- loop の意味論が `core`
-- OpenAI SDK 呼び出しは adapter
-
-という構造になる
-
-### Checkpoint 7: OpenAI adapter 分離
-
-目的:
-
-- `OpenAIClient` を `packages/openai-adapter` に移す
-
-やること:
-
-- `ModelPort` の OpenAI 実装を作る
-- `core` tool spec -> OpenAI function tool 変換
-- OpenAI 固有 usage / response 型の吸収
-
-完了条件:
-
-- `core` から OpenAI 型 import が消える
-
-### Checkpoint 8: Discord adapter 分離
-
-目的:
-
-- Discord 実装を `core` から外す
-
-やること:
-
-- `packages/core/src/discord/*` を adapter 側へ移す
-- `ThinkingStream` 相当を `ThoughtLogPort` 実装へ置き換える
-- chat / notification / thought-log の実装を分ける
-
-完了条件:
-
-- `core` に Discord REST 実装が残らない
 
 ### Checkpoint 9: Cloudflare runtime 分離
 

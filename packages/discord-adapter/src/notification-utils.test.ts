@@ -3,14 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createDiscordCurrentUserResponse,
   createDiscordMessagesResponse,
-} from '../../test/helpers/discord';
+} from '../test/helpers/discord';
 
+import { getChannelMessages, getCurrentUser } from './api';
 import {
-  getChannelMessages,
-  getCurrentUser,
   getNotificationDetails,
   getUnreadMessageCount,
-} from './index';
+} from './notification-utils';
 
 const TOKEN = 'TEST_DISCORD_BOT_TOKEN';
 const CHANNEL_ID = 'test-channel-id';
@@ -205,8 +204,6 @@ describe('getUnreadMessageCount', () => {
 });
 
 describe('getNotificationDetails', () => {
-  // テストデータのタイムスタンプ: 2025-01-23T04:56:07.089Z (UTC)
-  // 基準時刻を2025-01-25の深夜に固定して「2日前」を期待
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2025-01-25T23:59:59.999Z'));
@@ -242,7 +239,7 @@ describe('getNotificationDetails', () => {
         messageId: 'message-1',
         user: 'user-1',
         message: '最新メッセージ',
-        created_at: '2日前 (2025年01月23日 13:56:07)',
+        createdAt: '2日前 (2025年01月23日 13:56:07)',
       },
     });
   });
@@ -274,12 +271,12 @@ describe('getNotificationDetails', () => {
         messageId: 'message-1',
         user: BOT_USER_ID,
         message: '最新メッセージ（既読）',
-        created_at: '2日前 (2025年01月23日 13:56:07)',
+        createdAt: '2日前 (2025年01月23日 13:56:07)',
       },
     });
   });
 
-  it('空のチャンネル：未読数0でプレビューはnull', async () => {
+  it('メッセージが空なら latestMessagePreview は null', async () => {
     const mockUser = createDiscordCurrentUserResponse(BOT_USER_ID);
     vi.mocked(getCurrentUser).mockResolvedValue(mockUser);
     const mockMessages = createDiscordMessagesResponse([]);
@@ -293,7 +290,7 @@ describe('getNotificationDetails', () => {
     });
   });
 
-  it('リアクション付きメッセージ：既読として扱われ未読数は正しい', async () => {
+  it('リアクション済みメッセージで未読数を正しく算出する', async () => {
     const mockUser = createDiscordCurrentUserResponse(BOT_USER_ID);
     vi.mocked(getCurrentUser).mockResolvedValue(mockUser);
     const messages = [
@@ -303,13 +300,13 @@ describe('getNotificationDetails', () => {
         timestamp: '2025-01-23T04:56:07.089Z',
       },
       {
-        message: '既読メッセージ',
+        message: 'リアクション済み',
         user: 'user-2',
         timestamp: '2025-01-23T04:55:00.000Z',
         reactions: [{ emoji: '👍', me: true }],
       },
       {
-        message: '過去のメッセージ',
+        message: '既読扱い後ろ',
         user: 'user-3',
         timestamp: '2025-01-23T04:54:00.000Z',
       },
@@ -325,7 +322,7 @@ describe('getNotificationDetails', () => {
         messageId: 'message-1',
         user: 'user-1',
         message: '最新メッセージ',
-        created_at: '2日前 (2025年01月23日 13:56:07)',
+        createdAt: '2日前 (2025年01月23日 13:56:07)',
       },
     });
   });
