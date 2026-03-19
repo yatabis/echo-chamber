@@ -1,7 +1,7 @@
+import { CloudflareRuntimeLogger } from '@echo-chamber/cloudflare-runtime/runtime-logger';
 import type { LogContext, LogLevel } from '@echo-chamber/core';
 
 import { sendChannelMessage } from '../discord/client';
-import { CloudflareRuntimeLogger } from '../runtime/logger';
 
 export class Logger extends CloudflareRuntimeLogger {
   async debug(message: string, context?: LogContext): Promise<void> {

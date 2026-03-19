@@ -38,11 +38,12 @@
   - 状態: レビュー済み / コミット済み
   - コミット: `2b85f0f`
   - レビュー対象: Memory / Note / logger 実装を runtime package に隔離
-- [ ] Checkpoint 10: contracts と dashboard 依存整理
-  - 状態: 実装完了 / レビュー待ち / 未コミット
+- [x] Checkpoint 10: contracts と dashboard 依存整理
+  - 状態: レビュー済み / コミット済み
+  - コミット: `e92826c`
   - レビュー対象: dashboard DTO を agent core から切り離す構造
 - [ ] 横断タスク: barrel export 廃止
-  - 状態: 継続中
+  - 状態: 実装完了 / レビュー待ち / 未コミット
   - レビュー対象: subpath export への移行完了とバレル削除
 
 ## 目的
@@ -186,7 +187,7 @@
 
 ## 現在のチェックポイント
 
-### Checkpoint 10: contracts と dashboard 依存整理
+### 横断タスク: barrel export 廃止（worker shim cleanup）
 
 状態:
 
@@ -196,50 +197,49 @@
 
 内容:
 
-- dashboard 向け DTO と表示用 util を `packages/core` から `packages/contracts` に移した
-- worker 側の API response 組み立ては `@echo-chamber/contracts/dashboard/types` を参照する形に切り替えた
-- dashboard 側の usage 集計・ノートフィルタ・DTO import を `@echo-chamber/contracts` 基準へ寄せた
-- `packages/core` から dashboard 専用 export を削除し、agent domain と UI / API representation の境界を分けた
-- `packages/contracts` に dashboard 用 `vitest` 設定と test script を追加し、移設した util テストを package 側で実行できるようにした
+- `apps/cloudflare-workers` に残っていた純粋な re-export shim を削除し、worker から package subpath を直接 import する形に切り替えた
+- `packages/discord-adapter` と `packages/openai-adapter` に subpath export を追加し、root barrel を薄い entrypoint に置き換えた
+- `apps/cloudflare-workers/src/echo/*` と `src/llm/*` が `@echo-chamber/cloudflare-runtime/*` と `@echo-chamber/openai-adapter/*` を直接参照するようになった
+- `../../../../packages/...` 参照と app 内 shim ファイルの大半を削除し、依存の向きと import 解決を package 単位に揃えた
+- ただし `discord-adapter` だけは worker test の `workerd` module resolution 制約があるため、`apps/cloudflare-workers/src/discord/client.ts` を互換 shim として残した
 
 新設した主なファイル:
 
-- `packages/contracts/src/dashboard/types.ts`
-- `packages/contracts/src/dashboard/utils.ts`
-- `packages/contracts/src/dashboard/utils.test.ts`
-- `packages/contracts/vitest.config.ts`
+- `apps/cloudflare-workers/src/discord/client.ts`
 
 削除した主なファイル:
 
-- `packages/core/src/dashboard/types.ts`
-- `packages/core/src/dashboard/utils.ts`
-- `packages/core/src/dashboard/utils.test.ts`
+- `apps/cloudflare-workers/src/llm/openai/client.ts`
+- `apps/cloudflare-workers/src/runtime/embedding-service.ts`
+- `apps/cloudflare-workers/src/runtime/logger.ts`
+- `apps/cloudflare-workers/src/runtime/memory-system.ts`
+- `apps/cloudflare-workers/src/runtime/note-system.ts`
 
 変更した主なファイル:
 
-- `apps/cloudflare-workers/package.json`
 - `apps/cloudflare-workers/src/echo/index.tsx`
-- `apps/cloudflare-workers/src/index.ts`
-- `apps/cloudflare-workers/src/index.test.ts`
-- `apps/dashboard/package.json`
-- `apps/dashboard/src/App.tsx`
-- `package.json`
-- `packages/contracts/package.json`
-- `packages/contracts/README.md`
-- `packages/core/package.json`
-- `packages/core/README.md`
-- `packages/core/src/index.ts`
+- `apps/cloudflare-workers/src/echo/thinking-engine/index.ts`
+- `apps/cloudflare-workers/src/llm/embedding-factory.ts`
+- `apps/cloudflare-workers/src/llm/openai/embedding.ts`
+- `apps/cloudflare-workers/src/llm/openai/functions/tool-context.ts`
+- `apps/cloudflare-workers/src/llm/workersai/embedding.ts`
+- `apps/cloudflare-workers/src/utils/logger.ts`
+- `packages/discord-adapter/package.json`
+- `packages/discord-adapter/src/index.ts`
+- `packages/openai-adapter/package.json`
+- `packages/openai-adapter/src/index.ts`
 
 この段階で達成したこと:
 
-- `packages/core` から dashboard 専用 DTO / util を外し、agent core の責務をさらに狭めた
-- worker と dashboard が共有する representation を `contracts` package に集約した
-- dashboard util のテスト責務を `contracts` package へ移して package 境界に合わせた
+- `apps` が package 実装を横流しするだけの構造を 1 段減らせた
+- worker から見た import 経路が package 名ベースになり、workspace 境界が明示的になった
+- barrel export 廃止の横断タスクのうち、adapter / runtime package 周りの package 直参照化を進められた
+- `discord-adapter` だけは runtime 互換性の都合で例外が残ることを確認できた
 
 この段階ではまだやっていないこと:
 
-- worker 側に残っている thin shim / re-export の整理
 - `@echo-chamber/core` のルート import を subpath import へ置き換える横断的な整理
+- `core/src/index.ts` と `core/src/ports/index.ts` の依存解消
 - request / response schema の本格導入
 
 品質チェック:
@@ -249,7 +249,7 @@
 - `pnpm typecheck`
 - `pnpm test:run`
 
-をこれから実施する。
+は通過済み。
 
 ## 次のチェックポイント候補と横断タスク
 
@@ -311,13 +311,13 @@
 
 優先順位:
 
-1. Checkpoint 10 のレビュー完了
-2. thin shim / re-export を減らしつつ import 解決を package 直参照へ寄せる
-3. barrel export 廃止を横断タスクとして段階的に進める
+1. 横断タスク: worker shim cleanup のレビュー完了
+2. `@echo-chamber/core` ルート import を subpath import へ段階的に置き換える
+3. barrel export 廃止を横断タスクとして継続する
 
 ## 再開時の注意
 
-- 直近のコミット済み checkpoint は Checkpoint 9（`2b85f0f`）
-- 直近の未コミット差分は Checkpoint 10 のみ
-- 直近のレビュー対象は contracts / dashboard 依存整理
-- barrel export 廃止は横断タスクとして継続中
+- 直近のコミット済み checkpoint は Checkpoint 10（`e92826c`）
+- 直近の未コミット差分は worker shim cleanup のみ
+- 直近のレビュー対象は barrel export 廃止の一部として行った package 直参照化
+- 次の候補は `@echo-chamber/core` ルート import の縮小

@@ -13,8 +13,10 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@echo-chamber/cloudflare-runtime": "workspace:*",
     "@echo-chamber/contracts": "workspace:*",
     "@echo-chamber/core": "workspace:*",
+    "@echo-chamber/openai-adapter": "workspace:*",
     "hono": "4.7.11",
     "openai": "6.29.0",
     "zod": "4.0.5"

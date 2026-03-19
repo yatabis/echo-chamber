@@ -1,6 +1,37 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { defineWorkersConfig } from '@cloudflare/vitest-pool-workers/config';
 
+const appDir = path.dirname(fileURLToPath(import.meta.url));
+const packagesDir = path.resolve(appDir, '../../packages');
+const cloudflareRuntimeSrcDir = path.resolve(
+  packagesDir,
+  'cloudflare-runtime/src'
+);
+const openaiAdapterSrcDir = path.resolve(packagesDir, 'openai-adapter/src');
+
 export default defineWorkersConfig({
+  resolve: {
+    alias: [
+      {
+        find: /^@echo-chamber\/cloudflare-runtime$/,
+        replacement: path.join(cloudflareRuntimeSrcDir, 'index.ts'),
+      },
+      {
+        find: /^@echo-chamber\/cloudflare-runtime\/(.*)$/,
+        replacement: `${cloudflareRuntimeSrcDir}/$1`,
+      },
+      {
+        find: /^@echo-chamber\/openai-adapter$/,
+        replacement: path.join(openaiAdapterSrcDir, 'index.ts'),
+      },
+      {
+        find: /^@echo-chamber\/openai-adapter\/(.*)$/,
+        replacement: `${openaiAdapterSrcDir}/$1`,
+      },
+    ],
+  },
   test: {
     poolOptions: {
       workers: {

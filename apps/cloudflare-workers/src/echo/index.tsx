@@ -1,6 +1,8 @@
 import { DurableObject } from 'cloudflare:workers';
 import { Hono } from 'hono';
 
+import { MemorySystem } from '@echo-chamber/cloudflare-runtime/memory-system';
+import { NoteSystem } from '@echo-chamber/cloudflare-runtime/note-system';
 import type {
   DashboardInstanceSummary,
   EchoStatus,
@@ -28,8 +30,6 @@ import type {
 import { getInstanceConfig } from '../config/echo-registry';
 import { getUnreadMessageCount } from '../discord/client';
 import { createEmbeddingService } from '../llm/embedding-factory';
-import { MemorySystem } from '../runtime/memory-system';
-import { NoteSystem } from '../runtime/note-system';
 import { createLogger } from '../utils/logger';
 
 import { ThinkingEngine } from './thinking-engine';

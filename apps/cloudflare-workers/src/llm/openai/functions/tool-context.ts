@@ -1,3 +1,5 @@
+import type { MemorySystem } from '@echo-chamber/cloudflare-runtime/memory-system';
+import type { NoteSystem } from '@echo-chamber/cloudflare-runtime/note-system';
 import type { EchoInstanceConfig, Note } from '@echo-chamber/core';
 import type { ToolExecutionContext } from '@echo-chamber/core/agent/tool-context';
 import type { LoggerPort } from '@echo-chamber/core/ports/logger';
@@ -9,8 +11,6 @@ import {
   createDiscordNotificationPort,
 } from '../../../discord/client';
 
-import type { MemorySystem } from '../../../runtime/memory-system';
-import type { NoteSystem } from '../../../runtime/note-system';
 import type { Logger } from '../../../utils/logger';
 
 function createMemoryPort(

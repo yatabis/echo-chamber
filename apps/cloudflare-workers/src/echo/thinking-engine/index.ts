@@ -1,3 +1,5 @@
+import { MemorySystem } from '@echo-chamber/cloudflare-runtime/memory-system';
+import { NoteSystem } from '@echo-chamber/cloudflare-runtime/note-system';
 import { getTodayUsageKey } from '@echo-chamber/core';
 import type { EchoInstanceConfig, UsageRecord } from '@echo-chamber/core';
 import { buildAgentPromptMessages } from '@echo-chamber/core/agent/prompt-builder';
@@ -8,10 +10,10 @@ import type {
   ModelToolResult,
   ModelUsage,
 } from '@echo-chamber/core/ports/model';
+import { OpenAIResponsesModel } from '@echo-chamber/openai-adapter/openai-responses-model';
 
 import { DiscordThoughtLog } from '../../discord/client';
 import { createEmbeddingService } from '../../llm/embedding-factory';
-import { OpenAIResponsesModel } from '../../llm/openai/client';
 import {
   addReactionToChatMessageFunction,
   checkNotificationsFunction,
@@ -33,8 +35,6 @@ import {
 } from '../../llm/openai/functions/note';
 import { thinkDeeplyFunction } from '../../llm/openai/functions/think';
 import { createToolExecutionContext } from '../../llm/openai/functions/tool-context';
-import { MemorySystem } from '../../runtime/memory-system';
-import { NoteSystem } from '../../runtime/note-system';
 
 import type { ITool, ToolContext } from '../../llm/openai/functions';
 import type { Logger } from '../../utils/logger';

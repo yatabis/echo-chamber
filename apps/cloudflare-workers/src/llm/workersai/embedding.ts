@@ -1,6 +1,7 @@
+import type { EmbeddingService } from '@echo-chamber/cloudflare-runtime/embedding-service';
+
 import { createLogger } from '../../utils/logger';
 
-import type { EmbeddingService } from '../../runtime/embedding-service';
 import type { Logger } from '../../utils/logger';
 
 const DEFAULT_MODEL = '@cf/pfnet/plamo-embedding-1b';

@@ -1,9 +1,8 @@
+import type { EmbeddingService } from '@echo-chamber/cloudflare-runtime/embedding-service';
 import type { EmbeddingConfig } from '@echo-chamber/core';
 
 import { OpenAIEmbeddingService } from './openai/embedding';
 import { WorkersAIEmbeddingService } from './workersai/embedding';
-
-import type { EmbeddingService } from '../runtime/embedding-service';
 
 /**
  * EmbeddingConfig に基づいて適切な EmbeddingService を生成するファクトリー関数
