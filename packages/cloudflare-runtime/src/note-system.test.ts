@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { MAX_NOTE_COUNT, NoteSystem } from './index';
+import type { LoggerPort } from '@echo-chamber/core/ports/logger';
 
-import type { Logger } from '../../utils/logger';
+import { MAX_NOTE_COUNT, NoteSystem } from './note-system';
 
 type StorageMap = Map<string, unknown>;
 
@@ -45,13 +45,14 @@ function createMockStorage(): MockStorage {
   };
 }
 
-function createMockLogger(): Logger {
+function createMockLogger(): Pick<LoggerPort, 'info'> {
   return {
     debug: vi.fn(async () => Promise.resolve()),
     info: vi.fn(async () => Promise.resolve()),
     warn: vi.fn(async () => Promise.resolve()),
     error: vi.fn(async () => Promise.resolve()),
-  } as unknown as Logger;
+    log: vi.fn(async () => Promise.resolve()),
+  } as unknown as LoggerPort;
 }
 
 async function createManyNotes(

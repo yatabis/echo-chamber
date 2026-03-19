@@ -1,12 +1,10 @@
-import {
-  formatDatetimeForAgent,
-  getErrorMessage,
-  cosineSimilarity,
-} from '@echo-chamber/core';
 import type { Emotion, MemoryType } from '@echo-chamber/core';
+import type { LoggerPort } from '@echo-chamber/core/ports/logger';
+import { formatDatetimeForAgent } from '@echo-chamber/core/utils/datetime';
+import { getErrorMessage } from '@echo-chamber/core/utils/error';
+import { cosineSimilarity } from '@echo-chamber/core/utils/vector';
 
-import type { EmbeddingService } from '../../llm/openai/embedding';
-import type { Logger } from '../../utils/logger';
+import type { EmbeddingService } from './embedding-service';
 
 const MAX_MEMORY_COUNT = 500;
 const SEARCH_RESULT_LIMIT = 5;
@@ -33,7 +31,7 @@ export interface MemorySearchResult extends MemorySnapshot {
 /**
  * SQLiteに保存されるメモリ行の型
  */
-interface MemoryRow extends Record<string, SqlStorageValue> {
+export interface StoredMemoryRow extends Record<string, SqlStorageValue> {
   id: string;
   content: string;
   type: MemoryType;
@@ -69,13 +67,13 @@ function bufferToNumberArray(buffer: ArrayBuffer): number[] {
 export class MemorySystem {
   private readonly sql: SqlStorage;
   private readonly embeddingService: EmbeddingService;
-  private readonly logger: Logger;
+  private readonly logger: Pick<LoggerPort, 'debug' | 'info' | 'error'>;
   private initialized = false;
 
   constructor(options: {
     sql: SqlStorage;
     embeddingService: EmbeddingService;
-    logger: Logger;
+    logger: Pick<LoggerPort, 'debug' | 'info' | 'error'>;
   }) {
     this.sql = options.sql;
     this.embeddingService = options.embeddingService;
@@ -206,7 +204,7 @@ export class MemorySystem {
 
     // 0行の可能性があるのでtoArray()を使用（one()は0行で例外をスロー）
     const rows = this.sql
-      .exec<MemoryRow>(
+      .exec<StoredMemoryRow>(
         'SELECT * FROM memories ORDER BY created_at DESC LIMIT 1'
       )
       .toArray();
@@ -291,10 +289,10 @@ export class MemorySystem {
   /**
    * 全メモリを取得する
    */
-  getAllMemories(): MemoryRow[] {
+  getAllMemories(): StoredMemoryRow[] {
     this.ensureSchema();
 
-    return this.sql.exec<MemoryRow>('SELECT * FROM memories').toArray();
+    return this.sql.exec<StoredMemoryRow>('SELECT * FROM memories').toArray();
   }
 
   /**
@@ -351,7 +349,7 @@ export class MemorySystem {
   /**
    * SQLite行をMemorySnapshotに変換
    */
-  private rowToSnapshot(row: MemoryRow): MemorySnapshot {
+  private rowToSnapshot(row: StoredMemoryRow): MemorySnapshot {
     return {
       content: row.content,
       type: row.type,

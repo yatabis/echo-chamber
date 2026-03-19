@@ -23,7 +23,10 @@
     "./agent/tools/note": "./src/agent/tools/note.ts",
     "./agent/tools/thinking": "./src/agent/tools/thinking.ts",
     "./agent/tools/catalog": "./src/agent/tools/catalog.ts",
+    "./types/logger": "./src/types/logger.ts",
     "./utils/datetime": "./src/utils/datetime.ts",
+    "./utils/error": "./src/utils/error.ts",
+    "./utils/vector": "./src/utils/vector.ts",
     "./echo/note-constraints": "./src/echo/note-constraints.ts"
   },
   "scripts": {

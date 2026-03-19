@@ -26,10 +26,10 @@ import type {
 import { getInstanceConfig } from '../config/echo-registry';
 import { getUnreadMessageCount } from '../discord/client';
 import { createEmbeddingService } from '../llm/embedding-factory';
+import { MemorySystem } from '../runtime/memory-system';
+import { NoteSystem } from '../runtime/note-system';
 import { createLogger } from '../utils/logger';
 
-import { MemorySystem } from './memory-system';
-import { NoteSystem } from './note-system';
 import { ThinkingEngine } from './thinking-engine';
 
 import type { Logger } from '../utils/logger';

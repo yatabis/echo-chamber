@@ -16,4 +16,5 @@ Cloudflare Workers / Durable Objects / KV / SQLite / Alarm を使った runtime 
 
 ## メモ
 
-- 初期段階では package 境界の雛形のみを提供します。
+- 現在は `MemorySystem` / `NoteSystem` / `CloudflareRuntimeLogger` をこの package に置いています。
+- Worker 側では thin shim を経由して参照し、entry / composition root に責務を寄せます。

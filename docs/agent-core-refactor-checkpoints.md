@@ -30,12 +30,13 @@
   - 状態: レビュー済み / コミット済み
   - コミット: `c7baa96`
   - レビュー対象: `ModelPort` の OpenAI 実装と変換層
-- [ ] Checkpoint 8: Discord adapter 分離
-  - 状態: 実装完了 / レビュー待ち / 未コミット
+- [x] Checkpoint 8: Discord adapter 分離
+  - 状態: レビュー済み / コミット済み
+  - コミット: `4ea2bb4`
   - レビュー対象: chat / notification / thought-log の分離
 - [ ] Checkpoint 9: Cloudflare runtime 分離
-  - 状態: 未着手
-  - レビュー対象: DO / KV / SQLite / scheduler を runtime package に隔離
+  - 状態: 実装完了 / レビュー待ち / 未コミット
+  - レビュー対象: Memory / Note / logger 実装を runtime package に隔離
 - [ ] Checkpoint 10: contracts と dashboard 依存整理
   - 状態: 未着手
   - レビュー対象: dashboard DTO を agent core から切り離す構造
@@ -156,9 +157,35 @@
 - `core` から OpenAI 型依存が実際に消えているか
 - worker 側に残した shim と package 境界の取り方が次段階の分離に耐えるか
 
+### Checkpoint 8: Discord adapter 分離
+
+状態:
+
+- 実装完了
+- ユーザーレビュー済み
+- コミット済み
+
+コミット:
+
+- `4ea2bb4` `extract discord adapter package`
+
+内容:
+
+- Discord REST 実装と port adapter を `packages/discord-adapter` へ移した
+- worker 側の `tool-context` は `createDiscordChatPort` / `createDiscordNotificationPort` を組み立てるだけにし、chat / notification の実装詳細を adapter に閉じ込めた
+- `ThinkingStream` 相当は `DiscordThoughtLog` として adapter に移し、worker 側は `ThoughtLogPort` 実装を使うだけにした
+- `core` に残っていた Discord 実装ファイルと test helper を削除した
+- `discord-adapter` 側に `chat-port` / `notification-utils` / `discord-thought-log` のテストを追加した
+
+レビュー観点:
+
+- Discord 実装が `core` から実際に消えているか
+- chat / notification / thought-log の概念分離が adapter でも保たれているか
+- worker 側に残した shim と test setup が次段階の runtime 分離に耐えるか
+
 ## 現在のチェックポイント
 
-### Checkpoint 8: Discord adapter 分離
+### Checkpoint 9: Cloudflare runtime 分離
 
 状態:
 
@@ -168,48 +195,52 @@
 
 内容:
 
-- Discord REST 実装と port adapter を `packages/discord-adapter` へ移した
-- worker 側の `tool-context` は `createDiscordChatPort` / `createDiscordNotificationPort` を組み立てるだけにし、chat / notification の実装詳細を adapter に閉じ込めた
-- `ThinkingStream` 相当は `DiscordThoughtLog` として adapter に移し、worker 側は `ThoughtLogPort` 実装を使うだけにした
-- `core` に残っていた Discord 実装ファイルと test helper を削除した
-- `discord-adapter` 側に `chat-port` / `notification-utils` / `discord-thought-log` のテストを追加した
-- worker test setup は Discord client を完全 mock に切り替え、workerd が `discord-api-types` を解決しにいかないようにした
+- `MemorySystem` と `NoteSystem` を `packages/cloudflare-runtime` に移し、SQLite / Durable Object storage に触る実装本体を worker package の外へ出した
+- `EmbeddingService` 抽象を runtime package に追加し、worker 側の OpenAI / Workers AI 実装はその interface を満たす形にした
+- logger の中核実装を `CloudflareRuntimeLogger` として runtime package に移し、worker 側は Discord 送信 callback を差し込む thin wrapper だけにした
+- worker 側には `src/runtime/*` の shim を置き、entry / thinking engine / tool-context から runtime package source を参照する形に整理した
+- Memory / Note のテストを runtime package 側に移し、ルート `test:run` に組み込んだ
 
 新設した主なファイル:
 
-- `packages/discord-adapter/src/api.ts`
-- `packages/discord-adapter/src/chat-port.ts`
-- `packages/discord-adapter/src/chat-port.test.ts`
-- `packages/discord-adapter/src/notification-port.ts`
-- `packages/discord-adapter/src/notification-utils.ts`
-- `packages/discord-adapter/src/notification-utils.test.ts`
-- `packages/discord-adapter/src/discord-thought-log.ts`
-- `packages/discord-adapter/src/discord-thought-log.test.ts`
-- `packages/discord-adapter/test/helpers/discord.ts`
-- `packages/discord-adapter/vitest.config.ts`
-- `apps/cloudflare-workers/src/discord/client.ts`
+- `packages/cloudflare-runtime/src/embedding-service.ts`
+- `packages/cloudflare-runtime/src/memory-system.ts`
+- `packages/cloudflare-runtime/src/memory-system.test.ts`
+- `packages/cloudflare-runtime/src/note-system.ts`
+- `packages/cloudflare-runtime/src/note-system.test.ts`
+- `packages/cloudflare-runtime/src/runtime-logger.ts`
+- `packages/cloudflare-runtime/vitest.config.ts`
+- `apps/cloudflare-workers/src/runtime/embedding-service.ts`
+- `apps/cloudflare-workers/src/runtime/logger.ts`
+- `apps/cloudflare-workers/src/runtime/memory-system.ts`
+- `apps/cloudflare-workers/src/runtime/note-system.ts`
 
 変更した主なファイル:
 
 - `apps/cloudflare-workers/src/echo/index.tsx`
 - `apps/cloudflare-workers/src/echo/thinking-engine/index.ts`
+- `apps/cloudflare-workers/src/llm/embedding-factory.ts`
+- `apps/cloudflare-workers/src/llm/openai/embedding.ts`
 - `apps/cloudflare-workers/src/llm/openai/functions/tool-context.ts`
+- `apps/cloudflare-workers/src/llm/workersai/embedding.ts`
 - `apps/cloudflare-workers/src/utils/logger.ts`
-- `apps/cloudflare-workers/test/setup.ts`
 - `package.json`
 - `packages/core/package.json`
-- `packages/discord-adapter/package.json`
+- `packages/cloudflare-runtime/package.json`
+- `packages/cloudflare-runtime/tsconfig.json`
+- `packages/cloudflare-runtime/README.md`
 
 この段階で達成したこと:
 
-- chat / notification / thought-log の Discord 実装が `core` から消えた
-- Discord 固有のデータ変換と REST 呼び出しは `discord-adapter` に集約された
+- Memory / Note / logger の Cloudflare runtime 実装が worker package から切り離された
+- worker 側の `ThinkingEngine` と `Echo` は persistence 実装の詳細ではなく runtime service を組み立てる側に近づいた
 - worker 側には package source を参照する薄い shim だけを残し、entry 側の変更を最小化した
-- 新しい adapter 層の責務に応じた package 単位のテストが追加された
+- runtime package 単位のテストが追加され、SQLite / Durable Object storage ベースのロジックを worker test から分離できた
 
 この段階ではまだやっていないこと:
 
-- Cloudflare runtime package への本格的な実装移設
+- state / usage / context store の runtime package への移設
+- alarm / KV / scheduler 依存の worker entry からの切り離し
 - worker 側の shim を不要にする import 解決の最終整理
 
 品質チェック:
@@ -223,9 +254,9 @@
 
 レビュー観点:
 
-- Discord 実装が `core` から実際に消えているか
-- chat / notification / thought-log の概念分離が adapter でも保たれているか
-- worker 側に残した shim と test setup が次段階の runtime 分離に耐えるか
+- `MemorySystem` / `NoteSystem` / logger の実装責務が runtime package に適切に集約されているか
+- worker 側が composition root に寄る方向になっているか
+- 次段階で state / usage / context / scheduler を runtime package に移す余地が見えているか
 
 ## 次のチェックポイント候補と横断タスク
 

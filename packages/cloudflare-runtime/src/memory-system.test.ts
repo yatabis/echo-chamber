@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Emotion } from '@echo-chamber/core';
+import type { LoggerPort } from '@echo-chamber/core/ports/logger';
 
-import { MemorySystem } from './index';
+import { MemorySystem } from './memory-system';
 
-import type { EmbeddingService } from '../../llm/openai/embedding';
-import type { Logger } from '../../utils/logger';
+import type { EmbeddingService } from './embedding-service';
 
 interface MockMemoryRow {
   id: string;
@@ -185,12 +185,13 @@ const mockEmbeddingService: EmbeddingService = {
   modelIdentifier: 'test/mock-embedding-model',
 };
 
-const mockLogger: Logger = {
+const mockLogger: Pick<LoggerPort, 'debug' | 'info' | 'error'> = {
   debug: vi.fn(),
   info: vi.fn(),
   warn: vi.fn(),
   error: vi.fn(),
-} as unknown as Logger;
+  log: vi.fn(),
+} as unknown as LoggerPort;
 
 /**
  * Float32ArrayをArrayBufferに変換（テスト用）

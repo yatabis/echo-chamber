@@ -6,9 +6,14 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./embedding-service": "./src/embedding-service.ts",
+    "./memory-system": "./src/memory-system.ts",
+    "./note-system": "./src/note-system.ts",
+    "./runtime-logger": "./src/runtime-logger.ts"
   },
   "scripts": {
+    "test:run": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {

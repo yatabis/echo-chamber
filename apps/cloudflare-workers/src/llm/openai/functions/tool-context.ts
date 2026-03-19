@@ -9,8 +9,8 @@ import {
   createDiscordNotificationPort,
 } from '../../../discord/client';
 
-import type { MemorySystem } from '../../../echo/memory-system';
-import type { NoteSystem } from '../../../echo/note-system';
+import type { MemorySystem } from '../../../runtime/memory-system';
+import type { NoteSystem } from '../../../runtime/note-system';
 import type { Logger } from '../../../utils/logger';
 
 function createMemoryPort(

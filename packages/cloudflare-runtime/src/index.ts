@@ -1,5 +1,7 @@
 /**
- * Cloudflare runtime package scaffold.
+ * Public entrypoint is intentionally thin.
  *
- * Cloudflare-specific repositories and runtime services are moved here in later steps.
+ * Runtime consumers should prefer subpath exports such as
+ * `@echo-chamber/cloudflare-runtime/memory-system`.
  */
+export {};

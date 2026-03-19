@@ -33,8 +33,8 @@ import {
 } from '../../llm/openai/functions/note';
 import { thinkDeeplyFunction } from '../../llm/openai/functions/think';
 import { createToolExecutionContext } from '../../llm/openai/functions/tool-context';
-import { MemorySystem } from '../memory-system';
-import { NoteSystem } from '../note-system';
+import { MemorySystem } from '../../runtime/memory-system';
+import { NoteSystem } from '../../runtime/note-system';
 
 import type { ITool, ToolContext } from '../../llm/openai/functions';
 import type { Logger } from '../../utils/logger';

@@ -4,8 +4,7 @@ import {
   MAX_NOTE_QUERY_LENGTH,
   MAX_NOTE_TITLE_LENGTH,
 } from '@echo-chamber/core/echo/note-constraints';
-
-import type { Logger } from '../../utils/logger';
+import type { LoggerPort } from '@echo-chamber/core/ports/logger';
 
 const NOTE_ITEM_PREFIX = 'note:item:';
 const NOTE_ID_PATTERN = /^note-(\d+)$/;
@@ -117,9 +116,12 @@ function isNoteRecord(value: unknown): value is Note {
  */
 export class NoteSystem {
   private readonly storage: DurableObjectStorage;
-  private readonly logger: Logger;
+  private readonly logger: Pick<LoggerPort, 'info'>;
 
-  constructor(options: { storage: DurableObjectStorage; logger: Logger }) {
+  constructor(options: {
+    storage: DurableObjectStorage;
+    logger: Pick<LoggerPort, 'info'>;
+  }) {
     this.storage = options.storage;
     this.logger = options.logger;
   }

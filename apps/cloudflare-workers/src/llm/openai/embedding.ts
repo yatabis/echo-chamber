@@ -2,17 +2,10 @@ import OpenAI from 'openai';
 
 import { createLogger } from '../../utils/logger';
 
+import type { EmbeddingService } from '../../runtime/embedding-service';
 import type { Logger } from '../../utils/logger';
 
 const EMBEDDING_DIMENSIONS = 1536;
-
-/**
- * Embedding生成サービスのインターフェース
- */
-export interface EmbeddingService {
-  embed(text: string): Promise<number[]>;
-  readonly modelIdentifier: string;
-}
 
 /**
  * OpenAI Embedding APIを使用したEmbedding生成サービス
