@@ -1,8 +1,8 @@
-import { getErrorMessage } from '@echo-chamber/core';
 import {
   searchMemoryToolSpec,
   storeMemoryToolSpec,
 } from '@echo-chamber/core/agent/tools/memory';
+import { getErrorMessage } from '@echo-chamber/core/utils/error';
 
 import { Tool } from './index';
 

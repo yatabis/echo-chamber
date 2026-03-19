@@ -1,5 +1,3 @@
-import type { Note } from '@echo-chamber/core';
-import { getErrorMessage } from '@echo-chamber/core';
 import {
   createNoteToolSpec,
   deleteNoteToolSpec,
@@ -8,6 +6,8 @@ import {
   searchNotesToolSpec,
   updateNoteToolSpec,
 } from '@echo-chamber/core/agent/tools/note';
+import type { Note } from '@echo-chamber/core/echo/types';
+import { getErrorMessage } from '@echo-chamber/core/utils/error';
 
 import { Tool } from './index';
 

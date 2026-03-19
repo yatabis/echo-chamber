@@ -1,10 +1,10 @@
-import { getErrorMessage } from '@echo-chamber/core';
 import {
   addReactionToChatMessageToolSpec,
   checkNotificationsToolSpec,
   readChatMessagesToolSpec,
   sendChatMessageToolSpec,
 } from '@echo-chamber/core/agent/tools/chat';
+import { getErrorMessage } from '@echo-chamber/core/utils/error';
 
 import { Tool } from '.';
 

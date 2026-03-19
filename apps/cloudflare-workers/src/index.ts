@@ -4,7 +4,10 @@ import type {
   DashboardInstanceSummary,
   DashboardInstancesResponse,
 } from '@echo-chamber/contracts/dashboard/types';
-import { ECHO_INSTANCE_IDS, isValidInstanceId } from '@echo-chamber/core';
+import {
+  ECHO_INSTANCE_IDS,
+  isValidInstanceId,
+} from '@echo-chamber/core/types/echo-config';
 
 import { Echo } from './echo';
 

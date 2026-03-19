@@ -1,15 +1,16 @@
 import { MemorySystem } from '@echo-chamber/cloudflare-runtime/memory-system';
 import { NoteSystem } from '@echo-chamber/cloudflare-runtime/note-system';
-import { getTodayUsageKey } from '@echo-chamber/core';
-import type { EchoInstanceConfig, UsageRecord } from '@echo-chamber/core';
 import { buildAgentPromptMessages } from '@echo-chamber/core/agent/prompt-builder';
 import { runAgentSession } from '@echo-chamber/core/agent/session';
+import type { UsageRecord } from '@echo-chamber/core/echo/types';
+import { getTodayUsageKey } from '@echo-chamber/core/echo/usage';
 import type {
   ModelInputItem,
   ModelToolCall,
   ModelToolResult,
   ModelUsage,
 } from '@echo-chamber/core/ports/model';
+import type { EchoInstanceConfig } from '@echo-chamber/core/types/echo-config';
 import { OpenAIResponsesModel } from '@echo-chamber/openai-adapter/openai-responses-model';
 
 import { DiscordThoughtLog } from '../../discord/client';

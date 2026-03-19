@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { Emotion } from '@echo-chamber/core';
+import type { Emotion } from '@echo-chamber/core/echo/types';
 import type { LoggerPort } from '@echo-chamber/core/ports/logger';
 
 import { MemorySystem } from './memory-system';

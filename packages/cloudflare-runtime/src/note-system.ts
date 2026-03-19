@@ -1,9 +1,9 @@
-import type { Note } from '@echo-chamber/core';
 import {
   MAX_NOTE_CONTENT_LENGTH,
   MAX_NOTE_QUERY_LENGTH,
   MAX_NOTE_TITLE_LENGTH,
 } from '@echo-chamber/core/echo/note-constraints';
+import type { Note } from '@echo-chamber/core/echo/types';
 import type { LoggerPort } from '@echo-chamber/core/ports/logger';
 
 const NOTE_ITEM_PREFIX = 'note:item:';

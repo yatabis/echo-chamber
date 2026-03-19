@@ -1,5 +1,5 @@
 import type { EmbeddingService } from '@echo-chamber/cloudflare-runtime/embedding-service';
-import type { EmbeddingConfig } from '@echo-chamber/core';
+import type { EmbeddingConfig } from '@echo-chamber/core/types/echo-config';
 
 import { OpenAIEmbeddingService } from './openai/embedding';
 import { WorkersAIEmbeddingService } from './workersai/embedding';

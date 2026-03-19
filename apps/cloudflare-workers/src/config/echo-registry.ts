@@ -5,12 +5,12 @@
  * 新しいインスタンスを追加する場合はこのファイルのみを更新する
  */
 
-import { systemPromptRin } from '@echo-chamber/core';
+import systemPromptRin from '@echo-chamber/core/llm/prompts/rin';
 import type {
   EchoInstanceConfig,
   EchoInstanceId,
   EmbeddingConfig,
-} from '@echo-chamber/core';
+} from '@echo-chamber/core/types/echo-config';
 
 /**
  * インスタンスごとの静的設定

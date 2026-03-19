@@ -1,8 +1,8 @@
 import { z } from 'zod';
 
-import { getErrorMessage } from '@echo-chamber/core';
 import type { ToolExecutionContext } from '@echo-chamber/core/agent/tool-context';
 import type { ModelToolContract } from '@echo-chamber/core/ports/model';
+import { getErrorMessage } from '@echo-chamber/core/utils/error';
 
 export type ToolContext = ToolExecutionContext;
 

@@ -7,7 +7,9 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./echo/constants": "./src/echo/constants.ts",
     "./echo/types": "./src/echo/types.ts",
+    "./echo/usage": "./src/echo/usage.ts",
     "./ports/chat": "./src/ports/chat.ts",
     "./ports/logger": "./src/ports/logger.ts",
     "./ports/memory": "./src/ports/memory.ts",
@@ -26,6 +28,8 @@
     "./agent/tools/catalog": "./src/agent/tools/catalog.ts",
     "./types/echo-config": "./src/types/echo-config.ts",
     "./types/logger": "./src/types/logger.ts",
+    "./llm/prompts/marie": "./src/llm/prompts/marie.ts",
+    "./llm/prompts/rin": "./src/llm/prompts/rin.ts",
     "./utils/datetime": "./src/utils/datetime.ts",
     "./utils/error": "./src/utils/error.ts",
     "./utils/vector": "./src/utils/vector.ts",

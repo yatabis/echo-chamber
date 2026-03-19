@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { Note } from '@echo-chamber/core';
+import type { Note } from '@echo-chamber/core/echo/types';
 
 import {
   createNoteFunction,

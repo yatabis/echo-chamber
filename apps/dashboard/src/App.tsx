@@ -23,7 +23,10 @@ import {
   filterNotes,
   sumUsageBreakdown,
 } from '@echo-chamber/contracts/dashboard/utils';
-import { ECHO_INSTANCE_IDS, isValidInstanceId } from '@echo-chamber/core';
+import {
+  ECHO_INSTANCE_IDS,
+  isValidInstanceId,
+} from '@echo-chamber/core/types/echo-config';
 
 import type { JSX } from 'react';
 

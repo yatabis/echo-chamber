@@ -1,10 +1,11 @@
 import type { MemorySystem } from '@echo-chamber/cloudflare-runtime/memory-system';
 import type { NoteSystem } from '@echo-chamber/cloudflare-runtime/note-system';
-import type { EchoInstanceConfig, Note } from '@echo-chamber/core';
 import type { ToolExecutionContext } from '@echo-chamber/core/agent/tool-context';
+import type { Note } from '@echo-chamber/core/echo/types';
 import type { LoggerPort } from '@echo-chamber/core/ports/logger';
 import type { MemorySearchResult } from '@echo-chamber/core/ports/memory';
 import type { NotePort } from '@echo-chamber/core/ports/note';
+import type { EchoInstanceConfig } from '@echo-chamber/core/types/echo-config';
 
 import {
   createDiscordChatPort,

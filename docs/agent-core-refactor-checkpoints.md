@@ -43,7 +43,7 @@
   - コミット: `e92826c`
   - レビュー対象: dashboard DTO を agent core から切り離す構造
 - [ ] 横断タスク: barrel export 廃止
-  - 状態: 実装完了 / レビュー待ち / 未コミット
+  - 状態: 継続中
   - レビュー対象: subpath export への移行完了とバレル削除
 
 ## 目的
@@ -187,7 +187,7 @@
 
 ## 現在のチェックポイント
 
-### 横断タスク: barrel export 廃止（worker shim cleanup）
+### 横断タスク: barrel export 廃止（core root import reduction）
 
 状態:
 
@@ -197,48 +197,34 @@
 
 内容:
 
-- `apps/cloudflare-workers` に残っていた純粋な re-export shim を削除し、worker から package subpath を直接 import する形に切り替えた
-- `packages/discord-adapter` と `packages/openai-adapter` に subpath export を追加し、root barrel を薄い entrypoint に置き換えた
-- `apps/cloudflare-workers/src/echo/*` と `src/llm/*` が `@echo-chamber/cloudflare-runtime/*` と `@echo-chamber/openai-adapter/*` を直接参照するようになった
-- `../../../../packages/...` 参照と app 内 shim ファイルの大半を削除し、依存の向きと import 解決を package 単位に揃えた
-- ただし `discord-adapter` だけは worker test の `workerd` module resolution 制約があるため、`apps/cloudflare-workers/src/discord/client.ts` を互換 shim として残した
+- 直前の `worker shim cleanup` は `b18dfbc` (`reduce worker adapter shims`) でコミット済み
+- `packages/core/package.json` に `echo/constants`, `echo/usage`, `llm/prompts/*` などの subpath export を追加した
+- worker / dashboard / runtime package に残っていた `@echo-chamber/core` のルート import を subpath import へ置き換えた
+- この段階で `apps` / `packages` 配下の `@echo-chamber/core` ルート import は 0 件になった
 
 新設した主なファイル:
 
-- `apps/cloudflare-workers/src/discord/client.ts`
+- なし
 
 削除した主なファイル:
 
-- `apps/cloudflare-workers/src/llm/openai/client.ts`
-- `apps/cloudflare-workers/src/runtime/embedding-service.ts`
-- `apps/cloudflare-workers/src/runtime/logger.ts`
-- `apps/cloudflare-workers/src/runtime/memory-system.ts`
-- `apps/cloudflare-workers/src/runtime/note-system.ts`
+- なし
 
 変更した主なファイル:
 
-- `apps/cloudflare-workers/src/echo/index.tsx`
-- `apps/cloudflare-workers/src/echo/thinking-engine/index.ts`
-- `apps/cloudflare-workers/src/llm/embedding-factory.ts`
-- `apps/cloudflare-workers/src/llm/openai/embedding.ts`
-- `apps/cloudflare-workers/src/llm/openai/functions/tool-context.ts`
-- `apps/cloudflare-workers/src/llm/workersai/embedding.ts`
-- `apps/cloudflare-workers/src/utils/logger.ts`
-- `packages/discord-adapter/package.json`
-- `packages/discord-adapter/src/index.ts`
-- `packages/openai-adapter/package.json`
-- `packages/openai-adapter/src/index.ts`
+- `packages/core/package.json`
+- `apps/cloudflare-workers/src/index.ts`
+- `apps/cloudflare-workers/src/**`
+- `apps/dashboard/src/App.tsx`
+- `packages/cloudflare-runtime/src/**`
 
 この段階で達成したこと:
 
-- `apps` が package 実装を横流しするだけの構造を 1 段減らせた
-- worker から見た import 経路が package 名ベースになり、workspace 境界が明示的になった
-- barrel export 廃止の横断タスクのうち、adapter / runtime package 周りの package 直参照化を進められた
-- `discord-adapter` だけは runtime 互換性の都合で例外が残ることを確認できた
+- `@echo-chamber/core` のルート import に依存せず、必要な記号を subpath 単位で参照する形へ寄せられた
+- `core/src/index.ts` に依存しなくても worker / dashboard / runtime package が組み上がる状態を作れた
 
 この段階ではまだやっていないこと:
 
-- `@echo-chamber/core` のルート import を subpath import へ置き換える横断的な整理
 - `core/src/index.ts` と `core/src/ports/index.ts` の依存解消
 - request / response schema の本格導入
 
@@ -317,7 +303,6 @@
 
 ## 再開時の注意
 
-- 直近のコミット済み checkpoint は Checkpoint 10（`e92826c`）
-- 直近の未コミット差分は worker shim cleanup のみ
-- 直近のレビュー対象は barrel export 廃止の一部として行った package 直参照化
-- 次の候補は `@echo-chamber/core` ルート import の縮小
+- 直近のコミット済み checkpoint は barrel export 廃止の一部である worker shim cleanup（`b18dfbc`）
+- 直近の作業対象は `core/src/index.ts` / `core/src/ports/index.ts` 依存の縮小
+- 次のレビュー対象は subpath import 置換後の import 境界

@@ -7,25 +7,26 @@ import type {
   DashboardInstanceSummary,
   EchoStatus,
 } from '@echo-chamber/contracts/dashboard/types';
-import {
-  ALARM_CONFIG,
-  TOKEN_LIMITS,
-  addUsage,
-  calculateDynamicTokenLimit,
-  convertUsage,
-  formatDatetime,
-  getTodayUsageKey,
-  getErrorMessage,
-  isValidInstanceId,
-} from '@echo-chamber/core';
+import { ALARM_CONFIG, TOKEN_LIMITS } from '@echo-chamber/core/echo/constants';
 import type {
-  EchoInstanceConfig,
-  EchoInstanceId,
   EchoState,
   Note,
   Usage,
   UsageRecord,
-} from '@echo-chamber/core';
+} from '@echo-chamber/core/echo/types';
+import {
+  addUsage,
+  calculateDynamicTokenLimit,
+  convertUsage,
+  getTodayUsageKey,
+} from '@echo-chamber/core/echo/usage';
+import type {
+  EchoInstanceConfig,
+  EchoInstanceId,
+} from '@echo-chamber/core/types/echo-config';
+import { isValidInstanceId } from '@echo-chamber/core/types/echo-config';
+import { formatDatetime } from '@echo-chamber/core/utils/datetime';
+import { getErrorMessage } from '@echo-chamber/core/utils/error';
 
 import { getInstanceConfig } from '../config/echo-registry';
 import { getUnreadMessageCount } from '../discord/client';

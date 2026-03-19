@@ -1,4 +1,4 @@
-import type { Emotion, MemoryType } from '@echo-chamber/core';
+import type { Emotion, MemoryType } from '@echo-chamber/core/echo/types';
 import type { LoggerPort } from '@echo-chamber/core/ports/logger';
 import { formatDatetimeForAgent } from '@echo-chamber/core/utils/datetime';
 import { getErrorMessage } from '@echo-chamber/core/utils/error';

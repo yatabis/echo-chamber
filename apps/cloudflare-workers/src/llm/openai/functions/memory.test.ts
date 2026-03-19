@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { Emotion } from '@echo-chamber/core';
+import type { Emotion } from '@echo-chamber/core/echo/types';
 
 import { mockToolContext } from '../../../../test/mocks/tool';
 
