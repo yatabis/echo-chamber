@@ -11,7 +11,7 @@ import type {
 import { ThinkingStream } from '@echo-chamber/core/utils/thinking-stream';
 
 import { createEmbeddingService } from '../../llm/embedding-factory';
-import { OpenAIClient } from '../../llm/openai/client';
+import { OpenAIResponsesModel } from '../../llm/openai/client';
 import {
   addReactionToChatMessageFunction,
   checkNotificationsFunction,
@@ -38,7 +38,6 @@ import { NoteSystem } from '../note-system';
 
 import type { ITool, ToolContext } from '../../llm/openai/functions';
 import type { Logger } from '../../utils/logger';
-import type { ResponseUsage } from 'openai/resources/responses/responses';
 
 /**
  * Echo の思考エンジン
@@ -85,7 +84,7 @@ export class ThinkingEngine {
     await this.memorySystem.reEmbedStaleMemories();
   }
 
-  async think(): Promise<ResponseUsage> {
+  async think(): Promise<ModelUsage> {
     const thinkingStream = new ThinkingStream(this.instanceConfig);
     await thinkingStream.send('*Thinking started...*');
     const tools = this.createTools();
@@ -100,17 +99,23 @@ export class ThinkingEngine {
       initialInput: await this.buildInitialInput(),
       logger: this.toolContext.logger,
     });
-    const usage = toResponseUsage(session.usage);
+    const usage = session.usage;
     await thinkingStream.send(
-      `*Thinking completed.*\nUsage: ${usage.total_tokens} tokens (Total: ${
-        (await this.getCurrentUsage()) + usage.total_tokens
+      `*Thinking completed.*\nUsage: ${usage.totalTokens} tokens (Total: ${
+        (await this.getCurrentUsage()) + usage.totalTokens
       } tokens)`
     );
     return usage;
   }
 
-  private createOpenAIClient(thinkingStream: ThinkingStream): OpenAIClient {
-    return new OpenAIClient(this.env, thinkingStream);
+  private createOpenAIClient(
+    thinkingStream: ThinkingStream
+  ): OpenAIResponsesModel {
+    return new OpenAIResponsesModel({
+      apiKey: this.env.OPENAI_API_KEY,
+      logger: this.toolContext.logger,
+      thoughtLog: thinkingStream,
+    });
   }
 
   private createTools(): ITool[] {
@@ -188,18 +193,4 @@ export class ThinkingEngine {
 
     return todayUsage.total_tokens;
   }
-}
-
-function toResponseUsage(usage: ModelUsage): ResponseUsage {
-  return {
-    input_tokens: usage.totalInputTokens,
-    input_tokens_details: {
-      cached_tokens: usage.cachedInputTokens,
-    },
-    output_tokens: usage.outputTokens,
-    output_tokens_details: {
-      reasoning_tokens: usage.reasoningTokens,
-    },
-    total_tokens: usage.totalTokens,
-  };
 }

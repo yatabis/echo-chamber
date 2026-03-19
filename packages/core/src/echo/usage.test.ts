@@ -8,7 +8,7 @@ import {
 } from './usage';
 
 import type { Usage, UsageRecord } from './types';
-import type { ResponseUsage } from 'openai/resources/responses/responses';
+import type { ModelUsage } from '../ports/model';
 
 describe('getTodayUsageKey', () => {
   beforeEach(() => {
@@ -240,13 +240,14 @@ describe('addUsage', () => {
 });
 
 describe('convertUsage', () => {
-  it('基本的なResponseUsageをUsageに変換する', () => {
-    const responseUsage: ResponseUsage = {
-      input_tokens: 1000,
-      input_tokens_details: { cached_tokens: 200 },
-      output_tokens: 500,
-      output_tokens_details: { reasoning_tokens: 50 },
-      total_tokens: 1500,
+  it('基本的なModelUsageをUsageに変換する', () => {
+    const responseUsage: ModelUsage = {
+      cachedInputTokens: 200,
+      uncachedInputTokens: 800,
+      totalInputTokens: 1000,
+      outputTokens: 500,
+      reasoningTokens: 50,
+      totalTokens: 1500,
     };
 
     const result = convertUsage(responseUsage);
@@ -263,12 +264,13 @@ describe('convertUsage', () => {
   });
 
   it('料金計算が正確である', () => {
-    const responseUsage: ResponseUsage = {
-      input_tokens: 2000,
-      input_tokens_details: { cached_tokens: 500 },
-      output_tokens: 1000,
-      output_tokens_details: { reasoning_tokens: 100 },
-      total_tokens: 3000,
+    const responseUsage: ModelUsage = {
+      cachedInputTokens: 500,
+      uncachedInputTokens: 1500,
+      totalInputTokens: 2000,
+      outputTokens: 1000,
+      reasoningTokens: 100,
+      totalTokens: 3000,
     };
 
     const result = convertUsage(responseUsage);
@@ -282,12 +284,13 @@ describe('convertUsage', () => {
   });
 
   it('キャッシュトークンがゼロの場合', () => {
-    const responseUsage: ResponseUsage = {
-      input_tokens: 1000,
-      input_tokens_details: { cached_tokens: 0 },
-      output_tokens: 500,
-      output_tokens_details: { reasoning_tokens: 25 },
-      total_tokens: 1500,
+    const responseUsage: ModelUsage = {
+      cachedInputTokens: 0,
+      uncachedInputTokens: 1000,
+      totalInputTokens: 1000,
+      outputTokens: 500,
+      reasoningTokens: 25,
+      totalTokens: 1500,
     };
 
     const result = convertUsage(responseUsage);
@@ -304,12 +307,13 @@ describe('convertUsage', () => {
   });
 
   it('リーズニングトークンがゼロの場合', () => {
-    const responseUsage: ResponseUsage = {
-      input_tokens: 500,
-      input_tokens_details: { cached_tokens: 100 },
-      output_tokens: 300,
-      output_tokens_details: { reasoning_tokens: 0 },
-      total_tokens: 800,
+    const responseUsage: ModelUsage = {
+      cachedInputTokens: 100,
+      uncachedInputTokens: 400,
+      totalInputTokens: 500,
+      outputTokens: 300,
+      reasoningTokens: 0,
+      totalTokens: 800,
     };
 
     const result = convertUsage(responseUsage);
@@ -326,12 +330,13 @@ describe('convertUsage', () => {
   });
 
   it('すべてのトークンがキャッシュされている場合', () => {
-    const responseUsage: ResponseUsage = {
-      input_tokens: 1000,
-      input_tokens_details: { cached_tokens: 1000 },
-      output_tokens: 200,
-      output_tokens_details: { reasoning_tokens: 10 },
-      total_tokens: 1200,
+    const responseUsage: ModelUsage = {
+      cachedInputTokens: 1000,
+      uncachedInputTokens: 0,
+      totalInputTokens: 1000,
+      outputTokens: 200,
+      reasoningTokens: 10,
+      totalTokens: 1200,
     };
 
     const result = convertUsage(responseUsage);

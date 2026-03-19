@@ -1,31 +1,24 @@
-import { env } from 'cloudflare:test';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ModelRequest } from '@echo-chamber/core/ports/model';
 
 import {
-  mockThinkingStream,
-  mockThinkingStreamSend,
-} from '../../../test/mocks/thinking-stream';
-
-import {
-  formatLogOutput,
-  formatInputItem,
-  formatOutputItem,
-  formatMessage,
   formatBlock,
   formatFunctionCall,
   formatFunctionCallOutput,
-  OpenAIClient,
-} from './client';
-import { thinkDeeplyFunction } from './functions/think';
+  formatInputItem,
+  formatLogOutput,
+  formatMessage,
+  formatOutputItem,
+  OpenAIResponsesModel,
+} from './openai-responses-model';
 
 import type {
+  EasyInputMessage,
+  ResponseFunctionToolCall,
   ResponseInputItem,
   ResponseOutputItem,
-  EasyInputMessage,
   ResponseOutputMessage,
-  ResponseFunctionToolCall,
 } from 'openai/resources/responses/responses';
 
 const mockCreateResponse = vi.fn();
@@ -40,13 +33,42 @@ vi.mock('openai', () => {
   };
 });
 
-describe('OpenAI Client', () => {
+const mockLogger = {
+  debug: vi.fn().mockResolvedValue(undefined),
+  warn: vi.fn().mockResolvedValue(undefined),
+};
+
+const mockThoughtLog = {
+  send: vi.fn().mockResolvedValue(undefined),
+};
+
+const thinkDeeplyTool = {
+  name: 'think_deeply',
+  description: 'Deep thinking tool',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      thought: {
+        type: 'string',
+      },
+    },
+    required: ['thought'],
+    additionalProperties: false,
+  },
+  strict: true,
+};
+
+describe('OpenAIResponsesModel', () => {
   beforeEach(() => {
     vi.resetAllMocks();
   });
 
   it('createResponse は provider-neutral request を Responses API 形式へ変換する', async () => {
-    const client = new OpenAIClient(env, mockThinkingStream);
+    const model = new OpenAIResponsesModel({
+      apiKey: 'test-key',
+      logger: mockLogger,
+      thoughtLog: mockThoughtLog,
+    });
     const request: ModelRequest = {
       input: [
         {
@@ -65,14 +87,15 @@ describe('OpenAI Client', () => {
           output: '{"success":true}',
         },
       ],
-      tools: [thinkDeeplyFunction.contract],
+      tools: [thinkDeeplyTool],
       previousResponseToken: 'response_prev',
     };
+
     mockCreateResponse.mockResolvedValue({
       output: [],
     });
 
-    await client.createResponse(request);
+    await model.createResponse(request);
 
     expect(mockCreateResponse).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -101,14 +124,27 @@ describe('OpenAI Client', () => {
         store: true,
         stream: false,
         tool_choice: 'auto',
-        tools: [thinkDeeplyFunction.definition],
+        tools: [
+          {
+            type: 'function',
+            name: 'think_deeply',
+            description: 'Deep thinking tool',
+            parameters: thinkDeeplyTool.inputSchema,
+            strict: true,
+          },
+        ],
         truncation: 'auto',
       })
     );
   });
 
   it('generate は OpenAI response を core model response へ変換する', async () => {
-    const client = new OpenAIClient(env, mockThinkingStream);
+    const model = new OpenAIResponsesModel({
+      apiKey: 'test-key',
+      logger: mockLogger,
+      thoughtLog: mockThoughtLog,
+    });
+
     mockCreateResponse.mockResolvedValue({
       id: 'response_123',
       output: [
@@ -142,14 +178,14 @@ describe('OpenAI Client', () => {
       },
     });
 
-    const response = await client.generate({
+    const response = await model.generate({
       input: [
         {
           role: 'user',
           content: 'hello',
         },
       ],
-      tools: [thinkDeeplyFunction.contract],
+      tools: [thinkDeeplyTool],
     });
 
     expect(response).toEqual({
@@ -176,19 +212,24 @@ describe('OpenAI Client', () => {
       },
       responseToken: 'response_123',
     });
-    expect(mockThinkingStreamSend).toHaveBeenCalledWith(
+    expect(mockThoughtLog.send).toHaveBeenCalledWith(
       '*thinking: Thinking complete*\n\n*think_deeply: test*'
     );
   });
 
   it('usage がない response はゼロ usage として扱う', async () => {
-    const client = new OpenAIClient(env, mockThinkingStream);
+    const model = new OpenAIResponsesModel({
+      apiKey: 'test-key',
+      logger: mockLogger,
+      thoughtLog: mockThoughtLog,
+    });
+
     mockCreateResponse.mockResolvedValue({
       id: 'response_123',
       output: [],
     });
 
-    const response = await client.generate({
+    const response = await model.generate({
       input: [
         {
           role: 'user',
@@ -522,7 +563,6 @@ describe('formatLogOutput', () => {
   });
 
   it('空になるログ出力', () => {
-    // undefinedを返すoutputアイテムを作る
     const output: ResponseOutputItem[] = [
       {
         type: 'unknown_type',

@@ -22,11 +22,12 @@
   - 状態: レビュー済み / コミット済み
   - コミット: `84a3026`
   - レビュー対象: prompt と tool spec の単一ソース化
-- [ ] Checkpoint 6: agent loop の意味論を core に寄せる
-  - 状態: 実装完了 / レビュー待ち / 未コミット
+- [x] Checkpoint 6: agent loop の意味論を core に寄せる
+  - 状態: レビュー済み / コミット済み
+  - コミット: `302241f`
   - レビュー対象: loop / finish 条件 / usage 管理の core 移設
 - [ ] Checkpoint 7: OpenAI adapter 分離
-  - 状態: 未着手
+  - 状態: 実装完了 / レビュー待ち / 未コミット
   - レビュー対象: `ModelPort` の OpenAI 実装と変換層
 - [ ] Checkpoint 8: Discord adapter 分離
   - 状態: 未着手
@@ -131,7 +132,7 @@
 
 ## 現在のチェックポイント
 
-### Checkpoint 6: agent loop の意味論を core に寄せる
+### Checkpoint 7: OpenAI adapter 分離
 
 状態:
 
@@ -141,37 +142,40 @@
 
 内容:
 
-- `core` に provider 非依存の agent session loop を追加し、turn loop / tool dispatch / finish 条件 / usage 累積を移した
-- worker 側の `OpenAIClient` は `ModelPort` 実装へ縮退させ、OpenAI Responses API の入出力変換と thought log 送信に責務を絞った
-- `ThinkingEngine` は composition root として tool 群、runtime context、初期 input を束ねて `runAgentSession` を呼ぶ形に変えた
-- `Tool` は provider 向け `contract` を持つようにし、OpenAI function tool 定義は contract から組み立てるようにした
+- OpenAI Responses API 実装を `packages/openai-adapter` へ移し、`OpenAIResponsesModel` を `ModelPort` adapter として切り出した
+- worker 側の `ThinkingEngine` は package 側 adapter を使うだけにし、OpenAI 実装本体は workspace package に閉じ込めた
+- `core` の `convertUsage` を `ModelUsage` 基準へ変更し、`core` から OpenAI 型 import を除去した
+- OpenAI adapter のテストを package 側へ移し、ルート `test:run` に組み込んだ
 
 新設した主なファイル:
 
-- `packages/core/src/agent/session.ts`
-- `packages/core/src/agent/session.test.ts`
+- `packages/openai-adapter/src/openai-responses-model.ts`
+- `packages/openai-adapter/src/openai-responses-model.test.ts`
 
 変更した主なファイル:
 
 - `apps/cloudflare-workers/src/echo/thinking-engine/index.ts`
 - `apps/cloudflare-workers/src/llm/openai/client.ts`
-- `apps/cloudflare-workers/src/llm/openai/client.test.ts`
-- `apps/cloudflare-workers/src/llm/openai/functions/index.ts`
-- `apps/cloudflare-workers/test/mocks/thinking-stream.ts`
+- `apps/cloudflare-workers/src/echo/index.tsx`
+- `apps/cloudflare-workers/package.json`
+- `package.json`
 - `packages/core/package.json`
+- `packages/core/src/echo/usage.ts`
+- `packages/core/src/echo/usage.test.ts`
 - `packages/core/src/ports/model.ts`
 
 この段階で達成したこと:
 
-- agent loop の停止条件と usage 累積が OpenAI 実装から切り離された
-- worker 側の OpenAI 実装は `ModelRequest` / `ModelResponse` 変換に集中する構造になった
-- 初期 prompt / 初期 notification seed / tool handlers をつないで session を動かす責務が `ThinkingEngine` に整理された
+- OpenAI 実装本体が worker workspace の外に出て、package 単位で差し替え可能な位置に置かれた
+- OpenAI 固有の request / response / log formatting は adapter package に集約された
+- `core` の usage 変換は provider-neutral になり、OpenAI 型への依存が消えた
+- worker 側には package source を参照する薄い shim だけを残し、entry 側の変更を最小化した
 
 この段階ではまだやっていないこと:
 
-- `OpenAIClient` の package 分離
-- Discord / Cloudflare runtime package への本格的な実装移設
-- `core` から OpenAI 型 import を完全に追い出す整理
+- Discord adapter への分離
+- Cloudflare runtime package への本格的な実装移設
+- worker 側の shim を不要にする import 解決の最終整理
 
 品質チェック:
 
@@ -184,9 +188,9 @@
 
 レビュー観点:
 
-- loop の意味論が `core` に寄ったことで責務分割が明確になっているか
-- `OpenAIClient` が adapter として十分に薄くなっているか
-- `ThinkingEngine` の composition root としての形が次の package 分離に耐えるか
+- OpenAI 実装が package 単位で独立した責務になっているか
+- `core` から OpenAI 型依存が実際に消えているか
+- worker 側に残した shim と package 境界の取り方が次段階の分離に耐えるか
 
 ## 次のチェックポイント候補と横断タスク
 

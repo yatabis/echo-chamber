@@ -380,7 +380,7 @@ export class Echo extends DurableObject<Env> {
 
     try {
       const usage = await this.getThinkingEngineOrThrow().think();
-      await this.logger.info(`usage: ${usage.total_tokens}`);
+      await this.logger.info(`usage: ${usage.totalTokens}`);
       await this.updateUsage(convertUsage(usage));
       await this.logger.info(`${name}が思考を正常に完了しました。`);
     } catch (error) {

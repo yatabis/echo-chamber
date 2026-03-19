@@ -1,7 +1,7 @@
 import { formatDate } from '../utils/datetime';
 
 import type { Usage, UsageRecord } from './types';
-import type { ResponseUsage } from 'openai/resources/responses/responses';
+import type { ModelUsage } from '../ports/model';
 
 /**
  * 今日の日付キーを 'YYYY-MM-DD' 形式で取得
@@ -39,23 +39,17 @@ export function addUsage(
 }
 
 /**
- * OpenAI SDKのResponseUsageをEchoのUsageに変換する
- * @param usage OpenAI SDKのResponseUsage
+ * provider 非依存の ModelUsage を Echo の Usage に変換する
+ * @param usage provider 正規化済みの usage
  * @returns EchoのUsage
  */
-export function convertUsage(usage: ResponseUsage): Usage {
-  const {
-    input_tokens,
-    input_tokens_details,
-    output_tokens,
-    output_tokens_details,
-    total_tokens,
-  } = usage;
-  const { cached_tokens } = input_tokens_details;
-  const { reasoning_tokens } = output_tokens_details;
-
-  const cached_input_tokens = cached_tokens;
-  const uncached_input_tokens = input_tokens - cached_tokens;
+export function convertUsage(usage: ModelUsage): Usage {
+  const cached_input_tokens = usage.cachedInputTokens;
+  const uncached_input_tokens = usage.uncachedInputTokens;
+  const total_input_tokens = usage.totalInputTokens;
+  const output_tokens = usage.outputTokens;
+  const reasoning_tokens = usage.reasoningTokens;
+  const total_tokens = usage.totalTokens;
 
   // See https://platform.openai.com/docs/pricing
   const total_cost =
@@ -67,7 +61,7 @@ export function convertUsage(usage: ResponseUsage): Usage {
   return {
     cached_input_tokens,
     uncached_input_tokens,
-    total_input_tokens: input_tokens,
+    total_input_tokens,
     output_tokens,
     reasoning_tokens,
     total_tokens,

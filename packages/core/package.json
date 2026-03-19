@@ -15,6 +15,7 @@
     "./ports/model": "./src/ports/model.ts",
     "./ports/note": "./src/ports/note.ts",
     "./ports/notification": "./src/ports/notification.ts",
+    "./ports/thought-log": "./src/ports/thought-log.ts",
     "./agent/tool-context": "./src/agent/tool-context.ts",
     "./agent/prompt-builder": "./src/agent/prompt-builder.ts",
     "./agent/session": "./src/agent/session.ts",
@@ -34,7 +35,6 @@
   "dependencies": {
     "@discordjs/rest": "2.5.1",
     "discord-api-types": "0.38.16",
-    "openai": "6.29.0",
     "zod": "4.0.5"
   }
 }
