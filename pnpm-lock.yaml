@@ -148,6 +148,9 @@ importers:
       '@echo-chamber/core':
         specifier: workspace:*
         version: link:../core
+      zod:
+        specifier: 4.0.5
+        version: 4.0.5
 
   packages/core:
     dependencies:

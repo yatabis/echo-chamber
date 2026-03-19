@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./dashboard/schemas": "./src/dashboard/schemas.ts",
     "./dashboard/types": "./src/dashboard/types.ts",
     "./dashboard/utils": "./src/dashboard/utils.ts"
   },
@@ -12,6 +13,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@echo-chamber/core": "workspace:*"
+    "@echo-chamber/core": "workspace:*",
+    "zod": "4.0.5"
   }
 }

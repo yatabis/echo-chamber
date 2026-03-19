@@ -1,5 +1,6 @@
 import { Hono, type Context } from 'hono';
 
+import { parseDashboardInstanceSummary } from '@echo-chamber/contracts/dashboard/schemas';
 import type {
   DashboardInstanceSummary,
   DashboardInstancesResponse,
@@ -14,43 +15,6 @@ import { Echo } from './echo';
 const app = new Hono<{ Bindings: Env }>();
 
 type AppContext = Context<{ Bindings: Env }>;
-
-/**
- * Dashboard で許容する state 文字列か判定する。
- *
- * @param value 検証対象の unknown 値
- * @return DashboardInstanceSummary の state として有効な文字列であれば true
- */
-function isState(value: unknown): boolean {
-  return (
-    value === 'Idling' ||
-    value === 'Running' ||
-    value === 'Sleeping' ||
-    value === 'Unknown'
-  );
-}
-
-/**
- * `/instances` で取得した JSON が `DashboardInstanceSummary` として妥当か判定する。
- *
- * @param value 検証対象の unknown 値
- * @returns `DashboardInstanceSummary` として扱える場合 `true`
- */
-function isDashboardInstanceSummary(
-  value: unknown
-): value is DashboardInstanceSummary {
-  if (typeof value !== 'object' || value === null) {
-    return false;
-  }
-
-  const record = value as Record<string, unknown>;
-  return (
-    (record.id === 'rin' || record.id === 'marie') &&
-    typeof record.name === 'string' &&
-    isState(record.state) &&
-    (typeof record.nextAlarm === 'string' || record.nextAlarm === null)
-  );
-}
 
 /**
  * Dashboard SPA のエントリ HTML を返す。
@@ -138,12 +102,9 @@ app.get('/instances', async (c) => {
             );
           }
 
-          const summary = await summaryResponse.json<unknown>();
-          if (!isDashboardInstanceSummary(summary)) {
-            throw new Error(`Invalid summary payload for ${instanceId}`);
-          }
-
-          return summary;
+          return parseDashboardInstanceSummary(
+            await summaryResponse.json<unknown>()
+          );
         } catch {
           return {
             id: instanceId,

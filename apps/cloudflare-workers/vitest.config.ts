@@ -9,6 +9,7 @@ const cloudflareRuntimeSrcDir = path.resolve(
   packagesDir,
   'cloudflare-runtime/src'
 );
+const contractsSrcDir = path.resolve(packagesDir, 'contracts/src');
 const discordAdapterSrcDir = path.resolve(packagesDir, 'discord-adapter/src');
 const openaiAdapterSrcDir = path.resolve(packagesDir, 'openai-adapter/src');
 
@@ -18,6 +19,10 @@ export default defineWorkersConfig({
       {
         find: /^@echo-chamber\/cloudflare-runtime\/(.*)$/,
         replacement: `${cloudflareRuntimeSrcDir}/$1`,
+      },
+      {
+        find: /^@echo-chamber\/contracts\/(.*)$/,
+        replacement: `${contractsSrcDir}/$1`,
       },
       {
         find: /^@echo-chamber\/discord-adapter\/(.*)$/,

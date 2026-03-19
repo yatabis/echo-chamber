@@ -42,9 +42,13 @@
   - 状態: レビュー済み / コミット済み
   - コミット: `e92826c`
   - レビュー対象: dashboard DTO を agent core から切り離す構造
-- [ ] 横断タスク: barrel export 廃止
-  - 状態: 継続中
+- [x] 横断タスク: barrel export 廃止
+  - 状態: レビュー済み / コミット済み
+  - コミット: `b18dfbc`, `4f6eeff`, `b4473d4`, `76ac0e5`
   - レビュー対象: subpath export への移行完了とバレル削除
+- [ ] Checkpoint 11: dashboard contract schema 導入
+  - 状態: レビュー待ち / 未コミット
+  - レビュー対象: contracts の runtime schema と fetch 境界の parser 適用
 
 ## 目的
 
@@ -187,7 +191,7 @@
 
 ## 現在のチェックポイント
 
-### 横断タスク: barrel export 廃止（root entrypoint removal）
+### Checkpoint 11: dashboard contract schema 導入
 
 状態:
 
@@ -197,54 +201,42 @@
 
 内容:
 
-- 直前の `worker shim cleanup` は `b18dfbc` (`reduce worker adapter shims`) でコミット済み
-- `core root import reduction` は `4f6eeff` (`replace core root imports with subpath imports`) でコミット済み
-- `packages/core/src/ports/index.ts` を削除し、`ports/context` と `ports/runtime` も subpath export で直接公開する形に変えた
-- 各 package の `src/index.ts` と `"."` export を削除し、subpath のみを正式な公開面にした
-- `packages/core/README.md` を subpath import 前提の公開方針に更新した
-- worker 側に残していた Discord 互換 shim を削除し、`discord-adapter` の subpath を直接 import する形に変えた
-- worker test setup も package subpath を直接 mock するように更新した
+- `packages/contracts/src/dashboard/schemas.ts` を追加し、`/instances` と `/:instanceId` の response shape を zod schema として定義した
+- `packages/contracts/src/dashboard/types.ts` は schema から型を導出する形に変え、dashboard 契約の単一ソースを schema に寄せた
+- worker 側の `/instances` response 検証は手書き type guard ではなく `parseDashboardInstanceSummary()` を使う形に変えた
+- dashboard 側の fetch 結果も `parseDashboardInstancesResponse()` / `parseEchoStatus()` を通して受ける形に変えた
+- contracts package に schema test を追加し、契約の正常系/異常系を package 単位で確認できるようにした
 
 新設した主なファイル:
 
-- なし
+- `packages/contracts/src/dashboard/schemas.ts`
+- `packages/contracts/src/dashboard/schemas.test.ts`
 
 削除した主なファイル:
 
-- `apps/cloudflare-workers/src/discord/client.ts`
-- `packages/cloudflare-runtime/src/index.ts`
-- `packages/contracts/src/index.ts`
-- `packages/core/src/index.ts`
-- `packages/core/src/ports/index.ts`
-- `packages/discord-adapter/src/index.ts`
-- `packages/openai-adapter/src/index.ts`
+- なし
 
 変更した主なファイル:
 
-- `apps/cloudflare-workers/src/echo/index.tsx`
-- `apps/cloudflare-workers/src/echo/thinking-engine/index.ts`
-- `apps/cloudflare-workers/src/llm/openai/functions/tool-context.ts`
-- `apps/cloudflare-workers/src/utils/logger.ts`
-- `apps/cloudflare-workers/test/setup.ts`
-- `apps/cloudflare-workers/vitest.config.ts`
-- `apps/cloudflare-workers/package.json`
-- `packages/core/src/index.ts`
-- `packages/core/package.json`
-- `packages/core/README.md`
-- `packages/cloudflare-runtime/package.json`
+- `packages/contracts/src/dashboard/types.ts`
+- `packages/contracts/src/dashboard/utils.ts`
 - `packages/contracts/package.json`
-- `packages/discord-adapter/package.json`
-- `packages/openai-adapter/package.json`
+- `packages/contracts/vitest.config.ts`
+- `apps/cloudflare-workers/src/index.ts`
+- `apps/cloudflare-workers/src/index.test.ts`
+- `apps/dashboard/src/App.tsx`
+- `pnpm-lock.yaml`
+- `docs/agent-core-refactor-checkpoints.md`
 
 この段階で達成したこと:
 
-- package root entrypoint への依存を前提にしない構成に寄せられた
-- `core/src/index.ts` と `core/src/ports/index.ts` に加えて、各 package の空 `src/index.ts` も不要化できた
-- worker 側の Discord adapter 参照も相対 shim ではなく package subpath に統一できた
+- dashboard 契約の runtime validation を `contracts` package に集約できた
+- worker / dashboard の fetch 境界で契約 parser を共通利用できるようになった
+- 手書き type guard / unsafe cast を contracts schema に置き換えられた
 
 この段階ではまだやっていないこと:
 
-- request / response schema の本格導入
+- dashboard 以外の request / response schema 導入
 
 品質チェック:
 

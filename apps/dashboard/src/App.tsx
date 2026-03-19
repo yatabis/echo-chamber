@@ -8,6 +8,10 @@ import {
 } from '@tanstack/react-router';
 import { useEffect, useMemo, useState } from 'react';
 
+import {
+  parseDashboardInstancesResponse,
+  parseEchoStatus,
+} from '@echo-chamber/contracts/dashboard/schemas';
 import type {
   DashboardInstancesResponse,
   DashboardUsageBreakdownTotals,
@@ -355,7 +359,7 @@ function DashboardListPage(): JSX.Element {
           throw new Error(`/instances failed: ${response.status}`);
         }
 
-        const payload = (await response.json()) as DashboardInstancesResponse;
+        const payload = parseDashboardInstancesResponse(await response.json());
         if (!active) {
           return;
         }
@@ -658,7 +662,7 @@ function DashboardDetailPage(): JSX.Element {
           throw new Error(`/${instanceId} failed: ${response.status}`);
         }
 
-        const payload = (await response.json()) as EchoStatus;
+        const payload = parseEchoStatus(await response.json());
 
         if (!active) {
           return;

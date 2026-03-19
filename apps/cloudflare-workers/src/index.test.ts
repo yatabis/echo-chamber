@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
+import {
+  parseDashboardInstancesResponse,
+  parseEchoStatus,
+} from '@echo-chamber/contracts/dashboard/schemas';
 import type {
   DashboardInstanceSummary,
   EchoStatus,
@@ -21,33 +25,6 @@ interface MockEnvOptions {
 interface MockEnvResult {
   env: Env;
   getDurableObjectFetchCount(): number;
-}
-
-function isInstancesPayload(
-  value: unknown
-): value is { instances: DashboardInstanceSummary[] } {
-  if (typeof value !== 'object' || value === null) {
-    return false;
-  }
-
-  const record = value as Record<string, unknown>;
-  return Array.isArray(record.instances);
-}
-
-function isEchoStatus(value: unknown): value is EchoStatus {
-  if (typeof value !== 'object' || value === null) {
-    return false;
-  }
-
-  const record = value as Record<string, unknown>;
-  return (
-    typeof record.id === 'string' &&
-    typeof record.name === 'string' &&
-    (record.state === 'Idling' ||
-      record.state === 'Running' ||
-      record.state === 'Sleeping') &&
-    (typeof record.nextAlarm === 'string' || record.nextAlarm === null)
-  );
 }
 
 function createMockEnv(options: MockEnvOptions = {}): MockEnvResult {
@@ -217,12 +194,9 @@ describe('worker routes', () => {
 
     expect(response.status).toBe(200);
 
-    const body = await response.json<unknown>();
-    expect(isInstancesPayload(body)).toBe(true);
-
-    if (!isInstancesPayload(body)) {
-      throw new Error('Invalid /instances payload');
-    }
+    const body = parseDashboardInstancesResponse(
+      await response.json<unknown>()
+    );
 
     expect(body.instances).toHaveLength(2);
     expect(body.instances[0]).toEqual({
@@ -291,12 +265,7 @@ describe('worker routes', () => {
 
     expect(response.status).toBe(200);
 
-    const body = await response.json<unknown>();
-    expect(isEchoStatus(body)).toBe(true);
-
-    if (!isEchoStatus(body)) {
-      throw new Error('Invalid EchoStatus payload');
-    }
+    const body = parseEchoStatus(await response.json<unknown>());
 
     expect(body.id).toBe('rin');
     expect(body.name).toBe('リン');

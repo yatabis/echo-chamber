@@ -1,43 +1,29 @@
 import type {
-  EchoState,
-  Note,
-  UsageRecord,
-} from '@echo-chamber/core/echo/types';
-import type { EchoInstanceId } from '@echo-chamber/core/types/echo-config';
+  dashboardInstanceSummarySchema,
+  dashboardInstancesResponseSchema,
+  dashboardSummaryStateSchema,
+  echoMemorySchema,
+  echoStateSchema,
+  echoStatusSchema,
+  noteSchema,
+  usageRecordSchema,
+  usageSchema,
+} from './schemas';
+import type { z } from 'zod';
 
-export interface EchoMemory {
-  content: string;
-  type: 'semantic' | 'episode';
-  emotion: {
-    valence: number;
-    arousal: number;
-    labels: string[];
-  };
-  embedding_model: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface EchoStatus {
-  id: string;
-  name: string;
-  state: EchoState;
-  nextAlarm: string | null;
-  memories: EchoMemory[];
-  notes: Note[];
-  usage: UsageRecord;
-}
-
-export interface DashboardInstanceSummary {
-  id: EchoInstanceId;
-  name: string;
-  state: EchoState | 'Unknown';
-  nextAlarm: string | null;
-}
-
-export interface DashboardInstancesResponse {
-  instances: DashboardInstanceSummary[];
-}
+export type EchoState = z.infer<typeof echoStateSchema>;
+export type DashboardSummaryState = z.infer<typeof dashboardSummaryStateSchema>;
+export type Usage = z.infer<typeof usageSchema>;
+export type UsageRecord = z.infer<typeof usageRecordSchema>;
+export type Note = z.infer<typeof noteSchema>;
+export type EchoMemory = z.infer<typeof echoMemorySchema>;
+export type EchoStatus = z.infer<typeof echoStatusSchema>;
+export type DashboardInstanceSummary = z.infer<
+  typeof dashboardInstanceSummarySchema
+>;
+export type DashboardInstancesResponse = z.infer<
+  typeof dashboardInstancesResponseSchema
+>;
 
 export type DashboardUsageDays = 7 | 30;
 

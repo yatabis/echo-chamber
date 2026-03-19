@@ -10,10 +10,6 @@ export default defineConfig({
   resolve: {
     alias: [
       {
-        find: /^@echo-chamber\/core$/,
-        replacement: path.join(coreSrcDir, 'index.ts'),
-      },
-      {
         find: /^@echo-chamber\/core\/(.*)$/,
         replacement: `${coreSrcDir}/$1`,
       },

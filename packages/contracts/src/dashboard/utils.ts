@@ -1,4 +1,3 @@
-import type { Note, Usage, UsageRecord } from '@echo-chamber/core/echo/types';
 import { formatDate } from '@echo-chamber/core/utils/datetime';
 
 import type {
@@ -6,6 +5,9 @@ import type {
   DashboardUsageDays,
   DashboardUsageRatioMetrics,
   DashboardUsageStackedPoint,
+  Note,
+  Usage,
+  UsageRecord,
 } from './types';
 
 const USAGE_DAY_BOUNDARY_OFFSET_HOURS = 7;
