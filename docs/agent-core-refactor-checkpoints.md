@@ -202,6 +202,8 @@
 - `packages/core/src/ports/index.ts` を削除し、`ports/context` と `ports/runtime` も subpath export で直接公開する形に変えた
 - 各 package の `src/index.ts` と `"."` export を削除し、subpath のみを正式な公開面にした
 - `packages/core/README.md` を subpath import 前提の公開方針に更新した
+- worker 側に残していた Discord 互換 shim を削除し、`discord-adapter` の subpath を直接 import する形に変えた
+- worker test setup も package subpath を直接 mock するように更新した
 
 新設した主なファイル:
 
@@ -209,6 +211,7 @@
 
 削除した主なファイル:
 
+- `apps/cloudflare-workers/src/discord/client.ts`
 - `packages/cloudflare-runtime/src/index.ts`
 - `packages/contracts/src/index.ts`
 - `packages/core/src/index.ts`
@@ -218,6 +221,13 @@
 
 変更した主なファイル:
 
+- `apps/cloudflare-workers/src/echo/index.tsx`
+- `apps/cloudflare-workers/src/echo/thinking-engine/index.ts`
+- `apps/cloudflare-workers/src/llm/openai/functions/tool-context.ts`
+- `apps/cloudflare-workers/src/utils/logger.ts`
+- `apps/cloudflare-workers/test/setup.ts`
+- `apps/cloudflare-workers/vitest.config.ts`
+- `apps/cloudflare-workers/package.json`
 - `packages/core/src/index.ts`
 - `packages/core/package.json`
 - `packages/core/README.md`
@@ -230,11 +240,11 @@
 
 - package root entrypoint への依存を前提にしない構成に寄せられた
 - `core/src/index.ts` と `core/src/ports/index.ts` に加えて、各 package の空 `src/index.ts` も不要化できた
+- worker 側の Discord adapter 参照も相対 shim ではなく package subpath に統一できた
 
 この段階ではまだやっていないこと:
 
 - request / response schema の本格導入
-- Discord 互換 shim の最終判断
 
 品質チェック:
 

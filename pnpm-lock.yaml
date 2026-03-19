@@ -81,9 +81,21 @@ importers:
 
   apps/cloudflare-workers:
     dependencies:
+      '@echo-chamber/cloudflare-runtime':
+        specifier: workspace:*
+        version: link:../../packages/cloudflare-runtime
+      '@echo-chamber/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@echo-chamber/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@echo-chamber/discord-adapter':
+        specifier: workspace:*
+        version: link:../../packages/discord-adapter
+      '@echo-chamber/openai-adapter':
+        specifier: workspace:*
+        version: link:../../packages/openai-adapter
       hono:
         specifier: 4.7.11
         version: 4.7.11
@@ -96,6 +108,9 @@ importers:
 
   apps/dashboard:
     dependencies:
+      '@echo-chamber/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@echo-chamber/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -122,14 +137,41 @@ importers:
         specifier: ^6.4.1
         version: 6.4.1(@types/node@24.3.0)
 
+  packages/cloudflare-runtime:
+    dependencies:
+      '@echo-chamber/core':
+        specifier: workspace:*
+        version: link:../core
+
+  packages/contracts:
+    dependencies:
+      '@echo-chamber/core':
+        specifier: workspace:*
+        version: link:../core
+
   packages/core:
+    dependencies:
+      zod:
+        specifier: 4.0.5
+        version: 4.0.5
+
+  packages/discord-adapter:
     dependencies:
       '@discordjs/rest':
         specifier: 2.5.1
         version: 2.5.1
+      '@echo-chamber/core':
+        specifier: workspace:*
+        version: link:../core
       discord-api-types:
         specifier: 0.38.16
         version: 0.38.16
+
+  packages/openai-adapter:
+    dependencies:
+      '@echo-chamber/core':
+        specifier: workspace:*
+        version: link:../core
       openai:
         specifier: 6.29.0
         version: 6.29.0(ws@8.18.0)(zod@4.0.5)

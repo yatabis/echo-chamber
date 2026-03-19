@@ -27,9 +27,9 @@ import type {
 import { isValidInstanceId } from '@echo-chamber/core/types/echo-config';
 import { formatDatetime } from '@echo-chamber/core/utils/datetime';
 import { getErrorMessage } from '@echo-chamber/core/utils/error';
+import { getUnreadMessageCount } from '@echo-chamber/discord-adapter/notification-utils';
 
 import { getInstanceConfig } from '../config/echo-registry';
-import { getUnreadMessageCount } from '../discord/client';
 import { createEmbeddingService } from '../llm/embedding-factory';
 import { createLogger } from '../utils/logger';
 

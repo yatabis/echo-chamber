@@ -18,12 +18,32 @@ const mockThoughtLog = {
   send: vi.fn().mockResolvedValue(undefined),
 };
 
-vi.mock('../src/discord/client', () => {
+vi.mock('@echo-chamber/discord-adapter/chat-port', () => {
   return {
     createDiscordChatPort: vi.fn(() => mockChatPort),
+  };
+});
+
+vi.mock('@echo-chamber/discord-adapter/notification-port', () => {
+  return {
     createDiscordNotificationPort: vi.fn(() => mockNotificationPort),
+  };
+});
+
+vi.mock('@echo-chamber/discord-adapter/discord-thought-log', () => {
+  return {
     DiscordThoughtLog: vi.fn(() => mockThoughtLog),
+  };
+});
+
+vi.mock('@echo-chamber/discord-adapter/notification-utils', () => {
+  return {
     getUnreadMessageCount: vi.fn(),
+  };
+});
+
+vi.mock('@echo-chamber/discord-adapter/api', () => {
+  return {
     sendChannelMessage: vi.fn(),
   };
 });

@@ -11,9 +11,9 @@ import type {
   ModelUsage,
 } from '@echo-chamber/core/ports/model';
 import type { EchoInstanceConfig } from '@echo-chamber/core/types/echo-config';
+import { DiscordThoughtLog } from '@echo-chamber/discord-adapter/discord-thought-log';
 import { OpenAIResponsesModel } from '@echo-chamber/openai-adapter/openai-responses-model';
 
-import { DiscordThoughtLog } from '../../discord/client';
 import { createEmbeddingService } from '../../llm/embedding-factory';
 import {
   addReactionToChatMessageFunction,

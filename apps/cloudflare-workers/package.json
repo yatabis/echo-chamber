@@ -16,6 +16,7 @@
     "@echo-chamber/cloudflare-runtime": "workspace:*",
     "@echo-chamber/contracts": "workspace:*",
     "@echo-chamber/core": "workspace:*",
+    "@echo-chamber/discord-adapter": "workspace:*",
     "@echo-chamber/openai-adapter": "workspace:*",
     "hono": "4.7.11",
     "openai": "6.29.0",

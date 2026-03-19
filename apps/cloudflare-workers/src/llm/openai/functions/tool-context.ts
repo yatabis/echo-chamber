@@ -6,11 +6,8 @@ import type { LoggerPort } from '@echo-chamber/core/ports/logger';
 import type { MemorySearchResult } from '@echo-chamber/core/ports/memory';
 import type { NotePort } from '@echo-chamber/core/ports/note';
 import type { EchoInstanceConfig } from '@echo-chamber/core/types/echo-config';
-
-import {
-  createDiscordChatPort,
-  createDiscordNotificationPort,
-} from '../../../discord/client';
+import { createDiscordChatPort } from '@echo-chamber/discord-adapter/chat-port';
+import { createDiscordNotificationPort } from '@echo-chamber/discord-adapter/notification-port';
 
 import type { Logger } from '../../../utils/logger';
 
