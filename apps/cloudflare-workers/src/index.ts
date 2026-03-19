@@ -1,10 +1,10 @@
 import { Hono, type Context } from 'hono';
 
-import { ECHO_INSTANCE_IDS, isValidInstanceId } from '@echo-chamber/core';
 import type {
   DashboardInstanceSummary,
   DashboardInstancesResponse,
-} from '@echo-chamber/core';
+} from '@echo-chamber/contracts/dashboard/types';
+import { ECHO_INSTANCE_IDS, isValidInstanceId } from '@echo-chamber/core';
 
 import { Echo } from './echo';
 

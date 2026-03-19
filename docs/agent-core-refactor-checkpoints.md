@@ -34,14 +34,15 @@
   - 状態: レビュー済み / コミット済み
   - コミット: `4ea2bb4`
   - レビュー対象: chat / notification / thought-log の分離
-- [ ] Checkpoint 9: Cloudflare runtime 分離
-  - 状態: 実装完了 / レビュー待ち / 未コミット
+- [x] Checkpoint 9: Cloudflare runtime 分離
+  - 状態: レビュー済み / コミット済み
+  - コミット: `2b85f0f`
   - レビュー対象: Memory / Note / logger 実装を runtime package に隔離
 - [ ] Checkpoint 10: contracts と dashboard 依存整理
-  - 状態: 未着手
+  - 状態: 実装完了 / レビュー待ち / 未コミット
   - レビュー対象: dashboard DTO を agent core から切り離す構造
 - [ ] 横断タスク: barrel export 廃止
-  - 状態: 未着手
+  - 状態: 継続中
   - レビュー対象: subpath export への移行完了とバレル削除
 
 ## 目的
@@ -185,7 +186,7 @@
 
 ## 現在のチェックポイント
 
-### Checkpoint 9: Cloudflare runtime 分離
+### Checkpoint 10: contracts と dashboard 依存整理
 
 状態:
 
@@ -195,53 +196,51 @@
 
 内容:
 
-- `MemorySystem` と `NoteSystem` を `packages/cloudflare-runtime` に移し、SQLite / Durable Object storage に触る実装本体を worker package の外へ出した
-- `EmbeddingService` 抽象を runtime package に追加し、worker 側の OpenAI / Workers AI 実装はその interface を満たす形にした
-- logger の中核実装を `CloudflareRuntimeLogger` として runtime package に移し、worker 側は Discord 送信 callback を差し込む thin wrapper だけにした
-- worker 側には `src/runtime/*` の shim を置き、entry / thinking engine / tool-context から runtime package source を参照する形に整理した
-- Memory / Note のテストを runtime package 側に移し、ルート `test:run` に組み込んだ
+- dashboard 向け DTO と表示用 util を `packages/core` から `packages/contracts` に移した
+- worker 側の API response 組み立ては `@echo-chamber/contracts/dashboard/types` を参照する形に切り替えた
+- dashboard 側の usage 集計・ノートフィルタ・DTO import を `@echo-chamber/contracts` 基準へ寄せた
+- `packages/core` から dashboard 専用 export を削除し、agent domain と UI / API representation の境界を分けた
+- `packages/contracts` に dashboard 用 `vitest` 設定と test script を追加し、移設した util テストを package 側で実行できるようにした
 
 新設した主なファイル:
 
-- `packages/cloudflare-runtime/src/embedding-service.ts`
-- `packages/cloudflare-runtime/src/memory-system.ts`
-- `packages/cloudflare-runtime/src/memory-system.test.ts`
-- `packages/cloudflare-runtime/src/note-system.ts`
-- `packages/cloudflare-runtime/src/note-system.test.ts`
-- `packages/cloudflare-runtime/src/runtime-logger.ts`
-- `packages/cloudflare-runtime/vitest.config.ts`
-- `apps/cloudflare-workers/src/runtime/embedding-service.ts`
-- `apps/cloudflare-workers/src/runtime/logger.ts`
-- `apps/cloudflare-workers/src/runtime/memory-system.ts`
-- `apps/cloudflare-workers/src/runtime/note-system.ts`
+- `packages/contracts/src/dashboard/types.ts`
+- `packages/contracts/src/dashboard/utils.ts`
+- `packages/contracts/src/dashboard/utils.test.ts`
+- `packages/contracts/vitest.config.ts`
+
+削除した主なファイル:
+
+- `packages/core/src/dashboard/types.ts`
+- `packages/core/src/dashboard/utils.ts`
+- `packages/core/src/dashboard/utils.test.ts`
 
 変更した主なファイル:
 
+- `apps/cloudflare-workers/package.json`
 - `apps/cloudflare-workers/src/echo/index.tsx`
-- `apps/cloudflare-workers/src/echo/thinking-engine/index.ts`
-- `apps/cloudflare-workers/src/llm/embedding-factory.ts`
-- `apps/cloudflare-workers/src/llm/openai/embedding.ts`
-- `apps/cloudflare-workers/src/llm/openai/functions/tool-context.ts`
-- `apps/cloudflare-workers/src/llm/workersai/embedding.ts`
-- `apps/cloudflare-workers/src/utils/logger.ts`
+- `apps/cloudflare-workers/src/index.ts`
+- `apps/cloudflare-workers/src/index.test.ts`
+- `apps/dashboard/package.json`
+- `apps/dashboard/src/App.tsx`
 - `package.json`
+- `packages/contracts/package.json`
+- `packages/contracts/README.md`
 - `packages/core/package.json`
-- `packages/cloudflare-runtime/package.json`
-- `packages/cloudflare-runtime/tsconfig.json`
-- `packages/cloudflare-runtime/README.md`
+- `packages/core/README.md`
+- `packages/core/src/index.ts`
 
 この段階で達成したこと:
 
-- Memory / Note / logger の Cloudflare runtime 実装が worker package から切り離された
-- worker 側の `ThinkingEngine` と `Echo` は persistence 実装の詳細ではなく runtime service を組み立てる側に近づいた
-- worker 側には package source を参照する薄い shim だけを残し、entry 側の変更を最小化した
-- runtime package 単位のテストが追加され、SQLite / Durable Object storage ベースのロジックを worker test から分離できた
+- `packages/core` から dashboard 専用 DTO / util を外し、agent core の責務をさらに狭めた
+- worker と dashboard が共有する representation を `contracts` package に集約した
+- dashboard util のテスト責務を `contracts` package へ移して package 境界に合わせた
 
 この段階ではまだやっていないこと:
 
-- state / usage / context store の runtime package への移設
-- alarm / KV / scheduler 依存の worker entry からの切り離し
-- worker 側の shim を不要にする import 解決の最終整理
+- worker 側に残っている thin shim / re-export の整理
+- `@echo-chamber/core` のルート import を subpath import へ置き換える横断的な整理
+- request / response schema の本格導入
 
 品質チェック:
 
@@ -250,13 +249,7 @@
 - `pnpm typecheck`
 - `pnpm test:run`
 
-は通過済み。
-
-レビュー観点:
-
-- `MemorySystem` / `NoteSystem` / logger の実装責務が runtime package に適切に集約されているか
-- worker 側が composition root に寄る方向になっているか
-- 次段階で state / usage / context / scheduler を runtime package に移す余地が見えているか
+をこれから実施する。
 
 ## 次のチェックポイント候補と横断タスク
 
@@ -318,12 +311,13 @@
 
 優先順位:
 
-1. Checkpoint 5 のレビュー完了
-2. Checkpoint 6 で agent loop の意味論を core に寄せる
-3. その後に adapter 分離へ進む
+1. Checkpoint 10 のレビュー完了
+2. thin shim / re-export を減らしつつ import 解決を package 直参照へ寄せる
+3. barrel export 廃止を横断タスクとして段階的に進める
 
 ## 再開時の注意
 
-- 直近の未コミット差分は Checkpoint 5 のみ
-- 直近のレビュー対象は prompt builder の core 移設
-- barrel export 廃止は横断タスクとして扱うが、まだ未着手
+- 直近のコミット済み checkpoint は Checkpoint 9（`2b85f0f`）
+- 直近の未コミット差分は Checkpoint 10 のみ
+- 直近のレビュー対象は contracts / dashboard 依存整理
+- barrel export 廃止は横断タスクとして継続中

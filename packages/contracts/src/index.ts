@@ -1,5 +1,7 @@
 /**
- * API contract package scaffold.
+ * Public entrypoint is intentionally thin.
  *
- * Worker / Dashboard 間の DTO は後続のステップでここへ移設する。
+ * Consumers should prefer subpath exports such as
+ * `@echo-chamber/contracts/dashboard/types`.
  */
+export {};

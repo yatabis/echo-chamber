@@ -7,8 +7,6 @@ Cloudflare 非依存のコアロジックと共有型を提供する package で
 
 - Echo の共通型と usage 集計ロジック
 - agent / runtime 分離のための port interface
-- Dashboard DTO 型
-- Discord API ラッパ
 - 日時/ベクトル/エラーなどのユーティリティ
 - システムプロンプト定義（`rin` / `marie`）
 
@@ -23,7 +21,6 @@ Cloudflare 非依存のコアロジックと共有型を提供する package で
 - port interface（`src/ports/*`）
 - 共有型（`src/types/*`）
 - ユーティリティ（`src/utils/*`）
-- Dashboard DTO（`src/dashboard/types.ts`）
 - `systemPromptRin` / `systemPromptMarie`
 
 ## コマンド

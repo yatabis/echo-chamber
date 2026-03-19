@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@echo-chamber/contracts": "workspace:*",
     "@echo-chamber/core": "workspace:*",
     "hono": "4.7.11",
     "openai": "6.29.0",

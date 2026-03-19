@@ -8,23 +8,22 @@ import {
 } from '@tanstack/react-router';
 import { useEffect, useMemo, useState } from 'react';
 
-import {
-  ECHO_INSTANCE_IDS,
-  buildUsageRatioMetrics,
-  buildUsageStackedSeries,
-  filterNotes,
-  isValidInstanceId,
-  sumUsageBreakdown,
-} from '@echo-chamber/core';
 import type {
-  DashboardUsageBreakdownTotals,
   DashboardInstancesResponse,
+  DashboardUsageBreakdownTotals,
   DashboardUsageDays,
   DashboardUsageRatioMetrics,
   DashboardUsageStackedPoint,
   EchoMemory,
   EchoStatus,
-} from '@echo-chamber/core';
+} from '@echo-chamber/contracts/dashboard/types';
+import {
+  buildUsageRatioMetrics,
+  buildUsageStackedSeries,
+  filterNotes,
+  sumUsageBreakdown,
+} from '@echo-chamber/contracts/dashboard/utils';
+import { ECHO_INSTANCE_IDS, isValidInstanceId } from '@echo-chamber/core';
 
 import type { JSX } from 'react';
 

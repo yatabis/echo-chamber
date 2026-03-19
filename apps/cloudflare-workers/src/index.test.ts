@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import type { DashboardInstanceSummary, EchoStatus } from '@echo-chamber/core';
+import type {
+  DashboardInstanceSummary,
+  EchoStatus,
+} from '@echo-chamber/contracts/dashboard/types';
 
 import worker from './index';
 

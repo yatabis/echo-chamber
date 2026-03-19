@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
+import type { Note, UsageRecord } from '@echo-chamber/core/echo/types';
+
 import {
   buildUsageRatioMetrics,
   buildUsageStackedSeries,
   filterNotes,
   sumUsageBreakdown,
 } from './utils';
-
-import type { Note, UsageRecord } from '../echo/types';
 
 describe('buildUsageStackedSeries', () => {
   it('7日分の系列を生成し、欠損日は0埋めする', () => {

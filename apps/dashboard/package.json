@@ -10,8 +10,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@tanstack/react-router": "^1.133.0",
+    "@echo-chamber/contracts": "workspace:*",
     "@echo-chamber/core": "workspace:*",
+    "@tanstack/react-router": "^1.133.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

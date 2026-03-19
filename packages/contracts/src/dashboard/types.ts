@@ -1,5 +1,9 @@
-import type { EchoState, Note, UsageRecord } from '../echo/types';
-import type { EchoInstanceId } from '../types/echo-config';
+import type {
+  EchoState,
+  Note,
+  UsageRecord,
+} from '@echo-chamber/core/echo/types';
+import type { EchoInstanceId } from '@echo-chamber/core/types/echo-config';
 
 export interface EchoMemory {
   content: string;

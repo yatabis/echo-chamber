@@ -15,4 +15,4 @@ Worker と Dashboard のあいだで共有する API contract を置く package 
 
 ## メモ
 
-- 初期段階では package 境界の雛形のみを提供します。
+- `dashboard` 向け DTO と表示用 util をこの package に置きます。

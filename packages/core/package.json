@@ -7,6 +7,7 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./echo/types": "./src/echo/types.ts",
     "./ports/chat": "./src/ports/chat.ts",
     "./ports/logger": "./src/ports/logger.ts",
     "./ports/memory": "./src/ports/memory.ts",
@@ -23,6 +24,7 @@
     "./agent/tools/note": "./src/agent/tools/note.ts",
     "./agent/tools/thinking": "./src/agent/tools/thinking.ts",
     "./agent/tools/catalog": "./src/agent/tools/catalog.ts",
+    "./types/echo-config": "./src/types/echo-config.ts",
     "./types/logger": "./src/types/logger.ts",
     "./utils/datetime": "./src/utils/datetime.ts",
     "./utils/error": "./src/utils/error.ts",

@@ -6,8 +6,6 @@ export * from './types/logger';
 export * from './utils/datetime';
 export * from './utils/error';
 export * from './utils/vector';
-export * from './dashboard/types';
-export * from './dashboard/utils';
 export * from './ports';
 
 export { default as systemPromptMarie } from './llm/prompts/marie';
