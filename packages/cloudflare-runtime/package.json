@@ -6,8 +6,7 @@
   "exports": {
     "./embedding-service": "./src/embedding-service.ts",
     "./memory-system": "./src/memory-system.ts",
-    "./note-system": "./src/note-system.ts",
-    "./runtime-logger": "./src/runtime-logger.ts"
+    "./note-system": "./src/note-system.ts"
   },
   "scripts": {
     "test:run": "vitest run",

@@ -6,7 +6,7 @@ Cloudflare Workers / Durable Objects / KV / SQLite / Alarm を使った runtime 
 
 - Cloudflare bindings の吸収
 - Durable Object storage / SQLite 実装
-- scheduler / logger / repository 実装
+- scheduler / repository 実装
 - Worker からの composition
 
 ## 依存ルール
@@ -16,5 +16,5 @@ Cloudflare Workers / Durable Objects / KV / SQLite / Alarm を使った runtime 
 
 ## メモ
 
-- 現在は `MemorySystem` / `NoteSystem` / `CloudflareRuntimeLogger` をこの package に置いています。
+- 現在は `MemorySystem` / `NoteSystem` をこの package に置いています。
 - Worker 側では thin shim を経由して参照し、entry / composition root に責務を寄せます。

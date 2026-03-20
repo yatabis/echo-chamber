@@ -14,7 +14,7 @@ packages/
   contracts/                 # Worker / Dashboard 間の API contract（DTO + zod schema）
   openai-adapter/            # ModelPort の OpenAI Responses 実装
   discord-adapter/           # Chat / Notification / ThoughtLog の Discord 実装
-  cloudflare-runtime/        # Memory / Note / logger など Cloudflare runtime 実装
+  cloudflare-runtime/        # Memory / Note など Cloudflare runtime 実装
 ```
 
 ## 依存ルール

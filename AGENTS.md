@@ -8,7 +8,7 @@
 - `packages/contracts/`: Worker / Dashboard 間の API contract（DTO, zod schema, dashboard util）
 - `packages/openai-adapter/`: `ModelPort` の OpenAI Responses 実装
 - `packages/discord-adapter/`: `ChatPort` / `NotificationPort` / `ThoughtLogPort` の Discord 実装
-- `packages/cloudflare-runtime/`: Memory / Note / logger など Cloudflare runtime 実装
+- `packages/cloudflare-runtime/`: Memory / Note など Cloudflare runtime 実装
 - ルート設定: `pnpm-workspace.yaml`, `tsconfig.json`, `eslint.config.js`
 
 ## Dependency Rules
