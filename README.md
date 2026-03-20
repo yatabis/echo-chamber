@@ -96,17 +96,17 @@ pnpm --filter @echo-chamber/cloudflare-workers exec wrangler kv key put --bindin
 
 ## 実行・開発コマンド
 
-| コマンド                                            | 用途                                                           |
-| --------------------------------------------------- | -------------------------------------------------------------- |
-| `pnpm dev`                                          | Worker ローカル起動（型生成付き）                              |
-| `pnpm start`                                        | Worker ローカル起動                                            |
-| `pnpm cf-typegen`                                   | Worker 型定義生成                                              |
-| `pnpm deploy`                                       | Cloudflare へデプロイ                                          |
-| `pnpm --filter @echo-chamber/dashboard dev`         | Dashboard 単体開発                                             |
-| `pnpm dashboard:build`                              | Dashboard ビルド（Worker assets に出力）                       |
-| `pnpm test:run`                                     | `core` / `contracts` / adapter / runtime / worker のテスト実行 |
-| `pnpm test:coverage`                                | Cloudflare 側テストのカバレッジ生成                            |
-| `pnpm lint:check` / `pnpm typecheck` / `pnpm check` | 品質チェック                                                   |
+| コマンド                                            | 用途                                                               |
+| --------------------------------------------------- | ------------------------------------------------------------------ |
+| `pnpm dev`                                          | Worker ローカル起動（型生成付き）                                  |
+| `pnpm start`                                        | Worker ローカル起動                                                |
+| `pnpm cf-typegen`                                   | Worker 型定義生成                                                  |
+| `pnpm deploy`                                       | Cloudflare へデプロイ                                              |
+| `pnpm --filter @echo-chamber/dashboard dev`         | Dashboard 単体開発                                                 |
+| `pnpm dashboard:build`                              | Dashboard ビルド（Worker assets に出力）                           |
+| `pnpm test:run`                                     | `core` / `contracts` / adapter / runtime / worker のテスト実行     |
+| `pnpm test:coverage`                                | `core` / `contracts` / adapter / runtime / worker の coverage 集約 |
+| `pnpm lint:check` / `pnpm typecheck` / `pnpm check` | 品質チェック                                                       |
 
 ## HTTP エンドポイント
 
@@ -139,6 +139,8 @@ pnpm --filter @echo-chamber/cloudflare-workers exec wrangler kv key put --bindin
 - Cloudflare runtime: `packages/cloudflare-runtime/src/**/*.test.ts`
 - Worker / Durable Object / route: `apps/cloudflare-workers/src/**/*.test.ts`
 - Dashboard は現状、専用 test script ではなく build / typecheck と contract parser で整合を保つ
+- `pnpm test:coverage` は monorepo 内の package / worker coverage を順に実行する
+- `pnpm test:coverage` は `@cloudflare/vitest-pool-workers` の都合で sandbox 外の実行を前提にする
 
 ## 運用メモ
 

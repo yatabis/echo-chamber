@@ -51,7 +51,8 @@
 - Test helpers/mocks:
   - `packages/core/test/**`
   - `apps/cloudflare-workers/test/**`
-- Coverage は Cloudflare 側を中心に維持・改善する
+- `pnpm test:coverage` は `core` / `contracts` / adapter / `cloudflare-runtime` / worker の coverage を集約する
+- `pnpm test:coverage` は `@cloudflare/vitest-pool-workers` の都合で sandbox 外で実行する
 
 ## Commits & Pull Requests
 

@@ -16,7 +16,7 @@
     "format:check": "prettier --check \"**/*.{js,ts,jsx,tsx,json,md}\"",
     "typecheck": "pnpm --filter @echo-chamber/core typecheck && pnpm --filter @echo-chamber/contracts typecheck && pnpm --filter @echo-chamber/openai-adapter typecheck && pnpm --filter @echo-chamber/discord-adapter typecheck && pnpm --filter @echo-chamber/cloudflare-runtime typecheck && pnpm --filter @echo-chamber/cloudflare-workers typecheck && pnpm --filter @echo-chamber/dashboard typecheck",
     "test:run": "pnpm --filter @echo-chamber/core test:run && pnpm --filter @echo-chamber/contracts test:run && pnpm --filter @echo-chamber/openai-adapter test:run && pnpm --filter @echo-chamber/discord-adapter test:run && pnpm --filter @echo-chamber/cloudflare-runtime test:run && pnpm --filter @echo-chamber/cloudflare-workers test:run",
-    "test:coverage": "pnpm --filter @echo-chamber/cloudflare-workers test:coverage",
+    "test:coverage": "pnpm --filter @echo-chamber/core test:coverage && pnpm --filter @echo-chamber/contracts test:coverage && pnpm --filter @echo-chamber/openai-adapter test:coverage && pnpm --filter @echo-chamber/discord-adapter test:coverage && pnpm --filter @echo-chamber/cloudflare-runtime test:coverage && pnpm --filter @echo-chamber/cloudflare-workers test:coverage",
     "dashboard:build": "pnpm --filter @echo-chamber/dashboard build"
   },
   "devDependencies": {
