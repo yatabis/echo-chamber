@@ -136,6 +136,48 @@ describe('OpenAIResponsesModel', () => {
         truncation: 'auto',
       })
     );
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      'Response usage information is undefined'
+    );
+  });
+
+  it('createResponse は object でない inputSchema を parameters: null に正規化する', async () => {
+    const model = new OpenAIResponsesModel({
+      apiKey: 'test-key',
+      logger: mockLogger,
+    });
+
+    mockCreateResponse.mockResolvedValue({
+      output: [],
+      usage: {
+        input_tokens: 0,
+        input_tokens_details: { cached_tokens: 0 },
+        output_tokens: 0,
+        output_tokens_details: { reasoning_tokens: 0 },
+        total_tokens: 0,
+      },
+    });
+
+    await model.createResponse({
+      input: [],
+      tools: [
+        {
+          ...thinkDeeplyTool,
+          inputSchema: 'invalid-schema',
+        },
+      ],
+    });
+
+    expect(mockCreateResponse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools: [
+          expect.objectContaining({
+            name: 'think_deeply',
+            parameters: null,
+          }),
+        ],
+      })
+    );
   });
 
   it('generate は OpenAI response を core model response へ変換する', async () => {
@@ -248,6 +290,64 @@ describe('OpenAIResponsesModel', () => {
       totalTokens: 0,
     });
   });
+
+  it('generate は refusal message を assistant message に正規化し、reasoning item は output から除外する', async () => {
+    const model = new OpenAIResponsesModel({
+      apiKey: 'test-key',
+      logger: mockLogger,
+      thoughtLog: mockThoughtLog,
+    });
+
+    mockCreateResponse.mockResolvedValue({
+      id: 'response_refusal',
+      output: [
+        {
+          type: 'reasoning',
+          content: [{ text: 'Need to reject unsafe request.' }],
+        } as unknown as ResponseOutputItem,
+        {
+          type: 'message',
+          role: 'assistant',
+          id: 'msg_refusal',
+          status: 'completed',
+          content: [
+            {
+              type: 'refusal',
+              refusal: 'I cannot assist with that request.',
+            },
+          ],
+        },
+      ],
+      usage: {
+        input_tokens: 1,
+        input_tokens_details: { cached_tokens: 0 },
+        output_tokens: 2,
+        output_tokens_details: { reasoning_tokens: 1 },
+        total_tokens: 3,
+      },
+    });
+
+    const response = await model.generate({
+      input: [
+        {
+          role: 'user',
+          content: 'unsafe',
+        },
+      ],
+      tools: [],
+    });
+
+    expect(response.output).toEqual([
+      {
+        type: 'message',
+        role: 'assistant',
+        content: '<refusal>I cannot assist with that request.</refusal>',
+      },
+    ]);
+    expect(mockThoughtLog.send).toHaveBeenCalledWith(
+      '*reasoning: Need to reject unsafe request.*\n\n*refusal: I cannot assist with that request.*'
+    );
+  });
 });
 
 describe('formatLogOutput', () => {
@@ -290,6 +390,28 @@ describe('formatLogOutput', () => {
     expect(formatLogOutput(output)).toBe(
       '*refusal: I cannot assist with that request.*'
     );
+  });
+
+  it('reasoning', () => {
+    const output: ResponseOutputItem[] = [
+      {
+        type: 'reasoning',
+        summary: [{ text: 'Need more context' }],
+      } as unknown as ResponseOutputItem,
+    ];
+
+    expect(formatLogOutput(output)).toBe('*reasoning: Need more context*');
+  });
+
+  it('空のreasoningはプレースホルダを返す', () => {
+    const output: ResponseOutputItem[] = [
+      {
+        type: 'reasoning',
+        summary: [],
+      } as unknown as ResponseOutputItem,
+    ];
+
+    expect(formatLogOutput(output)).toBe('*reasoning*');
   });
 
   it('read_chat_messages', () => {
@@ -471,6 +593,25 @@ describe('formatLogOutput', () => {
     ];
 
     expect(formatLogOutput(output)).toBe('*delete_note: note-1*');
+  });
+
+  it('finish_thinking', () => {
+    const output: ResponseOutputItem[] = [
+      {
+        type: 'function_call',
+        call_id: 'call_finish',
+        name: 'finish_thinking',
+        arguments: JSON.stringify({
+          reason: 'No further action needed',
+          next_wake_at: '2026-03-20T08:00:00.000Z',
+        }),
+        status: 'completed',
+      },
+    ];
+
+    expect(formatLogOutput(output)).toBe(
+      '*finish_thinking: No further action needed(next_wake_at: 2026-03-20T08:00:00.000Z)*'
+    );
   });
 
   it('デフォルトの function_call', () => {
@@ -658,6 +799,12 @@ describe('formatFunctionCallOutput', () => {
         },
       ])
     ).toBe('[\n  {\n    "type": "input_text",\n    "text": "success"\n  }\n]');
+  });
+
+  it('JSON ではない文字列はそのまま返す', () => {
+    expect(formatFunctionCallOutput('plain text output')).toBe(
+      'plain text output'
+    );
   });
 });
 
@@ -960,5 +1107,14 @@ describe('formatOutputItem', () => {
 
     const result = formatOutputItem(item);
     expect(result).toBe('<unknown_output_type />');
+  });
+
+  it('reasoningタイプはプレースホルダ表示にする', () => {
+    const item = {
+      type: 'reasoning',
+    } as unknown as ResponseOutputItem;
+
+    const result = formatOutputItem(item);
+    expect(result).toBe('<reasoning />');
   });
 });

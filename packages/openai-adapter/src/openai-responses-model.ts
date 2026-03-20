@@ -2,16 +2,18 @@ import OpenAI from 'openai';
 
 import type { LoggerPort } from '@echo-chamber/core/ports/logger';
 import type {
-  ModelInputItem,
-  ModelMessage,
-  ModelOutputItem,
   ModelPort,
   ModelRequest,
   ModelResponse,
-  ModelToolContract,
-  ModelUsage,
 } from '@echo-chamber/core/ports/model';
 import type { ThoughtLogPort } from '@echo-chamber/core/ports/thought-log';
+
+import {
+  toFunctionToolDefinition,
+  toModelOutputItem,
+  toModelUsage,
+  toResponseInputItem,
+} from './openai-response-mappers';
 
 import type {
   EasyInputMessage,
@@ -21,24 +23,7 @@ import type {
   ResponseInputItem,
   ResponseOutputItem,
   ResponseOutputMessage,
-  ResponseUsage,
 } from 'openai/resources/responses/responses';
-
-interface FunctionToolDefinition {
-  type: 'function';
-  name: string;
-  description: string;
-  parameters: Record<string, unknown> | null;
-  strict: boolean;
-}
-
-const EMPTY_RESPONSE_USAGE: ResponseUsage = {
-  input_tokens: 0,
-  input_tokens_details: { cached_tokens: 0 },
-  output_tokens: 0,
-  output_tokens_details: { reasoning_tokens: 0 },
-  total_tokens: 0,
-};
 
 export interface OpenAIResponsesModelOptions {
   apiKey: string;
@@ -57,6 +42,11 @@ export class OpenAIResponsesModel implements ModelPort {
   private readonly logger: Pick<LoggerPort, 'debug' | 'warn'> | undefined;
   private readonly thoughtLog: Pick<ThoughtLogPort, 'send'> | undefined;
 
+  /**
+   * OpenAI Responses API を使う `ModelPort` adapter を構築する。
+   *
+   * @param options API キー、モデル名、任意の logger / thought log 送信先
+   */
   constructor(options: OpenAIResponsesModelOptions) {
     this.client = new OpenAI({
       apiKey: options.apiKey,
@@ -68,6 +58,9 @@ export class OpenAIResponsesModel implements ModelPort {
 
   /**
    * provider-neutral request を OpenAI Responses API の入力へ変換して実行する。
+   *
+   * @param request `core` が定義する provider 非依存の 1 ターン分リクエスト
+   * @returns OpenAI Responses API が返した生の `Response`
    */
   async createResponse(request: ModelRequest): Promise<Response> {
     const response = await this.client.responses.create({
@@ -98,6 +91,12 @@ export class OpenAIResponsesModel implements ModelPort {
     return response;
   }
 
+  /**
+   * provider-neutral request を OpenAI に投げ、`ModelResponse` へ正規化して返す。
+   *
+   * @param request `core` の session loop から渡される 1 ターン分リクエスト
+   * @returns provider 非依存の output / usage / response token
+   */
   async generate(request: ModelRequest): Promise<ModelResponse> {
     const responseInput = request.input.map(toResponseInputItem);
     await this.logger?.debug(responseInput.map(formatInputItem).join('\n\n'));
@@ -117,154 +116,153 @@ export class OpenAIResponsesModel implements ModelPort {
   }
 }
 
-function toFunctionToolDefinition(
-  tool: ModelToolContract
-): FunctionToolDefinition {
-  return {
-    type: 'function',
-    name: tool.name,
-    description: tool.description,
-    parameters: toFunctionParameters(tool.inputSchema),
-    strict: tool.strict ?? false,
+type FunctionFormatterArgs = Record<string, unknown>;
+
+/**
+ * `read_chat_messages` 呼び出しを thought log 向けに整形する。
+ *
+ * @param args function call の引数
+ * @returns thought log に流す短い説明文
+ */
+function formatReadChatMessagesCall(args: FunctionFormatterArgs): string {
+  return `*read_chat_messages: ${args.limit as number}*`;
+}
+
+/**
+ * `think_deeply` 呼び出しを thought log 向けに整形する。
+ *
+ * @param args function call の引数
+ * @returns thought log に流す短い説明文
+ */
+function formatThinkDeeplyCall(args: FunctionFormatterArgs): string {
+  return `*think_deeply: ${args.thought as string}*`;
+}
+
+/**
+ * `store_memory` 呼び出しを thought log 向けに整形する。
+ *
+ * @param args function call の引数
+ * @returns thought log に流す短い説明文
+ */
+function formatStoreMemoryCall(args: FunctionFormatterArgs): string {
+  const content = args.content as string;
+  const type = args.type as string;
+  const emotion = args.emotion as {
+    valence: number;
+    arousal: number;
+    labels: string[];
   };
+
+  return `*store_memory [${type}]: ${content}\n(${emotion.valence}, ${emotion.arousal}) [${emotion.labels.join(', ')}]*`;
 }
 
-function toFunctionParameters(
-  inputSchema: unknown
-): Record<string, unknown> | null {
-  if (inputSchema === null) {
-    return null;
-  }
-
-  if (typeof inputSchema === 'object' && !Array.isArray(inputSchema)) {
-    return Object.fromEntries(Object.entries(inputSchema));
-  }
-
-  return null;
+/**
+ * `search_memory` 呼び出しを thought log 向けに整形する。
+ *
+ * @param args function call の引数
+ * @returns thought log に流す短い説明文
+ */
+function formatSearchMemoryCall(args: FunctionFormatterArgs): string {
+  const query = args.query as string;
+  const type = args.type as string | undefined;
+  return type !== undefined && type !== ''
+    ? `*search_memory [${type}]: ${query}*`
+    : `*search_memory: ${query}*`;
 }
 
-function toResponseInputItem(item: ModelInputItem): ResponseInputItem {
-  if (isModelMessage(item)) {
-    return {
-      role: item.role,
-      content: item.content,
-    };
-  }
-
-  if (item.type === 'tool_call') {
-    return {
-      type: 'function_call',
-      call_id: item.callId,
-      name: item.toolName,
-      arguments: item.input,
-    };
-  }
-
-  return {
-    type: 'function_call_output',
-    call_id: item.callId,
-    output: item.output,
-  };
+/**
+ * `create_note` 呼び出しを thought log 向けに整形する。
+ *
+ * @param args function call の引数
+ * @returns thought log に流す短い説明文
+ */
+function formatCreateNoteCall(args: FunctionFormatterArgs): string {
+  return `*create_note: ${args.title as string}*`;
 }
 
-function isModelMessage(item: ModelInputItem): item is ModelMessage {
-  return 'role' in item;
+/**
+ * `list_notes` 呼び出しを thought log 向けに整形する。
+ *
+ * @returns thought log に流す短い説明文
+ */
+function formatListNotesCall(): string {
+  return '*list_notes*';
 }
 
-function toModelUsage(usage: ResponseUsage | undefined): ModelUsage {
-  const safeUsage = usage ?? EMPTY_RESPONSE_USAGE;
-  const cachedInputTokens = safeUsage.input_tokens_details.cached_tokens;
-  const totalInputTokens = safeUsage.input_tokens;
-
-  return {
-    cachedInputTokens,
-    uncachedInputTokens: totalInputTokens - cachedInputTokens,
-    totalInputTokens,
-    outputTokens: safeUsage.output_tokens,
-    reasoningTokens: safeUsage.output_tokens_details.reasoning_tokens,
-    totalTokens: safeUsage.total_tokens,
-  };
+/**
+ * `get_note` 呼び出しを thought log 向けに整形する。
+ *
+ * @param args function call の引数
+ * @returns thought log に流す短い説明文
+ */
+function formatGetNoteCall(args: FunctionFormatterArgs): string {
+  return `*get_note: ${args.id as string}*`;
 }
 
-function toModelOutputItem(item: ResponseOutputItem): ModelOutputItem[] {
-  if (item.type === 'function_call') {
-    return [
-      {
-        type: 'tool_call',
-        callId: item.call_id,
-        toolName: item.name,
-        input: item.arguments,
-      },
-    ];
-  }
-
-  if (item.type === 'message') {
-    return [
-      {
-        type: 'message',
-        role: 'assistant',
-        content: extractOutputMessageText(item),
-      },
-    ];
-  }
-
-  return [];
+/**
+ * `search_notes` 呼び出しを thought log 向けに整形する。
+ *
+ * @param args function call の引数
+ * @returns thought log に流す短い説明文
+ */
+function formatSearchNotesCall(args: FunctionFormatterArgs): string {
+  return `*search_notes: ${args.query as string}*`;
 }
 
-function extractOutputMessageText(message: ResponseOutputMessage): string {
-  return message.content
-    .map((content) => {
-      const contentType = content.type;
-      switch (contentType) {
-        case 'output_text':
-          return content.text;
-        case 'refusal':
-          return `<refusal>${content.refusal}</refusal>`;
-        default:
-          throw new Error(
-            `Unexpected contentType: ${contentType satisfies never}`
-          );
-      }
-    })
-    .join('\n\n');
+/**
+ * `update_note` 呼び出しを thought log 向けに整形する。
+ *
+ * @param args function call の引数
+ * @returns thought log に流す短い説明文
+ */
+function formatUpdateNoteCall(args: FunctionFormatterArgs): string {
+  return `*update_note: ${args.id as string}*`;
+}
+
+/**
+ * `delete_note` 呼び出しを thought log 向けに整形する。
+ *
+ * @param args function call の引数
+ * @returns thought log に流す短い説明文
+ */
+function formatDeleteNoteCall(args: FunctionFormatterArgs): string {
+  return `*delete_note: ${args.id as string}*`;
+}
+
+/**
+ * `finish_thinking` 呼び出しを thought log 向けに整形する。
+ *
+ * @param args function call の引数
+ * @returns thought log に流す短い説明文
+ */
+function formatFinishThinkingCall(args: FunctionFormatterArgs): string {
+  const nextWakeAt = args.next_wake_at as string | undefined;
+  return `*finish_thinking: ${args.reason as string}(next_wake_at: ${nextWakeAt})*`;
 }
 
 const functionCallFormatters: Record<
   string,
-  (args: Record<string, unknown>) => string
+  (args: FunctionFormatterArgs) => string
 > = {
-  read_chat_messages: (args) => `*read_chat_messages: ${args.limit as number}*`,
-  think_deeply: (args) => `*think_deeply: ${args.thought as string}*`,
-  store_memory: (args) => {
-    const content = args.content as string;
-    const type = args.type as string;
-    const emotion = args.emotion as {
-      valence: number;
-      arousal: number;
-      labels: string[];
-    };
-
-    return `*store_memory [${type}]: ${content}\n(${emotion.valence}, ${emotion.arousal}) [${emotion.labels.join(', ')}]*`;
-  },
-  search_memory: (args) => {
-    const query = args.query as string;
-    const type = args.type as string | undefined;
-    return type !== undefined && type !== ''
-      ? `*search_memory [${type}]: ${query}*`
-      : `*search_memory: ${query}*`;
-  },
-  create_note: (args) => `*create_note: ${args.title as string}*`,
-  list_notes: () => `*list_notes*`,
-  get_note: (args) => `*get_note: ${args.id as string}*`,
-  search_notes: (args) => `*search_notes: ${args.query as string}*`,
-  update_note: (args) => `*update_note: ${args.id as string}*`,
-  delete_note: (args) => `*delete_note: ${args.id as string}*`,
-  finish_thinking: (args) => {
-    const nextWakeAt = args.next_wake_at as string | undefined;
-    return `*finish_thinking: ${args.reason as string}(next_wake_at: ${nextWakeAt})*`;
-  },
+  read_chat_messages: formatReadChatMessagesCall,
+  think_deeply: formatThinkDeeplyCall,
+  store_memory: formatStoreMemoryCall,
+  search_memory: formatSearchMemoryCall,
+  create_note: formatCreateNoteCall,
+  list_notes: formatListNotesCall,
+  get_note: formatGetNoteCall,
+  search_notes: formatSearchNotesCall,
+  update_note: formatUpdateNoteCall,
+  delete_note: formatDeleteNoteCall,
+  finish_thinking: formatFinishThinkingCall,
 };
 
+/**
+ * OpenAI output item 列を thought log 向けの簡潔なテキストへ整形する。
+ *
+ * @param output OpenAI Responses API が返した output item 列
+ * @returns thought log に送る 1 つの文字列
+ */
 export function formatLogOutput(output: ResponseOutputItem[]): string {
   return output
     .map((item) => {
@@ -314,6 +312,12 @@ export function formatLogOutput(output: ResponseOutputItem[]): string {
     .trim();
 }
 
+/**
+ * OpenAI Responses API の input item をログ表示用テキストへ整形する。
+ *
+ * @param item OpenAI Responses API の input item
+ * @returns logger に出すための人間可読テキスト
+ */
 export function formatInputItem(item: ResponseInputItem): string {
   const itemType = item.type;
   if (!itemType) {
@@ -339,6 +343,12 @@ export function formatInputItem(item: ResponseInputItem): string {
   return `<${itemType} />`;
 }
 
+/**
+ * OpenAI Responses API の output item をログ表示用テキストへ整形する。
+ *
+ * @param item OpenAI Responses API の output item
+ * @returns logger に出すための人間可読テキスト
+ */
 export function formatOutputItem(item: ResponseOutputItem): string {
   const itemType = item.type;
   if (itemType === 'message') {
@@ -352,6 +362,12 @@ export function formatOutputItem(item: ResponseOutputItem): string {
   return `<${item.type} />`;
 }
 
+/**
+ * OpenAI の message item を role 付きテキストブロックへ整形する。
+ *
+ * @param item 入力または出力の message item
+ * @returns role を含むログ表示用テキスト
+ */
 export function formatMessage(
   item: EasyInputMessage | ResponseInputItem.Message | ResponseOutputMessage
 ): string {
@@ -385,14 +401,33 @@ export function formatMessage(
     .join('\n\n');
 }
 
+/**
+ * role と content を共通のブロック表現へ整形する。
+ *
+ * @param role メッセージの role
+ * @param content 表示対象の本文
+ * @returns `[role]:` 形式のブロック文字列
+ */
 export function formatBlock(role: string, content: string): string {
   return `[${role}]:\n${content}`;
 }
 
+/**
+ * function call item をログ表示用テキストへ整形する。
+ *
+ * @param item OpenAI Responses API の function call item
+ * @returns call id / status / 関数名 / 引数を含む文字列
+ */
 export function formatFunctionCall(item: ResponseFunctionToolCall): string {
   return `[function call] ${item.call_id} (${item.status})\n${item.name}(${item.arguments})`;
 }
 
+/**
+ * function call output を見やすい JSON 文字列へ整形する。
+ *
+ * @param output tool 実行結果の文字列または structured output
+ * @returns pretty print された文字列。JSON でなければ元の文字列
+ */
 export function formatFunctionCallOutput(
   output: string | ResponseFunctionCallOutputItemList
 ): string {
