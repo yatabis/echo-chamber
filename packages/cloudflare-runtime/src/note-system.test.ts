@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import {
+  MAX_NOTE_CONTENT_LENGTH,
+  MAX_NOTE_QUERY_LENGTH,
+  MAX_NOTE_TITLE_LENGTH,
+} from '@echo-chamber/core/echo/note-constraints';
 import type { LoggerPort } from '@echo-chamber/core/ports/logger';
 
 import { MAX_NOTE_COUNT, NoteSystem } from './note-system';
@@ -71,14 +76,16 @@ async function createManyNotes(
 
 describe('NoteSystem', () => {
   let storage: MockStorage;
+  let logger: Pick<LoggerPort, 'info'>;
   let noteSystem: NoteSystem;
 
   beforeEach(() => {
     vi.resetAllMocks();
     storage = createMockStorage();
+    logger = createMockLogger();
     noteSystem = new NoteSystem({
       storage: storage as DurableObjectStorage,
-      logger: createMockLogger(),
+      logger,
     });
   });
 
@@ -113,6 +120,56 @@ describe('NoteSystem', () => {
 
       const notes = await noteSystem.listNotes();
       expect(notes[0]?.title).toBe('Meeting');
+    });
+
+    it('titleとcontentをtrimして保存する', async () => {
+      const note = await noteSystem.createNote({
+        title: '  Meeting  ',
+        content: '  Discuss timeline  ',
+      });
+
+      expect(note.title).toBe('Meeting');
+      expect(note.content).toBe('Discuss timeline');
+    });
+
+    it('空のtitleはバリデーションエラー', async () => {
+      await expect(
+        noteSystem.createNote({
+          title: '   ',
+          content: 'Discuss timeline',
+        })
+      ).rejects.toThrowError('Title is required');
+    });
+
+    it('長すぎるtitleはバリデーションエラー', async () => {
+      await expect(
+        noteSystem.createNote({
+          title: 'a'.repeat(MAX_NOTE_TITLE_LENGTH + 1),
+          content: 'Discuss timeline',
+        })
+      ).rejects.toThrowError(
+        `Title must be at most ${MAX_NOTE_TITLE_LENGTH} characters`
+      );
+    });
+
+    it('長すぎるcontentはバリデーションエラー', async () => {
+      await expect(
+        noteSystem.createNote({
+          title: 'Meeting',
+          content: 'a'.repeat(MAX_NOTE_CONTENT_LENGTH + 1),
+        })
+      ).rejects.toThrowError(
+        `Content must be at most ${MAX_NOTE_CONTENT_LENGTH} characters`
+      );
+    });
+
+    it('作成成功時はloggerに記録する', async () => {
+      const note = await noteSystem.createNote({
+        title: 'Meeting',
+        content: 'Discuss timeline',
+      });
+
+      expect(logger.info).toHaveBeenCalledWith(`Note created: ${note.id}`);
     });
   });
 
@@ -161,6 +218,14 @@ describe('NoteSystem', () => {
         'Note ID is required'
       );
     });
+
+    it('壊れた保存値はnullを返す', async () => {
+      storage._data.set('note:item:broken', { id: 'broken' });
+
+      const found = await noteSystem.getNote('broken');
+
+      expect(found).toBeNull();
+    });
   });
 
   describe('searchNotes', () => {
@@ -190,6 +255,20 @@ describe('NoteSystem', () => {
 
       const matches = await noteSystem.searchNotes('api');
       expect(matches[0]?.id).toBe(target.id);
+    });
+
+    it('空白queryはバリデーションエラー', async () => {
+      await expect(noteSystem.searchNotes('   ')).rejects.toThrowError(
+        'Query is required'
+      );
+    });
+
+    it('長すぎるqueryはバリデーションエラー', async () => {
+      await expect(
+        noteSystem.searchNotes('a'.repeat(MAX_NOTE_QUERY_LENGTH + 1))
+      ).rejects.toThrowError(
+        `Query must be at most ${MAX_NOTE_QUERY_LENGTH} characters`
+      );
     });
   });
 
@@ -238,6 +317,52 @@ describe('NoteSystem', () => {
 
       expect(result).toBeNull();
     });
+
+    it('空白IDはバリデーションエラー', async () => {
+      await expect(
+        noteSystem.updateNote('   ', {
+          title: 'updated',
+        })
+      ).rejects.toThrowError('Note ID is required');
+    });
+
+    it('title/contentが両方ない更新はバリデーションエラー', async () => {
+      await expect(noteSystem.updateNote('note-1', {})).rejects.toThrowError(
+        'Either title or content is required'
+      );
+    });
+
+    it('update時にupdatedAtが更新される', async () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date('2026-02-17T00:00:00.000Z'));
+        const note = await noteSystem.createNote({
+          title: 'Draft',
+          content: 'Initial content',
+        });
+
+        vi.setSystemTime(new Date('2026-02-17T00:01:00.000Z'));
+        const updated = await noteSystem.updateNote(note.id, {
+          title: 'Final',
+        });
+
+        expect(updated?.createdAt).toBe('2026-02-17T00:00:00.000Z');
+        expect(updated?.updatedAt).toBe('2026-02-17T00:01:00.000Z');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('更新成功時はloggerに記録する', async () => {
+      const note = await noteSystem.createNote({
+        title: 'Draft',
+        content: 'Initial content',
+      });
+
+      await noteSystem.updateNote(note.id, { title: 'Final' });
+
+      expect(logger.info).toHaveBeenCalledWith(`Note updated: ${note.id}`);
+    });
   });
 
   describe('deleteNote', () => {
@@ -265,6 +390,23 @@ describe('NoteSystem', () => {
     it('存在しないノート削除はfalseを返す', async () => {
       const deleted = await noteSystem.deleteNote('missing-note');
       expect(deleted).toBe(false);
+    });
+
+    it('空白IDはバリデーションエラー', async () => {
+      await expect(noteSystem.deleteNote('   ')).rejects.toThrowError(
+        'Note ID is required'
+      );
+    });
+
+    it('削除成功時はloggerに記録する', async () => {
+      const note = await noteSystem.createNote({
+        title: 'Temp',
+        content: 'To be deleted',
+      });
+
+      await noteSystem.deleteNote(note.id);
+
+      expect(logger.info).toHaveBeenCalledWith(`Note deleted: ${note.id}`);
     });
   });
 

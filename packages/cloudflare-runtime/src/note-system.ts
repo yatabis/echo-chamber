@@ -1,13 +1,18 @@
-import {
-  MAX_NOTE_CONTENT_LENGTH,
-  MAX_NOTE_QUERY_LENGTH,
-  MAX_NOTE_TITLE_LENGTH,
-} from '@echo-chamber/core/echo/note-constraints';
 import type { Note } from '@echo-chamber/core/echo/types';
 import type { LoggerPort } from '@echo-chamber/core/ports/logger';
 
-const NOTE_ITEM_PREFIX = 'note:item:';
-const NOTE_ID_PATTERN = /^note-(\d+)$/;
+import {
+  getMaxNoteSequence,
+  getNoteStorageKey,
+  isNoteRecord,
+  NOTE_ITEM_PREFIX,
+  sortByUpdatedAtDesc,
+} from './note-storage';
+import {
+  validateContent,
+  validateQuery,
+  validateTitle,
+} from './note-validation';
 
 export const MAX_NOTE_COUNT = 200;
 
@@ -21,95 +26,6 @@ interface UpdateNoteInput {
   content?: string;
 }
 
-function validateTitle(title: string): string {
-  const normalizedTitle = title.trim();
-  if (normalizedTitle.length === 0) {
-    throw new Error('Title is required');
-  }
-  if (normalizedTitle.length > MAX_NOTE_TITLE_LENGTH) {
-    throw new Error(
-      `Title must be at most ${MAX_NOTE_TITLE_LENGTH} characters`
-    );
-  }
-  return normalizedTitle;
-}
-
-function validateContent(content: string): string {
-  const normalizedContent = content.trim();
-  if (normalizedContent.length === 0) {
-    throw new Error('Content is required');
-  }
-  if (normalizedContent.length > MAX_NOTE_CONTENT_LENGTH) {
-    throw new Error(
-      `Content must be at most ${MAX_NOTE_CONTENT_LENGTH} characters`
-    );
-  }
-  return normalizedContent;
-}
-
-function validateQuery(query: string): string {
-  const normalizedQuery = query.trim();
-  if (normalizedQuery.length === 0) {
-    throw new Error('Query is required');
-  }
-  if (normalizedQuery.length > MAX_NOTE_QUERY_LENGTH) {
-    throw new Error(
-      `Query must be at most ${MAX_NOTE_QUERY_LENGTH} characters`
-    );
-  }
-  return normalizedQuery;
-}
-
-function sortByUpdatedAtDesc(notes: Note[]): Note[] {
-  return [...notes].sort(
-    (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-  );
-}
-
-function parseNoteSequence(id: string): number | null {
-  const match = NOTE_ID_PATTERN.exec(id);
-  if (!match) {
-    return null;
-  }
-  const [, numericPart] = match;
-  if (numericPart === undefined) {
-    return null;
-  }
-  const parsed = Number.parseInt(numericPart, 10);
-  if (Number.isNaN(parsed)) {
-    return null;
-  }
-  return parsed;
-}
-
-function getMaxNoteSequence(notes: Note[]): number {
-  return notes.reduce((max, note) => {
-    const parsed = parseNoteSequence(note.id);
-    if (parsed === null) {
-      return max;
-    }
-    return Math.max(max, parsed);
-  }, 0);
-}
-
-function getNoteStorageKey(id: string): string {
-  return `${NOTE_ITEM_PREFIX}${id}`;
-}
-
-function isNoteRecord(value: unknown): value is Note {
-  if (typeof value !== 'object' || value === null) {
-    return false;
-  }
-  const note = value as Record<string, unknown>;
-  return (
-    typeof note.id === 'string' &&
-    typeof note.title === 'string' &&
-    typeof note.content === 'string' &&
-    typeof note.createdAt === 'string' &&
-    typeof note.updatedAt === 'string'
-  );
-}
-
 /**
  * ノートシステム
  * DurableObjectStorage上でメモを管理する。
@@ -118,6 +34,11 @@ export class NoteSystem {
   private readonly storage: DurableObjectStorage;
   private readonly logger: Pick<LoggerPort, 'info'>;
 
+  /**
+   * Durable Object storage 上で動く note runtime を構築する。
+   *
+   * @param options storage と logger
+   */
   constructor(options: {
     storage: DurableObjectStorage;
     logger: Pick<LoggerPort, 'info'>;
@@ -126,11 +47,22 @@ export class NoteSystem {
     this.logger = options.logger;
   }
 
+  /**
+   * すべてのノートを updatedAt 降順で返す。
+   *
+   * @returns 最新更新順に並んだノート一覧
+   */
   async listNotes(): Promise<Note[]> {
     const notes = await this.readNotes();
     return sortByUpdatedAtDesc(notes);
   }
 
+  /**
+   * ID でノートを 1 件取得する。
+   *
+   * @param id note ID
+   * @returns ノート。存在しなければ `null`
+   */
   async getNote(id: string): Promise<Note | null> {
     const noteId = id.trim();
     if (noteId.length === 0) {
@@ -145,6 +77,12 @@ export class NoteSystem {
     return storedNote;
   }
 
+  /**
+   * title / content の部分一致でノートを検索する。
+   *
+   * @param query 検索クエリ
+   * @returns 一致したノート一覧
+   */
   async searchNotes(query: string): Promise<Note[]> {
     const normalizedQuery = validateQuery(query).toLowerCase();
     const notes = await this.listNotes();
@@ -157,6 +95,12 @@ export class NoteSystem {
     });
   }
 
+  /**
+   * 新しいノートを作成する。
+   *
+   * @param input title と content
+   * @returns 作成されたノート
+   */
   async createNote({ title, content }: CreateNoteInput): Promise<Note> {
     const normalizedTitle = validateTitle(title);
     const normalizedContent = validateContent(content);
@@ -182,6 +126,13 @@ export class NoteSystem {
     return newNote;
   }
 
+  /**
+   * 既存ノートを部分更新する。
+   *
+   * @param id note ID
+   * @param patch title / content の更新内容
+   * @returns 更新後ノート。存在しなければ `null`
+   */
   async updateNote(id: string, patch: UpdateNoteInput): Promise<Note | null> {
     const noteId = id.trim();
     if (noteId.length === 0) {
@@ -217,6 +168,12 @@ export class NoteSystem {
     return updatedNote;
   }
 
+  /**
+   * ノートを削除する。
+   *
+   * @param id note ID
+   * @returns 削除できた場合は `true`
+   */
   async deleteNote(id: string): Promise<boolean> {
     const noteId = id.trim();
     if (noteId.length === 0) {
