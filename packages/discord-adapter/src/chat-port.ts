@@ -14,6 +14,9 @@ export interface DiscordChatPortOptions {
 
 /**
  * Discord channel を `ChatPort` として扱う adapter。
+ *
+ * @param options Discord token と対象 channel ID
+ * @returns `ChatPort` 実装
  */
 export function createDiscordChatPort(
   options: DiscordChatPortOptions

@@ -35,7 +35,7 @@ describe('DiscordThoughtLog', () => {
     const originalContent = 'a'.repeat(2100);
     const expectedContent = `${originalContent.substring(
       0,
-      2000 - 15
+      2000 - '...(truncated)'.length
     )}...(truncated)`;
 
     await thoughtLog.send(originalContent);

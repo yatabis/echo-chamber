@@ -9,6 +9,9 @@ export interface DiscordNotificationPortOptions {
 
 /**
  * Discord channel を `NotificationPort` として扱う adapter。
+ *
+ * @param options Discord token と対象 channel ID
+ * @returns `NotificationPort` 実装
  */
 export function createDiscordNotificationPort(
   options: DiscordNotificationPortOptions

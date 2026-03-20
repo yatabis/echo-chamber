@@ -1,19 +1,16 @@
+import type { NotificationSummary } from '@echo-chamber/core/ports/notification';
 import { formatDatetimeForAgent } from '@echo-chamber/core/utils/datetime';
 
 import { getChannelMessages, getCurrentUser } from './api';
 
-export interface DiscordNotificationDetails {
-  unreadCount: number;
-  latestMessagePreview: {
-    messageId: string;
-    user: string;
-    message: string;
-    createdAt: string;
-  } | null;
-}
+import type { APIMessage } from 'discord-api-types/v10';
 
 /**
  * Bot が未読として扱うメッセージ数を取得する。
+ *
+ * @param token Discord bot token
+ * @param channelId Discord channel ID
+ * @returns 未読メッセージ数
  */
 export async function getUnreadMessageCount(
   token: string,
@@ -22,63 +19,27 @@ export async function getUnreadMessageCount(
   const limit = 100;
   const user = await getCurrentUser(token);
   const messages = await getChannelMessages(token, channelId, { limit });
-  const unreadCount = messages.findIndex((message) => {
-    if (message.author.id === user.id) {
-      return true;
-    }
-
-    const reactions = message.reactions;
-    if (!reactions) {
-      return false;
-    }
-
-    if (reactions.some((reaction) => reaction.me)) {
-      return true;
-    }
-
-    return false;
-  });
-
-  if (unreadCount === -1) {
-    return messages.length;
-  }
-
-  return unreadCount;
+  return getUnreadCount(messages, user.id);
 }
 
 /**
  * 未読件数と最新メッセージのプレビューを取得する。
+ *
+ * @param token Discord bot token
+ * @param channelId Discord channel ID
+ * @returns 未読件数と最新プレビュー
  */
 export async function getNotificationDetails(
   token: string,
   channelId: string
-): Promise<DiscordNotificationDetails> {
+): Promise<NotificationSummary> {
   const limit = 100;
   const user = await getCurrentUser(token);
   const messages = await getChannelMessages(token, channelId, { limit });
-
-  const unreadCount = messages.findIndex((message) => {
-    if (message.author.id === user.id) {
-      return true;
-    }
-
-    const reactions = message.reactions;
-    if (!reactions) {
-      return false;
-    }
-
-    if (reactions.some((reaction) => reaction.me)) {
-      return true;
-    }
-
-    return false;
-  });
-
-  const finalUnreadCount = unreadCount === -1 ? messages.length : unreadCount;
   const latestMessage = messages[0];
 
   return {
-    unreadCount: finalUnreadCount,
+    unreadCount: getUnreadCount(messages, user.id),
     latestMessagePreview: latestMessage
       ? {
           messageId: latestMessage.id,
@@ -88,4 +49,27 @@ export async function getNotificationDetails(
         }
       : null,
   };
+}
+
+/**
+ * Discord メッセージ列から未読件数を計算する。
+ *
+ * @param messages Discord API が返すメッセージ列
+ * @param currentUserId 現在の bot ユーザー ID
+ * @returns 先頭から最初の既読境界までの件数。境界がなければ全件数
+ */
+function getUnreadCount(messages: APIMessage[], currentUserId: string): number {
+  const unreadCount = messages.findIndex((message) => {
+    if (message.author.id === currentUserId) {
+      return true;
+    }
+
+    return message.reactions?.some((reaction) => reaction.me) ?? false;
+  });
+
+  if (unreadCount === -1) {
+    return messages.length;
+  }
+
+  return unreadCount;
 }
