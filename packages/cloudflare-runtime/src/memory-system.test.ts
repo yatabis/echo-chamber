@@ -355,6 +355,43 @@ describe('MemorySystem', () => {
 
       expect(mockEmbeddingService.embed).toHaveBeenCalledWith('Test content'); // eslint-disable-line @typescript-eslint/unbound-method
     });
+
+    it('容量上限到達時は最も古いメモリを削除してから保存する', async () => {
+      mockSql._tables.memories = Array.from({ length: 500 }, (_, index) =>
+        createMockMemoryRow({
+          id: `memory-${index}`,
+          content: `Memory ${index}`,
+          created_at: `2025-01-25T10:${String(index % 60).padStart(2, '0')}:00.000Z`,
+          updated_at: `2025-01-25T10:${String(index % 60).padStart(2, '0')}:00.000Z`,
+        })
+      );
+      mockSql._tables.memories[0] = createMockMemoryRow({
+        id: 'oldest-memory',
+        content: 'Oldest memory',
+        created_at: '2025-01-20T00:00:00.000Z',
+        updated_at: '2025-01-20T00:00:00.000Z',
+      });
+      const emotion: Emotion = {
+        valence: 0.4,
+        arousal: 0.2,
+        labels: ['calm'],
+      };
+
+      await memorySystem.storeMemory('Newest memory', emotion, 'episode');
+
+      expect(mockSql._tables.memories).toHaveLength(500);
+      expect(
+        mockSql._tables.memories.some((memory) => memory.id === 'oldest-memory')
+      ).toBe(false);
+      expect(
+        mockSql._tables.memories.some(
+          (memory) => memory.content === 'Newest memory'
+        )
+      ).toBe(true);
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        'Memory capacity reached. Removed oldest memory: Oldest memory'
+      );
+    });
   });
 
   describe('getMemoryCount', () => {
@@ -498,6 +535,75 @@ describe('MemorySystem', () => {
       expect(results[0]?.content).toBe('Semantic memory');
       expect(results[0]?.type).toBe('semantic');
     });
+
+    it('typeフィルタ後に候補が0件ならembeddingせず空配列を返す', async () => {
+      mockSql._tables.memories = [
+        createMockMemoryRow({
+          content: 'Semantic only',
+          type: 'semantic',
+        }),
+      ];
+
+      const results = await memorySystem.searchMemory('test query', 'episode');
+
+      expect(results).toEqual([]);
+      expect(mockEmbeddingService.embed).not.toHaveBeenCalled(); // eslint-disable-line @typescript-eslint/unbound-method
+    });
+
+    it('閾値未満を除外し、類似度順で上位5件を返す', async () => {
+      (
+        mockEmbeddingService.embed as ReturnType<typeof vi.fn>
+      ).mockResolvedValue([1, 0]);
+
+      mockSql._tables.memories = [
+        createMockMemoryRow({
+          content: 'Memory 1',
+          embedding: float32ArrayToBuffer([1, 0]),
+        }),
+        createMockMemoryRow({
+          content: 'Memory 2',
+          embedding: float32ArrayToBuffer([0.98, 0.02]),
+        }),
+        createMockMemoryRow({
+          content: 'Memory 3',
+          embedding: float32ArrayToBuffer([0.95, 0.05]),
+        }),
+        createMockMemoryRow({
+          content: 'Memory 4',
+          embedding: float32ArrayToBuffer([0.9, 0.1]),
+        }),
+        createMockMemoryRow({
+          content: 'Memory 5',
+          embedding: float32ArrayToBuffer([0.8, 0.2]),
+        }),
+        createMockMemoryRow({
+          content: 'Memory 6',
+          embedding: float32ArrayToBuffer([0.6, 0.4]),
+        }),
+        createMockMemoryRow({
+          content: 'Filtered out',
+          embedding: float32ArrayToBuffer([0, 1]),
+        }),
+      ];
+
+      const results = await memorySystem.searchMemory('sorted query');
+
+      expect(results).toHaveLength(5);
+      expect(results.map((result) => result.content)).toEqual([
+        'Memory 1',
+        'Memory 2',
+        'Memory 3',
+        'Memory 4',
+        'Memory 5',
+      ]);
+      expect(results.every((result) => result.similarity >= 0.001)).toBe(true);
+      expect(results.some((result) => result.content === 'Filtered out')).toBe(
+        false
+      );
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        expect.stringContaining('[undefined] sorted query')
+      );
+    });
   });
 
   describe('reEmbedStaleMemories', () => {
@@ -511,6 +617,9 @@ describe('MemorySystem', () => {
       await memorySystem.reEmbedStaleMemories();
 
       expect(mockEmbeddingService.embed).not.toHaveBeenCalled(); // eslint-disable-line @typescript-eslint/unbound-method
+      expect(mockLogger.debug).toHaveBeenCalledWith(
+        'No stale memories to re-embed (model: test/mock-embedding-model)'
+      );
     });
 
     it('古いモデルの memory を再 embedding する', async () => {
@@ -530,6 +639,14 @@ describe('MemorySystem', () => {
       expect(mockEmbeddingService.embed).toHaveBeenCalledWith('Old memory'); // eslint-disable-line @typescript-eslint/unbound-method
       expect(mockSql._tables.memories[0]?.embedding_model).toBe(
         'test/mock-embedding-model'
+      );
+      expect(mockLogger.info).toHaveBeenNthCalledWith(
+        1,
+        'Re-embedding 1 memories with test/mock-embedding-model...'
+      );
+      expect(mockLogger.info).toHaveBeenNthCalledWith(
+        2,
+        'Re-embedding complete.'
       );
     });
 
@@ -587,6 +704,9 @@ describe('MemorySystem', () => {
       // Memory B は成功したので更新されている
       expect(mockSql._tables.memories[1]?.embedding_model).toBe(
         'test/mock-embedding-model'
+      );
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to re-embed memory')
       );
     });
   });

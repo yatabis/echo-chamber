@@ -4,6 +4,8 @@ import { formatDatetimeForAgent } from '@echo-chamber/core/utils/datetime';
 import { getErrorMessage } from '@echo-chamber/core/utils/error';
 import { cosineSimilarity } from '@echo-chamber/core/utils/vector';
 
+import { bufferToNumberArray, float32ArrayToBuffer } from './memory-codec';
+
 import type { EmbeddingService } from './embedding-service';
 
 const MAX_MEMORY_COUNT = 500;
@@ -12,6 +14,8 @@ const SIMILARITY_THRESHOLD = 0.001;
 
 /**
  * メモリのスナップショット（embeddingを除いた情報）
+ *
+ * 永続化層の生データを agent で扱いやすい形へ正規化したもの。
  */
 export interface MemorySnapshot {
   content: string;
@@ -23,6 +27,8 @@ export interface MemorySnapshot {
 
 /**
  * メモリ検索結果
+ *
+ * snapshot に類似度を付与した検索専用の戻り値。
  */
 export interface MemorySearchResult extends MemorySnapshot {
   similarity: number;
@@ -30,6 +36,8 @@ export interface MemorySearchResult extends MemorySnapshot {
 
 /**
  * SQLiteに保存されるメモリ行の型
+ *
+ * Durable Object SQLite から取得する raw row 形状。
  */
 export interface StoredMemoryRow extends Record<string, SqlStorageValue> {
   id: string;
@@ -45,22 +53,6 @@ export interface StoredMemoryRow extends Record<string, SqlStorageValue> {
 }
 
 /**
- * Float32ArrayをArrayBufferに変換（SQLite BLOB用）
- */
-function float32ArrayToBuffer(arr: number[]): ArrayBuffer {
-  const float32 = new Float32Array(arr);
-  return float32.buffer;
-}
-
-/**
- * ArrayBufferをnumber[]に変換
- */
-function bufferToNumberArray(buffer: ArrayBuffer): number[] {
-  const float32 = new Float32Array(buffer);
-  return Array.from(float32);
-}
-
-/**
  * 記憶システム
  * SQLiteベースのエピソード記憶の保存とセマンティック検索を提供する。
  */
@@ -70,6 +62,11 @@ export class MemorySystem {
   private readonly logger: Pick<LoggerPort, 'debug' | 'info' | 'error'>;
   private initialized = false;
 
+  /**
+   * SQLite と embedding service を使う memory runtime を構築する。
+   *
+   * @param options SQLite storage、embedding service、logger
+   */
   constructor(options: {
     sql: SqlStorage;
     embeddingService: EmbeddingService;
@@ -147,6 +144,11 @@ export class MemorySystem {
   /**
    * 記憶を保存する
    * 容量超過時は最古のメモリを自動削除する
+   *
+   * @param content 保存する本文
+   * @param emotion 感情メタデータ
+   * @param type 記憶タイプ
+   * @returns 保存完了
    */
   async storeMemory(
     content: string,
@@ -274,6 +276,8 @@ export class MemorySystem {
 
   /**
    * メモリの件数を取得する
+   *
+   * @returns 現在保存されている memory 件数
    */
   getMemoryCount(): number {
     this.ensureSchema();
@@ -288,6 +292,8 @@ export class MemorySystem {
 
   /**
    * 全メモリを取得する
+   *
+   * @returns SQLite に保存された全 memory row
    */
   getAllMemories(): StoredMemoryRow[] {
     this.ensureSchema();
@@ -297,6 +303,8 @@ export class MemorySystem {
 
   /**
    * 現在の embedding モデルと異なるモデルで生成された memory を再 embedding する
+   *
+   * @returns 再 embedding 完了
    */
   async reEmbedStaleMemories(): Promise<void> {
     this.ensureSchema();
