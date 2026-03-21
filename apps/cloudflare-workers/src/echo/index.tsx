@@ -476,7 +476,10 @@ export class Echo extends DurableObject<Env> {
     try {
       const usage = await this.createThinkingEngine().think();
       await this.logger.info(`usage: ${usage.totalTokens}`);
-      await this.updateUsage(convertUsage(usage));
+      const totalUsage = await this.updateUsage(convertUsage(usage));
+      await this.createThoughtLog().send(
+        `Usage: ${usage.totalTokens} tokens (Total: ${totalUsage.total_tokens} tokens)`
+      );
       await this.logger.info(`${name}が思考を正常に完了しました。`);
     } catch (error) {
       await this.logger.error(
@@ -576,13 +579,20 @@ export class Echo extends DurableObject<Env> {
   /**
    * Usage情報を日別に累積保存
    */
-  async updateUsage(usage: Usage): Promise<void> {
+  async updateUsage(usage: Usage): Promise<Usage> {
     const dateKey = getTodayUsageKey();
     const usageRecord = await this.getAllUsage();
-    await this.storage.put('usage', addUsage(usageRecord, dateKey, usage));
+    const updatedUsageRecord = addUsage(usageRecord, dateKey, usage);
+    const totalUsage = updatedUsageRecord[dateKey];
+    if (totalUsage === undefined) {
+      throw new Error(`Usage was not accumulated for ${dateKey}`);
+    }
+
+    await this.storage.put('usage', updatedUsageRecord);
     await this.logger.debug(
-      `Usage accumulated for ${dateKey}: ${JSON.stringify(usageRecord[dateKey], null, 2)}`
+      `Usage accumulated for ${dateKey}: ${JSON.stringify(totalUsage, null, 2)}`
     );
+    return totalUsage;
   }
 
   /**
