@@ -1,85 +1,10 @@
-# Claude Code Spec-Driven Development
+# E.C.H.O. Chamber
 
-Kiro-style Spec Driven Development implementation using claude code slash commands, hooks and agents.
-
-## Project Context
-
-### Paths
-
-- Steering: `.kiro/steering/`
-- Specs: `.kiro/specs/`
-- Commands: `.claude/commands/`
-
-### Steering vs Specification
-
-**Steering** (`.kiro/steering/`) - Guide AI with project-wide rules and context
-**Specs** (`.kiro/specs/`) - Formalize development process for individual features
-
-### Active Specifications
-
-- Check `.kiro/specs/` for active specifications
-- Use `/kiro:spec-status [feature-name]` to check progress
+Cloudflare Workers + Durable Objects を活用した自律型AIエージェントシステム。
 
 ## Development Guidelines
 
 - Think in English, but generate responses in Japanese (思考は英語、回答の生成は日本語で行うように)
-
-## Workflow
-
-### Phase 0: Steering (Optional)
-
-`/kiro:steering` - Create/update steering documents
-`/kiro:steering-custom` - Create custom steering for specialized contexts
-
-**Note**: Optional for new features or small additions. Can proceed directly to spec-init.
-
-### Phase 1: Specification Creation
-
-1. `/kiro:spec-init [detailed description]` - Initialize spec with detailed project description
-2. `/kiro:spec-requirements [feature]` - Generate requirements document
-3. `/kiro:spec-design [feature]` - Interactive: "requirements.mdをレビューしましたか？ [y/N]"
-4. `/kiro:spec-tasks [feature]` - Interactive: Confirms both requirements and design review
-
-### Phase 2: Progress Tracking
-
-`/kiro:spec-status [feature]` - Check current progress and phases
-
-## Development Rules
-
-1. **Consider steering**: Run `/kiro:steering` before major development (optional for new features)
-2. **Follow 3-phase approval workflow**: Requirements → Design → Tasks → Implementation
-3. **Approval required**: Each phase requires human review (interactive prompt or manual)
-4. **No skipping phases**: Design requires approved requirements; Tasks require approved design
-5. **Update task status**: Mark tasks as completed when working on them
-6. **Keep steering current**: Run `/kiro:steering` after significant changes
-7. **Check spec compliance**: Use `/kiro:spec-status` to verify alignment
-
-## Steering Configuration
-
-### Current Steering Files
-
-Managed by `/kiro:steering` command. Updates here reflect command changes.
-
-### Active Steering Files
-
-- `product.md`: Always included - Product context and business objectives
-- `tech.md`: Always included - Technology stack and architectural decisions
-- `structure.md`: Always included - File organization and code patterns
-
-### Custom Steering Files
-
-<!-- Added by /kiro:steering-custom command -->
-<!-- Format:
-- `filename.md`: Mode - Pattern(s) - Description
-  Mode: Always|Conditional|Manual
-  Pattern: File patterns for Conditional mode
--->
-
-### Inclusion Modes
-
-- **Always**: Loaded in every interaction (default)
-- **Conditional**: Loaded for specific file patterns (e.g., `"*.test.js"`)
-- **Manual**: Reference with `@filename.md` syntax
 
 ## Development Commands
 
@@ -128,14 +53,14 @@ This project implements **t-wada式TDD (Test-Driven Development)** using the lat
 
 **IMPORTANT**: Claude Code should avoid interactive commands due to execution limitations.
 
-**✅ Claude Code Should Use:**
+**Claude Code Should Use:**
 
 - `pnpm test:run` - Single execution with clear pass/fail results
 - `pnpm test:coverage` - Coverage measurement and reporting
 - `pnpm lint:check` - Code quality verification
 - `pnpm typecheck` - Type safety confirmation
 
-**❌ Claude Code Should NOT Use:**
+**Claude Code Should NOT Use:**
 
 - `pnpm tdd` - Interactive UI requires human interaction
 - `pnpm test:watch` - Watch mode not suitable for automated execution
@@ -207,33 +132,33 @@ This approach ensures continuous quality verification while respecting Claude Co
 仕様変更・新機能開発時は**必ず**以下のタスクテンプレートをTodoWriteで設定：
 
 ```
-- 🔴 Red: 失敗するテストを書く
-- ✅ テスト実行して失敗確認 (pnpm test:run)
-- 🟢 Green: 最小限実装でテストを通す
-- ✅ テスト実行して成功確認 (pnpm test:run)
-- 🔵 Refactor: 必要に応じてリファクタリング
+- Red: 失敗するテストを書く
+- テスト実行して失敗確認 (pnpm test:run)
+- Green: 最小限実装でテストを通す
+- テスト実行して成功確認 (pnpm test:run)
+- Refactor: 必要に応じてリファクタリング
 ```
 
 #### 必須プロセス
 
-1. **🔴 Red**: 失敗するテストを書く
+1. **Red**: 失敗するテストを書く
    - 実装前に**必ずテスト実行**して赤を確認
    - 一度に一つの変更のみ
 
-2. **🟢 Green**: 最小限の実装でテストを通す
+2. **Green**: 最小限の実装でテストを通す
    - テスト実行して緑を確認
    - 過度な実装は禁止（最小限で止める）
 
-3. **🔵 Refactor**: コード品質向上（必要時のみ）
+3. **Refactor**: コード品質向上（必要時のみ）
    - テストを壊さない範囲で改善
    - 品質チェック実行必須
 
 #### 絶対禁止事項
 
-❌ **テストと実装の同時変更**
-❌ **Redフェーズのスキップ**
-❌ **テスト実行せずに次ステップへ進む**
-❌ **一度に複数の変更**
+- テストと実装の同時変更
+- Redフェーズのスキップ
+- テスト実行せずに次ステップへ進む
+- 一度に複数の変更
 
 ### Characterization Tests
 
