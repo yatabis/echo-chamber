@@ -6,6 +6,7 @@ Cloudflare 非依存のコアロジックと共有型を提供する package で
 ## 役割
 
 - Echo の共通型と usage 集計ロジック
+- Echo instance definition catalogue（`src/echo/instance-definitions.ts`）
 - agent / runtime 分離のための port interface
 - 日時/ベクトル/エラーなどのユーティリティ
 - システムプロンプト定義（`rin` / `marie`）

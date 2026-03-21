@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./echo/constants": "./src/echo/constants.ts",
+    "./echo/instance-definitions": "./src/echo/instance-definitions.ts",
     "./echo/types": "./src/echo/types.ts",
     "./echo/usage": "./src/echo/usage.ts",
     "./ports/chat": "./src/ports/chat.ts",

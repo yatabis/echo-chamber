@@ -5,10 +5,10 @@ import type { Note } from '@echo-chamber/core/echo/types';
 import type { LoggerPort } from '@echo-chamber/core/ports/logger';
 import type { MemorySearchResult } from '@echo-chamber/core/ports/memory';
 import type { NotePort } from '@echo-chamber/core/ports/note';
-import type { EchoInstanceConfig } from '@echo-chamber/core/types/echo-config';
 import { createDiscordChatPort } from '@echo-chamber/discord-adapter/chat-port';
 import { createDiscordNotificationPort } from '@echo-chamber/discord-adapter/notification-port';
 
+import type { EchoChatRuntimeBindings } from '../../../config/echo-runtime-bindings';
 import type { Logger } from '../../../utils/logger';
 
 function createMemoryPort(
@@ -91,19 +91,19 @@ function createLoggerPort(logger: Logger): LoggerPort {
 }
 
 export function createToolExecutionContext(options: {
-  instanceConfig: EchoInstanceConfig;
+  chatBindings: EchoChatRuntimeBindings;
   memorySystem: MemorySystem;
   noteSystem: NoteSystem;
   logger: Logger;
 }): ToolExecutionContext {
   return {
     chat: createDiscordChatPort({
-      token: options.instanceConfig.discordBotToken,
-      channelId: options.instanceConfig.chatChannelId,
+      token: options.chatBindings.discordBotToken,
+      channelId: options.chatBindings.chatChannelId,
     }),
     notifications: createDiscordNotificationPort({
-      token: options.instanceConfig.discordBotToken,
-      channelId: options.instanceConfig.chatChannelId,
+      token: options.chatBindings.discordBotToken,
+      channelId: options.chatBindings.chatChannelId,
     }),
     memory: createMemoryPort(options.memorySystem),
     notes: createNotePort(options.noteSystem),

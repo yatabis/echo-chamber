@@ -14,6 +14,10 @@ import type {
 import type { AgentSessionTool } from '@echo-chamber/core/agent/session';
 import { ThinkingEngine as AgentThinkingEngine } from '@echo-chamber/core/agent/thinking-engine';
 import { ALARM_CONFIG, TOKEN_LIMITS } from '@echo-chamber/core/echo/constants';
+import {
+  getEchoInstanceDefinition,
+  type EchoInstanceDefinition,
+} from '@echo-chamber/core/echo/instance-definitions';
 import type {
   EchoState,
   Note,
@@ -26,10 +30,7 @@ import {
   convertUsage,
   getTodayUsageKey,
 } from '@echo-chamber/core/echo/usage';
-import type {
-  EchoInstanceConfig,
-  EchoInstanceId,
-} from '@echo-chamber/core/types/echo-config';
+import type { EchoInstanceId } from '@echo-chamber/core/types/echo-config';
 import { isValidInstanceId } from '@echo-chamber/core/types/echo-config';
 import { formatDatetime } from '@echo-chamber/core/utils/datetime';
 import { getErrorMessage } from '@echo-chamber/core/utils/error';
@@ -37,7 +38,10 @@ import { DiscordThoughtLog } from '@echo-chamber/discord-adapter/discord-thought
 import { getUnreadMessageCount } from '@echo-chamber/discord-adapter/notification-utils';
 import { OpenAIResponsesModel } from '@echo-chamber/openai-adapter/openai-responses-model';
 
-import { getInstanceConfig } from '../config/echo-registry';
+import {
+  resolveEchoRuntimeBindings,
+  type EchoRuntimeBindings,
+} from '../config/echo-runtime-bindings';
 import { createEmbeddingService } from '../llm/embedding-factory';
 import {
   addReactionToChatMessageFunction,
@@ -116,7 +120,8 @@ export class Echo extends DurableObject<Env> {
 
   // 遅延初期化されるプロパティ（ensureInitializedで設定されるためreadonlyではない）
   private executableTools: readonly AgentSessionTool[] | null = null;
-  private instanceConfig: EchoInstanceConfig | null = null;
+  private instanceDefinition: EchoInstanceDefinition | null = null;
+  private runtimeBindings: EchoRuntimeBindings | null = null;
   private memorySystem: MemorySystem | null = null;
 
   /**
@@ -177,7 +182,7 @@ export class Echo extends DurableObject<Env> {
 
   /**
    * インスタンスの遅延初期化
-   * 最初のリクエスト時に呼び出され、instanceConfigとthinking用依存を設定する
+   * 最初のリクエスト時に呼び出され、definition と runtime bindings を設定する
    */
   private async ensureInitialized(id: EchoInstanceId): Promise<void> {
     await this.storage.delete('context');
@@ -185,14 +190,19 @@ export class Echo extends DurableObject<Env> {
     await this.storage.delete('knowledge');
 
     // 既に同じIDで初期化済みの場合はスキップ
-    if (this.instanceConfig?.id === id) {
+    if (this.instanceDefinition?.id === id) {
       return;
     }
 
-    this.instanceConfig = await getInstanceConfig(this._env, this.store, id);
+    this.instanceDefinition = getEchoInstanceDefinition(id);
+    this.runtimeBindings = await resolveEchoRuntimeBindings(
+      this._env,
+      this.store,
+      id
+    );
     const embeddingService = createEmbeddingService(
       this._env,
-      this.instanceConfig.embeddingConfig
+      this.runtimeBindings.embeddingConfig
     );
     this.memorySystem = new MemorySystem({
       sql: this.ctx.storage.sql,
@@ -200,7 +210,7 @@ export class Echo extends DurableObject<Env> {
       logger: this.logger,
     });
     const toolContext = createToolExecutionContext({
-      instanceConfig: this.instanceConfig,
+      chatBindings: this.getRuntimeBindingsOrThrow(),
       memorySystem: this.memorySystem,
       noteSystem: this.noteSystem,
       logger: this.logger,
@@ -213,17 +223,27 @@ export class Echo extends DurableObject<Env> {
 
     // ストレージにID/名前を保存（alarmから参照するため）
     await this.storage.put('id', id);
-    await this.storage.put('name', this.instanceConfig.name);
+    await this.storage.put('name', this.instanceDefinition.name);
   }
 
   /**
-   * instanceConfigを取得（初期化されていない場合はエラー）
+   * instance definition を取得（初期化されていない場合はエラー）
    */
-  private getInstanceConfigOrThrow(): EchoInstanceConfig {
-    if (!this.instanceConfig) {
-      throw new Error('Echo instance not initialized');
+  private getInstanceDefinitionOrThrow(): EchoInstanceDefinition {
+    if (!this.instanceDefinition) {
+      throw new Error('Echo instance definition not initialized');
     }
-    return this.instanceConfig;
+    return this.instanceDefinition;
+  }
+
+  /**
+   * runtime bindings を取得（初期化されていない場合はエラー）
+   */
+  private getRuntimeBindingsOrThrow(): EchoRuntimeBindings {
+    if (!this.runtimeBindings) {
+      throw new Error('Echo runtime bindings not initialized');
+    }
+    return this.runtimeBindings;
   }
 
   /**
@@ -329,7 +349,7 @@ export class Echo extends DurableObject<Env> {
    * ノート/メモリ/usage の表示に必要な情報を 1 レスポンスで返す DTO。
    */
   async getStatus(): Promise<EchoStatus> {
-    const instanceConfig = this.getInstanceConfigOrThrow();
+    const definition = this.getInstanceDefinitionOrThrow();
     const state = await this.getState();
     const nextAlarm = await this.getNextAlarm();
     const usage = await this.getAllUsage();
@@ -351,8 +371,8 @@ export class Echo extends DurableObject<Env> {
     const notes = await this.getNotes();
 
     return parseEchoStatus({
-      id: instanceConfig.id,
-      name: instanceConfig.name,
+      id: definition.id,
+      name: definition.name,
       state,
       nextAlarm,
       memories,
@@ -367,11 +387,11 @@ export class Echo extends DurableObject<Env> {
    * 一覧では name/state/nextAlarm のみ使うため、詳細 DTO より小さい形で返す。
    */
   async getSummary(): Promise<DashboardInstanceSummary> {
-    const config = this.getInstanceConfigOrThrow();
+    const definition = this.getInstanceDefinitionOrThrow();
 
     return parseDashboardInstanceSummary({
-      id: config.id,
-      name: config.name,
+      id: definition.id,
+      name: definition.name,
       state: await this.getState(),
       nextAlarm: await this.getNextAlarm(),
     });
@@ -533,16 +553,16 @@ export class Echo extends DurableObject<Env> {
    */
   private async validateChatMessage(): Promise<boolean> {
     const name = await this.getName();
-    const instanceConfig = this.getInstanceConfigOrThrow();
+    const runtimeBindings = this.getRuntimeBindingsOrThrow();
 
-    if (instanceConfig.chatChannelId === '') {
+    if (runtimeBindings.chatChannelId === '') {
       await this.logger.error(`${name}のチャンネルIDが設定されていません。`);
       return false;
     }
 
     const unreadCount = await fetchUnreadMessageCount(
-      instanceConfig.discordBotToken,
-      instanceConfig.chatChannelId
+      runtimeBindings.discordBotToken,
+      runtimeBindings.chatChannelId
     );
     if (unreadCount > 0) {
       await this.logger.info(`${name}の未読メッセージ数: ${unreadCount}`);
@@ -569,11 +589,11 @@ export class Echo extends DurableObject<Env> {
    * @returns 実行ごとの thought log adapter
    */
   private createThoughtLog(): DiscordThoughtLog {
-    const instanceConfig = this.getInstanceConfigOrThrow();
+    const runtimeBindings = this.getRuntimeBindingsOrThrow();
 
     return new DiscordThoughtLog({
-      token: instanceConfig.discordBotToken,
-      channelId: instanceConfig.thinkingChannelId,
+      token: runtimeBindings.discordBotToken,
+      channelId: runtimeBindings.thinkingChannelId,
     });
   }
 
@@ -595,7 +615,7 @@ export class Echo extends DurableObject<Env> {
    * @returns provider/runtime 非依存の core ThinkingEngine
    */
   private createThinkingEngine(): AgentThinkingEngine {
-    const instanceConfig = this.getInstanceConfigOrThrow();
+    const definition = this.getInstanceDefinitionOrThrow();
     const memorySystem = this.getMemorySystemOrThrow();
     const thoughtLog = this.createThoughtLog();
 
@@ -608,7 +628,7 @@ export class Echo extends DurableObject<Env> {
           memorySystem.getLatestMemory(),
       },
       tools: this.getExecutableToolsOrThrow(),
-      systemPrompt: instanceConfig.systemPrompt,
+      systemPrompt: definition.systemPrompt,
     });
   }
 }
