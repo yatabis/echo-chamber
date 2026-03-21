@@ -11,6 +11,8 @@ import type {
   DashboardInstanceSummary,
   EchoStatus,
 } from '@echo-chamber/contracts/dashboard/types';
+import type { AgentSessionTool } from '@echo-chamber/core/agent/session';
+import { ThinkingEngine as AgentThinkingEngine } from '@echo-chamber/core/agent/thinking-engine';
 import { ALARM_CONFIG, TOKEN_LIMITS } from '@echo-chamber/core/echo/constants';
 import type {
   EchoState,
@@ -31,14 +33,36 @@ import type {
 import { isValidInstanceId } from '@echo-chamber/core/types/echo-config';
 import { formatDatetime } from '@echo-chamber/core/utils/datetime';
 import { getErrorMessage } from '@echo-chamber/core/utils/error';
+import { DiscordThoughtLog } from '@echo-chamber/discord-adapter/discord-thought-log';
 import { getUnreadMessageCount } from '@echo-chamber/discord-adapter/notification-utils';
+import { OpenAIResponsesModel } from '@echo-chamber/openai-adapter/openai-responses-model';
 
 import { getInstanceConfig } from '../config/echo-registry';
 import { createEmbeddingService } from '../llm/embedding-factory';
+import {
+  addReactionToChatMessageFunction,
+  checkNotificationsFunction,
+  readChatMessagesFunction,
+  sendChatMessageFunction,
+} from '../llm/openai/functions/chat';
+import { finishThinkingFunction } from '../llm/openai/functions/finish';
+import {
+  searchMemoryFunction,
+  storeMemoryFunction,
+} from '../llm/openai/functions/memory';
+import {
+  createNoteFunction,
+  deleteNoteFunction,
+  getNoteFunction,
+  listNotesFunction,
+  searchNotesFunction,
+  updateNoteFunction,
+} from '../llm/openai/functions/note';
+import { thinkDeeplyFunction } from '../llm/openai/functions/think';
+import { createToolExecutionContext } from '../llm/openai/functions/tool-context';
 import { createLogger } from '../utils/logger';
 
-import { ThinkingEngine } from './thinking-engine';
-
+import type { ITool, ToolContext } from '../llm/openai/functions';
 import type { Logger } from '../utils/logger';
 
 async function fetchUnreadMessageCount(
@@ -46,6 +70,40 @@ async function fetchUnreadMessageCount(
   channelId: string
 ): Promise<number> {
   return getUnreadMessageCount(token, channelId);
+}
+
+const RUNTIME_TOOLS: readonly ITool[] = [
+  checkNotificationsFunction,
+  readChatMessagesFunction,
+  sendChatMessageFunction,
+  addReactionToChatMessageFunction,
+  storeMemoryFunction,
+  searchMemoryFunction,
+  createNoteFunction,
+  listNotesFunction,
+  getNoteFunction,
+  searchNotesFunction,
+  updateNoteFunction,
+  deleteNoteFunction,
+  thinkDeeplyFunction,
+  finishThinkingFunction,
+];
+
+/**
+ * @param tool Worker runtime tool
+ * @param toolContext tool 実行時に共有する runtime context
+ * @returns core session loop が扱える executable tool
+ */
+function toExecutableTool(
+  tool: ITool,
+  toolContext: ToolContext
+): AgentSessionTool {
+  return {
+    name: tool.name,
+    contract: tool.contract,
+    execute: async (input: string): Promise<string> =>
+      await tool.execute(input, toolContext),
+  };
 }
 
 export class Echo extends DurableObject<Env> {
@@ -57,8 +115,9 @@ export class Echo extends DurableObject<Env> {
   private readonly noteSystem: NoteSystem;
 
   // 遅延初期化されるプロパティ（ensureInitializedで設定されるためreadonlyではない）
+  private executableTools: readonly AgentSessionTool[] | null = null;
   private instanceConfig: EchoInstanceConfig | null = null;
-  private thinkingEngine: ThinkingEngine | null = null;
+  private memorySystem: MemorySystem | null = null;
 
   /**
    * The constructor is invoked once upon creation of the Durable Object, i.e. the first call to
@@ -118,7 +177,7 @@ export class Echo extends DurableObject<Env> {
 
   /**
    * インスタンスの遅延初期化
-   * 最初のリクエスト時に呼び出され、instanceConfigとThinkingEngineを設定する
+   * 最初のリクエスト時に呼び出され、instanceConfigとthinking用依存を設定する
    */
   private async ensureInitialized(id: EchoInstanceId): Promise<void> {
     await this.storage.delete('context');
@@ -131,15 +190,26 @@ export class Echo extends DurableObject<Env> {
     }
 
     this.instanceConfig = await getInstanceConfig(this._env, this.store, id);
-    this.thinkingEngine = new ThinkingEngine({
-      env: this._env,
-      storage: this.storage,
+    const embeddingService = createEmbeddingService(
+      this._env,
+      this.instanceConfig.embeddingConfig
+    );
+    this.memorySystem = new MemorySystem({
       sql: this.ctx.storage.sql,
+      embeddingService,
       logger: this.logger,
-      instanceConfig: this.instanceConfig,
     });
+    const toolContext = createToolExecutionContext({
+      instanceConfig: this.instanceConfig,
+      memorySystem: this.memorySystem,
+      noteSystem: this.noteSystem,
+      logger: this.logger,
+    });
+    this.executableTools = RUNTIME_TOOLS.map((tool) =>
+      toExecutableTool(tool, toolContext)
+    );
     // embedding モデル変更時の自動再 embedding
-    await this.thinkingEngine.initialize();
+    await this.memorySystem.reEmbedStaleMemories();
 
     // ストレージにID/名前を保存（alarmから参照するため）
     await this.storage.put('id', id);
@@ -157,13 +227,23 @@ export class Echo extends DurableObject<Env> {
   }
 
   /**
-   * ThinkingEngineを取得（初期化されていない場合はエラー）
+   * executableToolsを取得（初期化されていない場合はエラー）
    */
-  private getThinkingEngineOrThrow(): ThinkingEngine {
-    if (!this.thinkingEngine) {
-      throw new Error('ThinkingEngine not initialized');
+  private getExecutableToolsOrThrow(): readonly AgentSessionTool[] {
+    if (!this.executableTools) {
+      throw new Error('Thinking tools not initialized');
     }
-    return this.thinkingEngine;
+    return this.executableTools;
+  }
+
+  /**
+   * memorySystemを取得（初期化されていない場合はエラー）
+   */
+  private getMemorySystemOrThrow(): MemorySystem {
+    if (!this.memorySystem) {
+      throw new Error('MemorySystem not initialized');
+    }
+    return this.memorySystem;
   }
 
   async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
@@ -254,27 +334,20 @@ export class Echo extends DurableObject<Env> {
     const nextAlarm = await this.getNextAlarm();
     const usage = await this.getAllUsage();
 
-    const embeddingService = createEmbeddingService(
-      this._env,
-      instanceConfig.embeddingConfig
-    );
-    const memorySystem = new MemorySystem({
-      sql: this.ctx.storage.sql,
-      embeddingService,
-      logger: this.logger,
-    });
-    const memories = memorySystem.getAllMemories().map((row) => ({
-      content: row.content,
-      type: row.type,
-      emotion: {
-        valence: row.emotion_valence,
-        arousal: row.emotion_arousal,
-        labels: JSON.parse(row.emotion_labels) as string[],
-      },
-      embedding_model: row.embedding_model,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    }));
+    const memories = this.getMemorySystemOrThrow()
+      .getAllMemories()
+      .map((row) => ({
+        content: row.content,
+        type: row.type,
+        emotion: {
+          valence: row.emotion_valence,
+          arousal: row.emotion_arousal,
+          labels: JSON.parse(row.emotion_labels) as string[],
+        },
+        embedding_model: row.embedding_model,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      }));
     const notes = await this.getNotes();
 
     return parseEchoStatus({
@@ -381,7 +454,7 @@ export class Echo extends DurableObject<Env> {
     await this.logger.info(`${name}が思考を開始しました。`);
 
     try {
-      const usage = await this.getThinkingEngineOrThrow().think();
+      const usage = await this.createThinkingEngine().think();
       await this.logger.info(`usage: ${usage.totalTokens}`);
       await this.updateUsage(convertUsage(usage));
       await this.logger.info(`${name}が思考を正常に完了しました。`);
@@ -490,5 +563,52 @@ export class Echo extends DurableObject<Env> {
     await this.logger.debug(
       `Usage accumulated for ${dateKey}: ${JSON.stringify(usageRecord[dateKey], null, 2)}`
     );
+  }
+
+  /**
+   * @returns 実行ごとの thought log adapter
+   */
+  private createThoughtLog(): DiscordThoughtLog {
+    const instanceConfig = this.getInstanceConfigOrThrow();
+
+    return new DiscordThoughtLog({
+      token: instanceConfig.discordBotToken,
+      channelId: instanceConfig.thinkingChannelId,
+    });
+  }
+
+  /**
+   * @param thoughtLog 実行ごとの thought log adapter
+   * @returns OpenAI Responses API 用 model adapter
+   */
+  private createOpenAIClient(
+    thoughtLog: DiscordThoughtLog
+  ): OpenAIResponsesModel {
+    return new OpenAIResponsesModel({
+      apiKey: this._env.OPENAI_API_KEY,
+      logger: this.logger,
+      thoughtLog,
+    });
+  }
+
+  /**
+   * @returns provider/runtime 非依存の core ThinkingEngine
+   */
+  private createThinkingEngine(): AgentThinkingEngine {
+    const instanceConfig = this.getInstanceConfigOrThrow();
+    const memorySystem = this.getMemorySystemOrThrow();
+    const thoughtLog = this.createThoughtLog();
+
+    return new AgentThinkingEngine({
+      model: this.createOpenAIClient(thoughtLog),
+      thoughtLog,
+      logger: this.logger,
+      memory: {
+        getLatest: (): ReturnType<MemorySystem['getLatestMemory']> =>
+          memorySystem.getLatestMemory(),
+      },
+      tools: this.getExecutableToolsOrThrow(),
+      systemPrompt: instanceConfig.systemPrompt,
+    });
   }
 }

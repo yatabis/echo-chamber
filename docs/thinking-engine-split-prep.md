@@ -2,13 +2,13 @@
 
 ## 目的
 
-`apps/cloudflare-workers/src/echo/thinking-engine/index.ts` の責務を分解し、agent の思考 orchestration を `packages/core` に移しつつ、Cloudflare / Discord / OpenAI / Workers AI への具体依存は `apps/cloudflare-workers` に残す。
+もともと `apps/cloudflare-workers/src/echo/thinking-engine/index.ts` にあった責務を分解し、agent の思考 orchestration を `packages/core` に移しつつ、Cloudflare / Discord / OpenAI / Workers AI への具体依存は `apps/cloudflare-workers` に残す。
 
 ここで重要なのは、`ThinkingEngine` という名前の class を単純に移動することではない。現在の実装には engine 本体と composition root が同居しているため、先に責務境界を確定する必要がある。
 
 ## 現状整理
 
-現行の `apps/cloudflare-workers/src/echo/thinking-engine/index.ts` は次の責務を持っている。
+元の `apps/cloudflare-workers/src/echo/thinking-engine/index.ts` は次の責務を持っていた。
 
 - `MemorySystem` / `NoteSystem` の生成
 - embedding service の生成
@@ -75,12 +75,13 @@
 - OpenAI API key
 - Cloudflare bindings
 
-### 2. worker 側: `thinking-engine` factory / composition
+### 2. worker 側: `Echo` composition
 
 候補パス:
 
-- `apps/cloudflare-workers/src/echo/thinking-engine-factory.ts`
-- もしくは `apps/cloudflare-workers/src/echo/thinking-engine/index.ts` を factory に縮小
+- `apps/cloudflare-workers/src/echo/index.tsx`
+
+専用の `thinking-engine` モジュールを残すより、`Echo` 自身を composition root として扱う方が自然である。worker 側に残る処理は Echo 専用の runtime 組み立てであり、独立した domain object ではないためである。
 
 ここで行うこと:
 
@@ -141,9 +142,9 @@
 ### worker 側で残す test
 
 - `createToolExecutionContext()` の adapter 組み立て
-- `ThinkingEngine` factory が runtime 実装を正しく束ねること
+- `Echo` が runtime 実装を正しく束ねること
 - embedding provider の選択
-- DO storage から current usage を読む helper
+- `Echo.run()` 側で usage 永続化が継続すること
 
 今ある `apps/cloudflare-workers/src/llm/openai/functions/*.test.ts` は、thinking-engine 分割とは別軸のテストなので、この段階では原則そのまま維持する。
 
@@ -169,11 +170,12 @@ core 側に新しい `ThinkingEngine` contract を追加する。
 
 ### Step 3
 
-worker 側の `ThinkingEngine` を factory / wrapper に縮める。
+worker 側の composition を `Echo` に寄せる。
 
 - runtime 実装生成
 - core engine への依存注入
-- DO storage から current usage を取得
+- `Echo` が長寿命の runtime 依存を保持し、実行時に core engine を生成する
+- usage 永続化責務を `Echo.run()` 側に残す
 
 ### Step 4
 
