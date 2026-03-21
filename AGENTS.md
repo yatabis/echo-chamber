@@ -30,7 +30,7 @@
 - Dashboard build: `pnpm dashboard:build`
 - Tests: `pnpm test:run`, `pnpm test:coverage`
 - Lint/Format/Types: `pnpm lint`, `pnpm lint:check`, `pnpm format`, `pnpm typecheck`, `pnpm check`
-- Deploy: `pnpm deploy`
+- Deploy: `pnpm run deploy`
 
 ## Coding Style & Naming
 

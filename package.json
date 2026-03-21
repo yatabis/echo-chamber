@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "deploy": "pnpm --filter @echo-chamber/cloudflare-workers deploy",
+    "deploy": "pnpm --filter @echo-chamber/cloudflare-workers run deploy",
     "dev": "pnpm --filter @echo-chamber/cloudflare-workers dev",
     "start": "pnpm --filter @echo-chamber/cloudflare-workers start",
     "cf-typegen": "pnpm --filter @echo-chamber/cloudflare-workers cf-typegen",
