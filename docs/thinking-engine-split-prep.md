@@ -61,11 +61,10 @@
 
 - `ModelPort`
 - `ThoughtLogPort`
-- executable tools の配列
 - `LoggerPort`
-- prompt 構築に必要な input
-- startup 時に注入する latest memory snapshot
-- current usage total
+- `MemoryPort#getLatest`
+- executable tools の配列
+- 解決済みの `systemPrompt`
 
 この engine は次を知らない。
 
@@ -90,7 +89,6 @@
 - `OpenAIResponsesModel` の生成
 - `DiscordThoughtLog` の生成
 - `ToolExecutionContext` の組み立て
-- current usage total の取得
 - core `ThinkingEngine` への依存注入
 
 ## 依存 contract の考え方
@@ -98,20 +96,18 @@
 ### core engine に渡すべき input
 
 - `systemPrompt`
-- `currentDatetime`
-- `latestMemory`
-- `currentUsageTotal`
 
-`latestMemory` は engine 内で `MemoryPort` から取りに行くのではなく、composition 側で取得して data として渡す方がよい。これは engine を pure orchestration に保つためである。
+現在時刻は engine 実行時に都度取得すればよく、constructor input には含めない。`latestMemory` も値注入ではなく `MemoryPort#getLatest` を渡し、engine 側で prompt 用に整形する。
 
 ### core engine に渡すべき service
 
 - `model: ModelPort`
 - `thoughtLog: ThoughtLogPort`
 - `logger: LoggerPort`
-- `tools: AgentExecutableTool[]`
+- `memory: Pick<MemoryPort, 'getLatest'>`
+- `tools: AgentSessionTool[]`
 
-`AgentExecutableTool` は `runAgentSession()` が必要とする `name / contract / execute` を満たすだけの小さな型にする。
+ここでは独自の tool alias は増やさず、`runAgentSession()` が要求する `AgentSessionTool` をそのまま使う。
 
 ## startup sequence の扱い
 
@@ -124,25 +120,13 @@
 
 この sequence 自体は engine の思考開始手順なので、`core` に残す価値が高い。
 
-ただし、特定の `checkNotificationsFunction` 実装に engine が依存する形は避けるべきである。扱い方は次のどちらか。
-
-- engine が `startupTool` を明示的に受け取り、その tool を先行実行する
-- composition 側が startup input を完成させて engine に渡す
-
-現時点では後者より前者の方が責務がはっきりしている。startup sequence は engine の振る舞いであり、ただの data 準備ではないためである。
+起動時に何を実行するかの定義自体は engine の責務として持つ。ただし、そのための `startupTool` を constructor input に露出させる必要はない。Step 2 では engine 内部の開始手順として扱う。
 
 ## current usage の扱い
 
-現行の engine は DO storage から今日の usage を読み、終了ログに合計 token を出している。
+現行の engine は DO storage から今日の usage を読み、終了ログに合計 token を出している。しかし、usage 永続化は session 完了後に worker 側で行われているため、この total 表示は責務として不自然である。
 
-これは `core` の責務ではない。`core` engine は
-
-- session usage delta を返す
-- 終了ログで表示したい current total usage は値として受け取る
-
-に留めるべきである。
-
-つまり、usage の読取元は worker 側、usage の増分は engine 側という分離にする。
+`core` engine は session usage delta を返すだけに留め、累積 usage の読取・永続化・表示は worker 側へ寄せる。
 
 ## test の分け方
 
@@ -170,8 +154,8 @@
 core 側に新しい `ThinkingEngine` contract を追加する。
 
 - engine constructor input の型
-- executable tool の型
-- current usage / latest memory を受ける input 型
+- `MemoryPort#getLatest` を含む依存型
+- `systemPrompt` と executable tools を受ける input 型
 
 この段階では worker 側の既存 `ThinkingEngine` は消さない。
 
@@ -210,5 +194,4 @@ core / worker 双方の test を再配置する。
 
 - core engine が受け取る依存の粒度は適切か
 - startup sequence を engine 責務として持たせるのが妥当か
-- current usage total を value injection にする方針で問題ないか
 - worker 側に残す composition の範囲が広すぎないか
