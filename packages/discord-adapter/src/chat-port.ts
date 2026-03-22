@@ -1,4 +1,8 @@
-import type { ChatMessage, ChatPort } from '@echo-chamber/core/ports/chat';
+import type {
+  ChatChannel,
+  ChatMessage,
+  ChatPort,
+} from '@echo-chamber/core/ports/chat';
 import { formatDatetimeForAgent } from '@echo-chamber/core/utils/datetime';
 
 import {
@@ -7,9 +11,25 @@ import {
   sendChannelMessage,
 } from './api';
 
+export interface DiscordChatChannel extends ChatChannel {
+  discordChannelId: string;
+}
+
 export interface DiscordChatPortOptions {
   token: string;
-  channelId: string;
+  channels: readonly DiscordChatChannel[];
+}
+
+function getChannelOrThrow(
+  channels: readonly DiscordChatChannel[],
+  channelKey: string
+): DiscordChatChannel {
+  const channel = channels.find((candidate) => candidate.key === channelKey);
+  if (channel === undefined) {
+    throw new Error(`Unknown chat channel key: ${channelKey}`);
+  }
+
+  return channel;
 }
 
 /**
@@ -22,11 +42,17 @@ export function createDiscordChatPort(
   options: DiscordChatPortOptions
 ): ChatPort {
   return {
-    async readMessages(limit: number): Promise<ChatMessage[]> {
+    async readMessages(
+      channelKey: string,
+      limit: number
+    ): Promise<ChatMessage[]> {
+      const channel = getChannelOrThrow(options.channels, channelKey);
       const messages = await getChannelMessages(
         options.token,
-        options.channelId,
-        { limit }
+        channel.discordChannelId,
+        {
+          limit,
+        }
       );
 
       return messages.reverse().map((message) => ({
@@ -42,16 +68,22 @@ export function createDiscordChatPort(
       }));
     },
 
-    async sendMessage(message: string): Promise<void> {
-      await sendChannelMessage(options.token, options.channelId, {
+    async sendMessage(channelKey: string, message: string): Promise<void> {
+      const channel = getChannelOrThrow(options.channels, channelKey);
+      await sendChannelMessage(options.token, channel.discordChannelId, {
         content: message,
       });
     },
 
-    async addReaction(messageId: string, reaction: string): Promise<void> {
+    async addReaction(
+      channelKey: string,
+      messageId: string,
+      reaction: string
+    ): Promise<void> {
+      const channel = getChannelOrThrow(options.channels, channelKey);
       await addReactionToMessage(
         options.token,
-        options.channelId,
+        channel.discordChannelId,
         messageId,
         reaction
       );

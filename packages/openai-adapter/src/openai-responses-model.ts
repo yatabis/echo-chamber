@@ -125,7 +125,38 @@ type FunctionFormatterArgs = Record<string, unknown>;
  * @returns thought log に流す短い説明文
  */
 function formatReadChatMessagesCall(args: FunctionFormatterArgs): string {
-  return `*read_chat_messages: ${args.limit as number}*`;
+  const channelKey = args.channelKey as string | undefined;
+  const target =
+    channelKey !== undefined && channelKey !== '' ? ` [${channelKey}]` : '';
+  return `*read_chat_messages${target}: ${args.limit as number}*`;
+}
+
+/**
+ * `send_chat_message` 呼び出しを thought log 向けに整形する。
+ *
+ * @param args function call の引数
+ * @returns thought log に流す短い説明文
+ */
+function formatSendChatMessageCall(args: FunctionFormatterArgs): string {
+  const channelKey = args.channelKey as string | undefined;
+  const target =
+    channelKey !== undefined && channelKey !== '' ? ` [${channelKey}]` : '';
+  return `*send_chat_message${target}: ${args.message as string}*`;
+}
+
+/**
+ * `add_reaction_to_chat_message` 呼び出しを thought log 向けに整形する。
+ *
+ * @param args function call の引数
+ * @returns thought log に流す短い説明文
+ */
+function formatAddReactionToChatMessageCall(
+  args: FunctionFormatterArgs
+): string {
+  const channelKey = args.channelKey as string | undefined;
+  const target =
+    channelKey !== undefined && channelKey !== '' ? ` [${channelKey}]` : '';
+  return `*add_reaction_to_chat_message${target}: ${args.messageId as string} ${args.reaction as string}*`;
 }
 
 /**
@@ -256,6 +287,8 @@ const functionCallFormatters: Record<
   (args: FunctionFormatterArgs) => string
 > = {
   read_chat_messages: formatReadChatMessagesCall,
+  send_chat_message: formatSendChatMessageCall,
+  add_reaction_to_chat_message: formatAddReactionToChatMessageCall,
   think_deeply: formatThinkDeeplyCall,
   store_memory: formatStoreMemoryCall,
   search_memory: formatSearchMemoryCall,

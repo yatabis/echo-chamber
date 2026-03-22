@@ -30,8 +30,9 @@
 worker は Cloudflare 依存の runtime binding を解決する。
 
 - Discord bot token の取得
-- chat / thinking channel id の取得
-- KV key の管理
+- 固定 chat channel 定義の保持
+- thinking channel id の取得
+- thinking channel 用 KV key の管理
 - `Env` / `KVNamespace` を読む resolver
 
 実装:
@@ -41,7 +42,7 @@ worker は Cloudflare 依存の runtime binding を解決する。
 `EchoRuntimeBindings` の責務は次のとおり。
 
 - `discordBotToken`
-- `chatChannelId`
+- `chatChannels`
 - `thinkingChannelId`
 - `embeddingConfig`
 
@@ -52,6 +53,8 @@ worker は Cloudflare 依存の runtime binding を解決する。
 - `ThinkingEngine` には `systemPrompt`
 - `DiscordThoughtLog` には token と `thinkingChannelId`
 - `tool-context` には chat 用の binding だけを渡す
+
+chat channels は worker 側の固定定義として管理し、`thinkingChannelId` だけを KV から解決する。
 
 実装:
 

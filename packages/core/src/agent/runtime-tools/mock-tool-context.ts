@@ -9,10 +9,7 @@ export const mockToolContext: ToolContext = {
     addReaction: vi.fn().mockResolvedValue(undefined),
   },
   notifications: {
-    getNotificationSummary: vi.fn().mockResolvedValue({
-      unreadCount: 0,
-      latestMessagePreview: null,
-    }),
+    getNotificationSummary: vi.fn().mockResolvedValue([]),
   },
   memory: {
     store: vi.fn().mockResolvedValue(undefined),

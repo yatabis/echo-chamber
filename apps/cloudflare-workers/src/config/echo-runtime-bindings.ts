@@ -1,23 +1,28 @@
+import type { ChatChannel } from '@echo-chamber/core/ports/chat';
 import type {
   EchoInstanceId,
   EmbeddingConfig,
 } from '@echo-chamber/core/types/echo-config';
 
+export interface EchoChatChannelBinding extends ChatChannel {
+  discordChannelId: string;
+}
+
 export interface EchoRuntimeBindings {
   discordBotToken: string;
-  chatChannelId: string;
+  chatChannels: EchoChatChannelBinding[];
   thinkingChannelId: string;
   embeddingConfig?: EmbeddingConfig;
 }
 
 export type EchoChatRuntimeBindings = Pick<
   EchoRuntimeBindings,
-  'discordBotToken' | 'chatChannelId'
+  'discordBotToken' | 'chatChannels'
 >;
 
 interface RuntimeBindingSource {
   getDiscordBotToken(env: Env): string;
-  chatChannelKvKey: string;
+  chatChannels: readonly EchoChatChannelBinding[];
   thinkingChannelKvKey: string;
   embeddingConfig?: EmbeddingConfig;
 }
@@ -25,7 +30,20 @@ interface RuntimeBindingSource {
 const RUNTIME_BINDING_SOURCES: Record<EchoInstanceId, RuntimeBindingSource> = {
   rin: {
     getDiscordBotToken: (env) => env.DISCORD_BOT_TOKEN_RIN,
-    chatChannelKvKey: 'chat_channel_discord_rin',
+    chatChannels: [
+      {
+        key: 'yatabis',
+        displayName: 'yatabis',
+        description: 'yatabisとのチャンネル',
+        discordChannelId: '1371143541526499470',
+      },
+      {
+        key: 'all',
+        displayName: 'all',
+        description: '全体チャンネル',
+        discordChannelId: '1485185701468176524',
+      },
+    ],
     thinkingChannelKvKey: 'thinking_channel_discord_rin',
     embeddingConfig: {
       provider: 'workersai',
@@ -34,7 +52,20 @@ const RUNTIME_BINDING_SOURCES: Record<EchoInstanceId, RuntimeBindingSource> = {
   },
   marie: {
     getDiscordBotToken: (env) => env.DISCORD_BOT_TOKEN_MARIE,
-    chatChannelKvKey: 'chat_channel_discord_marie',
+    chatChannels: [
+      {
+        key: 'yatabis',
+        displayName: 'yatabis',
+        description: 'yatabisとのチャンネル',
+        discordChannelId: '1460280463443624020',
+      },
+      {
+        key: 'all',
+        displayName: 'all',
+        description: '全体チャンネル',
+        discordChannelId: '1485185701468176524',
+      },
+    ],
     thinkingChannelKvKey: 'thinking_channel_discord_marie',
   },
 };
@@ -45,16 +76,7 @@ export async function resolveEchoRuntimeBindings(
   instanceId: EchoInstanceId
 ): Promise<EchoRuntimeBindings> {
   const source = RUNTIME_BINDING_SOURCES[instanceId];
-  const [chatChannelId, thinkingChannelId] = await Promise.all([
-    store.get(source.chatChannelKvKey),
-    store.get(source.thinkingChannelKvKey),
-  ]);
-
-  if (chatChannelId === null) {
-    throw new Error(
-      `Chat channel ID not found in KV for instance "${instanceId}" (key: ${source.chatChannelKvKey})`
-    );
-  }
+  const thinkingChannelId = await store.get(source.thinkingChannelKvKey);
 
   if (thinkingChannelId === null) {
     throw new Error(
@@ -64,7 +86,7 @@ export async function resolveEchoRuntimeBindings(
 
   return {
     discordBotToken: source.getDiscordBotToken(env),
-    chatChannelId,
+    chatChannels: source.chatChannels.map((channel) => ({ ...channel })),
     thinkingChannelId,
     embeddingConfig: source.embeddingConfig,
   };

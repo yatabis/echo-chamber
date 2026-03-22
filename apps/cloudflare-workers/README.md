@@ -51,4 +51,4 @@ Cloudflare Worker / Durable Object の実装本体です。
 - ルートの `pnpm test:run` / `pnpm test:coverage` もこの workspace のテストを実行します。
 - `wrangler.jsonc` 変更時は `pnpm cf-typegen` を実行してください。
 - Echo の persona 定義は `@echo-chamber/core/echo/instance-definitions` にあり、この workspace では runtime bindings だけを解決します。
-- DO を動かすには `ECHO_KV` に `chat_channel_discord_*` / `thinking_channel_discord_*` を投入してください（ローカルは `wrangler kv key put --local`）。
+- DO を動かすには `ECHO_KV` に `thinking_channel_discord_*` を投入してください（ローカルは `wrangler kv key put --local`）。chat channels は `src/config/echo-runtime-bindings.ts` の固定定義を使います。

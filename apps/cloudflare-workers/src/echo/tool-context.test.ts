@@ -93,7 +93,19 @@ describe('createToolExecutionContext', () => {
     const context = createToolExecutionContext({
       chatBindings: {
         discordBotToken: 'discord-token',
-        chatChannelId: 'chat-channel',
+        chatChannels: [
+          {
+            key: 'main',
+            displayName: 'メイン',
+            description: '主な会話用チャンネル',
+            discordChannelId: 'chat-channel-main',
+          },
+          {
+            key: 'sub',
+            displayName: 'サブ',
+            discordChannelId: 'chat-channel-sub',
+          },
+        ],
       },
       memorySystem,
       noteSystem,
@@ -102,11 +114,35 @@ describe('createToolExecutionContext', () => {
 
     expect(createDiscordChatPort).toHaveBeenCalledWith({
       token: 'discord-token',
-      channelId: 'chat-channel',
+      channels: [
+        {
+          key: 'main',
+          displayName: 'メイン',
+          description: '主な会話用チャンネル',
+          discordChannelId: 'chat-channel-main',
+        },
+        {
+          key: 'sub',
+          displayName: 'サブ',
+          discordChannelId: 'chat-channel-sub',
+        },
+      ],
     });
     expect(createDiscordNotificationPort).toHaveBeenCalledWith({
       token: 'discord-token',
-      channelId: 'chat-channel',
+      channels: [
+        {
+          key: 'main',
+          displayName: 'メイン',
+          description: '主な会話用チャンネル',
+          discordChannelId: 'chat-channel-main',
+        },
+        {
+          key: 'sub',
+          displayName: 'サブ',
+          discordChannelId: 'chat-channel-sub',
+        },
+      ],
     });
     expect(context.chat).toBe(mockChatPort);
     expect(context.notifications).toBe(mockNotificationPort);

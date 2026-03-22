@@ -420,12 +420,49 @@ describe('formatLogOutput', () => {
         type: 'function_call',
         call_id: 'call_read',
         name: 'read_chat_messages',
-        arguments: JSON.stringify({ limit: 10 }),
+        arguments: JSON.stringify({ channelKey: 'main', limit: 10 }),
         status: 'completed',
       },
     ];
 
-    expect(formatLogOutput(output)).toBe('*read_chat_messages: 10*');
+    expect(formatLogOutput(output)).toBe('*read_chat_messages [main]: 10*');
+  });
+
+  it('send_chat_message', () => {
+    const output: ResponseOutputItem[] = [
+      {
+        type: 'function_call',
+        call_id: 'call_send',
+        name: 'send_chat_message',
+        arguments: JSON.stringify({
+          channelKey: 'main',
+          message: 'hello',
+        }),
+        status: 'completed',
+      },
+    ];
+
+    expect(formatLogOutput(output)).toBe('*send_chat_message [main]: hello*');
+  });
+
+  it('add_reaction_to_chat_message', () => {
+    const output: ResponseOutputItem[] = [
+      {
+        type: 'function_call',
+        call_id: 'call_reaction',
+        name: 'add_reaction_to_chat_message',
+        arguments: JSON.stringify({
+          channelKey: 'main',
+          messageId: 'message-1',
+          reaction: '👍',
+        }),
+        status: 'completed',
+      },
+    ];
+
+    expect(formatLogOutput(output)).toBe(
+      '*add_reaction_to_chat_message [main]: message-1 👍*'
+    );
   });
 
   it('think_deeply', () => {

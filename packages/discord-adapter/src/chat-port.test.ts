@@ -44,10 +44,22 @@ describe('createDiscordChatPort', () => {
 
     const port = createDiscordChatPort({
       token: TOKEN,
-      channelId: CHANNEL_ID,
+      channels: [
+        {
+          key: 'main',
+          displayName: 'メイン',
+          description: '主な会話用チャンネル',
+          discordChannelId: CHANNEL_ID,
+        },
+        {
+          key: 'sub',
+          displayName: 'サブ',
+          discordChannelId: 'another-channel-id',
+        },
+      ],
     });
 
-    const result = await port.readMessages(10);
+    const result = await port.readMessages('main', 10);
 
     expect(getChannelMessages).toHaveBeenCalledWith(TOKEN, CHANNEL_ID, {
       limit: 10,
@@ -73,10 +85,16 @@ describe('createDiscordChatPort', () => {
   it('sendMessage で Discord API に送信する', async () => {
     const port = createDiscordChatPort({
       token: TOKEN,
-      channelId: CHANNEL_ID,
+      channels: [
+        {
+          key: 'main',
+          displayName: 'メイン',
+          discordChannelId: CHANNEL_ID,
+        },
+      ],
     });
 
-    await port.sendMessage('hello');
+    await port.sendMessage('main', 'hello');
 
     expect(sendChannelMessage).toHaveBeenCalledWith(TOKEN, CHANNEL_ID, {
       content: 'hello',
@@ -86,16 +104,39 @@ describe('createDiscordChatPort', () => {
   it('addReaction で Discord API にリアクションを追加する', async () => {
     const port = createDiscordChatPort({
       token: TOKEN,
-      channelId: CHANNEL_ID,
+      channels: [
+        {
+          key: 'main',
+          displayName: 'メイン',
+          discordChannelId: CHANNEL_ID,
+        },
+      ],
     });
 
-    await port.addReaction('message-1', '👍');
+    await port.addReaction('main', 'message-1', '👍');
 
     expect(addReactionToMessage).toHaveBeenCalledWith(
       TOKEN,
       CHANNEL_ID,
       'message-1',
       '👍'
+    );
+  });
+
+  it('未登録の channelKey を拒否する', async () => {
+    const port = createDiscordChatPort({
+      token: TOKEN,
+      channels: [
+        {
+          key: 'main',
+          displayName: 'メイン',
+          discordChannelId: CHANNEL_ID,
+        },
+      ],
+    });
+
+    await expect(port.readMessages('unknown-key', 10)).rejects.toThrow(
+      'Unknown chat channel key: unknown-key'
     );
   });
 });

@@ -8,10 +8,7 @@ const mockChatPort = {
 };
 
 const mockNotificationPort = {
-  getNotificationSummary: vi.fn().mockResolvedValue({
-    unreadCount: 0,
-    latestMessagePreview: null,
-  }),
+  getNotificationSummary: vi.fn().mockResolvedValue([]),
 };
 
 const mockThoughtLog = {

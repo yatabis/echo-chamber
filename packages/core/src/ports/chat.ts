@@ -1,3 +1,9 @@
+export interface ChatChannel {
+  key: string;
+  displayName: string;
+  description?: string;
+}
+
 export interface ChatMessageReaction {
   emoji: string | null;
   me: boolean;
@@ -12,7 +18,11 @@ export interface ChatMessage {
 }
 
 export interface ChatPort {
-  readMessages(limit: number): Promise<ChatMessage[]>;
-  sendMessage(message: string): Promise<void>;
-  addReaction(messageId: string, reaction: string): Promise<void>;
+  readMessages(channelKey: string, limit: number): Promise<ChatMessage[]>;
+  sendMessage(channelKey: string, message: string): Promise<void>;
+  addReaction(
+    channelKey: string,
+    messageId: string,
+    reaction: string
+  ): Promise<void>;
 }

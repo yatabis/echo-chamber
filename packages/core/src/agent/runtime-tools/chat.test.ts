@@ -23,10 +23,7 @@ const mockedAddReaction = vi.mocked(mockToolContext.chat.addReaction);
 
 beforeEach(() => {
   vi.resetAllMocks();
-  mockedGetNotificationSummary.mockResolvedValue({
-    unreadCount: 0,
-    latestMessagePreview: null,
-  });
+  mockedGetNotificationSummary.mockResolvedValue([]);
   mockedReadMessages.mockResolvedValue([]);
   mockedSendMessage.mockResolvedValue(undefined);
   mockedAddReaction.mockResolvedValue(undefined);
@@ -38,71 +35,89 @@ describe('checkNotificationsTool', () => {
   });
 
   it('0件（最新メッセージをプレビュー表示）', async () => {
-    mockedGetNotificationSummary.mockResolvedValue({
-      unreadCount: 0,
-      latestMessagePreview: {
-        messageId: 'message-latest',
-        user: 'user1',
-        message: 'Latest message (already read)',
-        createdAt: '2025/01/23 13:56:07',
-      },
-    });
-
-    const result = await checkNotificationsTool.handler({}, mockToolContext);
-
-    expect(result).toEqual({
-      success: true,
-      notifications: {
-        channel: 'chat',
+    mockedGetNotificationSummary.mockResolvedValue([
+      {
+        channel: {
+          key: 'main',
+          displayName: 'メイン',
+          description: '主な会話用チャンネル',
+        },
         unreadCount: 0,
         latestMessagePreview: {
           messageId: 'message-latest',
           user: 'user1',
           message: 'Latest message (already read)',
-          created_at: '2025/01/23 13:56:07',
+          createdAt: '2025/01/23 13:56:07',
         },
       },
+    ]);
+
+    const result = await checkNotificationsTool.handler({}, mockToolContext);
+
+    expect(result).toEqual({
+      success: true,
+      notifications: [
+        {
+          channelKey: 'main',
+          channelName: 'メイン',
+          channelDescription: '主な会話用チャンネル',
+          unreadCount: 0,
+          latestMessagePreview: {
+            messageId: 'message-latest',
+            user: 'user1',
+            message: 'Latest message (already read)',
+            created_at: '2025/01/23 13:56:07',
+          },
+        },
+      ],
     });
   });
 
   it('100件以上は99+を返す', async () => {
-    mockedGetNotificationSummary.mockResolvedValue({
-      unreadCount: 100,
-      latestMessagePreview: {
-        messageId: 'message-100',
-        user: 'testuser',
-        message: 'Test message',
-        createdAt: '2025/01/23 13:56:07',
-      },
-    });
-
-    const result = await checkNotificationsTool.handler({}, mockToolContext);
-
-    expect(result).toEqual({
-      success: true,
-      notifications: {
-        channel: 'chat',
-        unreadCount: '99+',
+    mockedGetNotificationSummary.mockResolvedValue([
+      {
+        channel: {
+          key: 'main',
+          displayName: 'メイン',
+          description: '主な会話用チャンネル',
+        },
+        unreadCount: 100,
         latestMessagePreview: {
           messageId: 'message-100',
           user: 'testuser',
           message: 'Test message',
-          created_at: '2025/01/23 13:56:07',
+          createdAt: '2025/01/23 13:56:07',
         },
       },
-    });
-  });
+    ]);
 
-  it('最新メッセージがない場合はnullを返す', async () => {
     const result = await checkNotificationsTool.handler({}, mockToolContext);
 
     expect(result).toEqual({
       success: true,
-      notifications: {
-        channel: 'chat',
-        unreadCount: 0,
-        latestMessagePreview: null,
-      },
+      notifications: [
+        {
+          channelKey: 'main',
+          channelName: 'メイン',
+          channelDescription: '主な会話用チャンネル',
+          unreadCount: '99+',
+          latestMessagePreview: {
+            messageId: 'message-100',
+            user: 'testuser',
+            message: 'Test message',
+            created_at: '2025/01/23 13:56:07',
+          },
+        },
+      ],
+    });
+  });
+
+  it('通知がない場合は空配列を返す', async () => {
+    const result = await checkNotificationsTool.handler({}, mockToolContext);
+
+    expect(result).toEqual({
+      success: true,
+      notifications: [],
     });
   });
 
@@ -135,13 +150,14 @@ describe('readChatMessagesTool', () => {
     ]);
 
     const result = await readChatMessagesTool.handler(
-      { limit: 1 },
+      { channelKey: 'main', limit: 1 },
       mockToolContext
     );
 
-    expect(mockedReadMessages).toHaveBeenCalledWith(1);
+    expect(mockedReadMessages).toHaveBeenCalledWith('main', 1);
     expect(result).toEqual({
       success: true,
+      channelKey: 'main',
       messages: [
         {
           messageId: 'message-1',
@@ -169,12 +185,13 @@ describe('readChatMessagesTool', () => {
     ]);
 
     const result = await readChatMessagesTool.handler(
-      { limit: 1 },
+      { channelKey: 'main', limit: 1 },
       mockToolContext
     );
 
     expect(result).toEqual({
       success: true,
+      channelKey: 'main',
       messages: [
         {
           messageId: 'message-1',
@@ -194,7 +211,7 @@ describe('readChatMessagesTool', () => {
     mockedReadMessages.mockRejectedValue(new Error(CHAT_API_ERROR));
 
     const result = await readChatMessagesTool.handler(
-      { limit: 1 },
+      { channelKey: 'main', limit: 1 },
       mockToolContext
     );
 
@@ -212,11 +229,11 @@ describe('sendChatMessageTool', () => {
 
   it('ChatPort.sendMessageを呼ぶ', async () => {
     const result = await sendChatMessageTool.handler(
-      { message: 'Hello' },
+      { channelKey: 'main', message: 'Hello' },
       mockToolContext
     );
 
-    expect(mockedSendMessage).toHaveBeenCalledWith('Hello');
+    expect(mockedSendMessage).toHaveBeenCalledWith('main', 'Hello');
     expect(result).toEqual({ success: true });
   });
 
@@ -224,7 +241,7 @@ describe('sendChatMessageTool', () => {
     mockedSendMessage.mockRejectedValue(new Error(CHAT_API_ERROR));
 
     const result = await sendChatMessageTool.handler(
-      { message: 'Hello' },
+      { channelKey: 'main', message: 'Hello' },
       mockToolContext
     );
 
@@ -244,11 +261,15 @@ describe('addReactionToChatMessageTool', () => {
 
   it('ChatPort.addReactionを呼ぶ', async () => {
     const result = await addReactionToChatMessageTool.handler(
-      { messageId: '123456789', reaction: '👍' },
+      {
+        channelKey: 'main',
+        messageId: '123456789',
+        reaction: '👍',
+      },
       mockToolContext
     );
 
-    expect(mockedAddReaction).toHaveBeenCalledWith('123456789', '👍');
+    expect(mockedAddReaction).toHaveBeenCalledWith('main', '123456789', '👍');
     expect(result).toEqual({ success: true });
   });
 
@@ -256,7 +277,11 @@ describe('addReactionToChatMessageTool', () => {
     mockedAddReaction.mockRejectedValue(new Error(CHAT_API_ERROR));
 
     const result = await addReactionToChatMessageTool.handler(
-      { messageId: '123456789', reaction: '👍' },
+      {
+        channelKey: 'main',
+        messageId: '123456789',
+        reaction: '👍',
+      },
       mockToolContext
     );
 

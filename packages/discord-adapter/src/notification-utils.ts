@@ -1,4 +1,4 @@
-import type { NotificationSummary } from '@echo-chamber/core/ports/notification';
+import type { ChannelNotificationSummary } from '@echo-chamber/core/ports/notification';
 import { formatDatetimeForAgent } from '@echo-chamber/core/utils/datetime';
 
 import { getChannelMessages, getCurrentUser } from './api';
@@ -32,7 +32,7 @@ export async function getUnreadMessageCount(
 export async function getNotificationDetails(
   token: string,
   channelId: string
-): Promise<NotificationSummary> {
+): Promise<Omit<ChannelNotificationSummary, 'channel'>> {
   const limit = 100;
   const user = await getCurrentUser(token);
   const messages = await getChannelMessages(token, channelId, { limit });

@@ -99,11 +99,11 @@ export function createToolExecutionContext(options: {
   return {
     chat: createDiscordChatPort({
       token: options.chatBindings.discordBotToken,
-      channelId: options.chatBindings.chatChannelId,
+      channels: options.chatBindings.chatChannels,
     }),
     notifications: createDiscordNotificationPort({
       token: options.chatBindings.discordBotToken,
-      channelId: options.chatBindings.chatChannelId,
+      channels: options.chatBindings.chatChannels,
     }),
     memory: createMemoryPort(options.memorySystem),
     notes: createNotePort(options.noteSystem),

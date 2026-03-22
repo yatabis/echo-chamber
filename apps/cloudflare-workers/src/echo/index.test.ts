@@ -52,7 +52,19 @@ const {
   mockRerankingService: { provider: 'test-reranker' },
   mockRuntimeBindings: {
     discordBotToken: 'discord-token',
-    chatChannelId: 'chat-channel',
+    chatChannels: [
+      {
+        key: 'main',
+        displayName: 'メイン',
+        description: '主な会話用チャンネル',
+        discordChannelId: 'chat-channel-main',
+      },
+      {
+        key: 'sub',
+        displayName: 'サブ',
+        discordChannelId: 'chat-channel-sub',
+      },
+    ],
     thinkingChannelId: 'thinking-channel',
     embeddingConfig: {
       provider: 'workersai' as const,

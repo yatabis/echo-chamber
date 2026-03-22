@@ -17,23 +17,21 @@ export const checkNotificationsTool = new Tool(
 
       return {
         success: true,
-        notifications: {
-          channel: 'chat',
-          unreadCount:
-            notificationDetails.unreadCount > 99
-              ? '99+'
-              : notificationDetails.unreadCount,
+        notifications: notificationDetails.map((summary) => ({
+          channelKey: summary.channel.key,
+          channelName: summary.channel.displayName,
+          channelDescription: summary.channel.description ?? null,
+          unreadCount: summary.unreadCount > 99 ? '99+' : summary.unreadCount,
           latestMessagePreview:
-            notificationDetails.latestMessagePreview === null
+            summary.latestMessagePreview === null
               ? null
               : {
-                  messageId: notificationDetails.latestMessagePreview.messageId,
-                  user: notificationDetails.latestMessagePreview.user,
-                  message: notificationDetails.latestMessagePreview.message,
-                  created_at:
-                    notificationDetails.latestMessagePreview.createdAt,
+                  messageId: summary.latestMessagePreview.messageId,
+                  user: summary.latestMessagePreview.user,
+                  message: summary.latestMessagePreview.message,
+                  created_at: summary.latestMessagePreview.createdAt,
                 },
-        },
+        })),
       };
     } catch (error) {
       await ctx.logger.error(
@@ -49,12 +47,13 @@ export const checkNotificationsTool = new Tool(
 
 export const readChatMessagesTool = new Tool(
   readChatMessagesToolSpec,
-  async ({ limit }, ctx) => {
+  async ({ channelKey, limit }, ctx) => {
     try {
-      const messages = await ctx.chat.readMessages(limit);
+      const messages = await ctx.chat.readMessages(channelKey, limit);
 
       return {
         success: true,
+        channelKey,
         messages: messages.map((message) => ({
           messageId: message.messageId,
           user: message.user,
@@ -77,9 +76,9 @@ export const readChatMessagesTool = new Tool(
 
 export const sendChatMessageTool = new Tool(
   sendChatMessageToolSpec,
-  async ({ message }, ctx) => {
+  async ({ channelKey, message }, ctx) => {
     try {
-      await ctx.chat.sendMessage(message);
+      await ctx.chat.sendMessage(channelKey, message);
 
       return {
         success: true,
@@ -98,9 +97,9 @@ export const sendChatMessageTool = new Tool(
 
 export const addReactionToChatMessageTool = new Tool(
   addReactionToChatMessageToolSpec,
-  async ({ messageId, reaction }, ctx) => {
+  async ({ channelKey, messageId, reaction }, ctx) => {
     try {
-      await ctx.chat.addReaction(messageId, reaction);
+      await ctx.chat.addReaction(channelKey, messageId, reaction);
 
       return {
         success: true,

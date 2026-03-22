@@ -41,6 +41,9 @@ describe('buildToolCatalogPrompt', () => {
       expect(result).toContain(`- ${tool.name}: ${tool.description}`);
     }
 
+    expect(result).toContain(
+      'channelKey (required): 読み取り対象の channelKey。check_notifications の結果に含まれる channelKey を使う。'
+    );
     expect(result).toContain('limit (required): 取得するメッセージ数');
     expect(result).toContain('arguments: none');
   });

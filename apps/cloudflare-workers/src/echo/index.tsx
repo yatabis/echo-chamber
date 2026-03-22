@@ -47,6 +47,7 @@ import { OpenAIResponsesModel } from '@echo-chamber/openai-adapter/openai-respon
 
 import {
   resolveEchoRuntimeBindings,
+  type EchoChatChannelBinding,
   type EchoRuntimeBindings,
 } from '../config/echo-runtime-bindings';
 import { createEmbeddingService } from '../embedding/create-embedding-service';
@@ -57,11 +58,16 @@ import { createToolExecutionContext } from './tool-context';
 
 import type { Logger } from '../utils/logger';
 
-async function fetchUnreadMessageCount(
+async function fetchUnreadMessageCounts(
   token: string,
-  channelId: string
-): Promise<number> {
-  return getUnreadMessageCount(token, channelId);
+  chatChannels: readonly EchoChatChannelBinding[]
+): Promise<{ channel: EchoChatChannelBinding; unreadCount: number }[]> {
+  return await Promise.all(
+    chatChannels.map(async (channel) => ({
+      channel,
+      unreadCount: await getUnreadMessageCount(token, channel.discordChannelId),
+    }))
+  );
 }
 
 export class Echo extends DurableObject<Env> {
@@ -591,22 +597,39 @@ export class Echo extends DurableObject<Env> {
     const name = await this.getName();
     const runtimeBindings = this.getRuntimeBindingsOrThrow();
 
-    if (runtimeBindings.chatChannelId === '') {
-      await this.logger.error(`${name}のチャンネルIDが設定されていません。`);
+    if (runtimeBindings.chatChannels.length === 0) {
+      await this.logger.error(
+        `${name}のチャットチャンネルが設定されていません。`
+      );
       return false;
     }
 
-    const unreadCount = await fetchUnreadMessageCount(
+    const unreadCounts = await fetchUnreadMessageCounts(
       runtimeBindings.discordBotToken,
-      runtimeBindings.chatChannelId
+      runtimeBindings.chatChannels
     );
-    if (unreadCount > 0) {
-      await this.logger.info(`${name}の未読メッセージ数: ${unreadCount}`);
+
+    const unreadChannels = unreadCounts.filter(
+      ({ unreadCount }) => unreadCount > 0
+    );
+    if (unreadChannels.length > 0) {
+      const totalUnreadCount = unreadChannels.reduce(
+        (total, { unreadCount }) => total + unreadCount,
+        0
+      );
+      await this.logger.info(
+        `${name}の未読メッセージ数: ${totalUnreadCount} (${unreadChannels
+          .map(
+            ({ channel, unreadCount }) =>
+              `${channel.displayName}(${channel.key}): ${unreadCount}`
+          )
+          .join(', ')})`
+      );
     } else {
       await this.logger.debug(`${name}の未読メッセージはありません。`);
     }
 
-    return unreadCount > 0;
+    return unreadChannels.length > 0;
   }
 
   /**

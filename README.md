@@ -76,19 +76,19 @@ pnpm --filter @echo-chamber/cloudflare-workers exec wrangler secret put LOG_CHAN
 
 `ENVIRONMENT=local` のときのみ `POST /{instanceId}/run` が有効です。
 
-## KV 初期化（チャンネル ID）
+## KV 初期化（thinking channel ID）
 
 `ECHO_KV` に以下キーを登録してください。
 
-- `chat_channel_discord_rin`
 - `thinking_channel_discord_rin`
-- `chat_channel_discord_marie`
 - `thinking_channel_discord_marie`
+
+chat 用チャンネル定義は `apps/cloudflare-workers/src/config/echo-runtime-bindings.ts` に固定で持ちます。
+ここでは `thinkingChannelId` だけを KV に設定します。
 
 設定例:
 
 ```bash
-pnpm --filter @echo-chamber/cloudflare-workers exec wrangler kv key put --binding ECHO_KV --local chat_channel_discord_rin "<CHAT_CHANNEL_ID>"
 pnpm --filter @echo-chamber/cloudflare-workers exec wrangler kv key put --binding ECHO_KV --local thinking_channel_discord_rin "<THINKING_CHANNEL_ID>"
 ```
 
