@@ -7,10 +7,30 @@ import {
   ZERO_MODEL_USAGE,
 } from './session';
 
+import type { FinishThinkingSessionRecord } from './tools/thinking';
 import type { ModelPort, ModelToolContract, ModelUsage } from '../ports/model';
 
 const NO_TOOL_CALLS_CONTINUING_WARNING =
   'No tool calls returned; continuing until finish_thinking is called';
+
+function createSessionContext(): FinishThinkingSessionRecord {
+  return {
+    content:
+      'Responded to recent messages and left a concise recap for the next cycle.',
+    emotion: {
+      valence: 0.4,
+      arousal: 0.2,
+      labels: ['calm', 'satisfied'],
+    },
+  };
+}
+
+function createFinishThinkingInput(reason = 'done'): string {
+  return JSON.stringify({
+    reason,
+    session_record: createSessionContext(),
+  });
+}
 
 function createUsage(overrides?: Partial<ModelUsage>): ModelUsage {
   return {
@@ -147,7 +167,7 @@ describe('runAgentSession', () => {
             type: 'tool_call',
             callId: 'call-finish',
             toolName: 'finish_thinking',
-            input: '{"reason":"done"}',
+            input: createFinishThinkingInput(),
           },
         ],
         usage: createUsage({ totalTokens: 5 }),
@@ -190,8 +210,9 @@ describe('runAgentSession', () => {
     });
     expect(logger.warn).toHaveBeenCalledTimes(1);
     expect(logger.warn).toHaveBeenCalledWith(NO_TOOL_CALLS_CONTINUING_WARNING);
-    expect(executeFinish).toHaveBeenCalledWith('{"reason":"done"}');
+    expect(executeFinish).toHaveBeenCalledWith(createFinishThinkingInput());
     expect(result).toEqual({
+      context: createSessionContext(),
       usage: createUsage({ totalTokens: 15 }),
       responseToken: 'resp-2',
     });
@@ -243,7 +264,7 @@ describe('runAgentSession', () => {
             type: 'tool_call',
             callId: 'call-finish',
             toolName: 'finish_thinking',
-            input: '{"reason":"done"}',
+            input: createFinishThinkingInput(),
           },
         ],
         usage: createUsage({
@@ -304,8 +325,9 @@ describe('runAgentSession', () => {
       ],
       previousResponseToken: 'resp-2',
     });
-    expect(executeFinish).toHaveBeenCalledWith('{"reason":"done"}');
+    expect(executeFinish).toHaveBeenCalledWith(createFinishThinkingInput());
     expect(result).toEqual({
+      context: createSessionContext(),
       usage: createUsage({
         cachedInputTokens: 111,
         uncachedInputTokens: 222,
@@ -331,7 +353,7 @@ describe('runAgentSession', () => {
           type: 'tool_call',
           callId: 'call-finish',
           toolName: 'finish_thinking',
-          input: '{"reason":"done"}',
+          input: createFinishThinkingInput(),
         },
       ],
       usage: createUsage({ totalTokens: 10 }),
@@ -366,8 +388,77 @@ describe('runAgentSession', () => {
     expect(executeFinish).toHaveBeenCalled();
     expect(generate).toHaveBeenCalledTimes(1);
     expect(result).toEqual({
+      context: createSessionContext(),
       usage: createUsage({ totalTokens: 10 }),
       responseToken: 'resp-1',
+    });
+  });
+
+  it('無効な finish_thinking は継続し、有効な finish_thinking で終了する', async () => {
+    const invalidFinishInput = '{"reason":"done"}';
+    const generate = vi
+      .fn<ModelPort['generate']>()
+      .mockResolvedValueOnce({
+        output: [
+          {
+            type: 'tool_call',
+            callId: 'call-finish-invalid',
+            toolName: 'finish_thinking',
+            input: invalidFinishInput,
+          },
+        ],
+        usage: createUsage({ totalTokens: 10 }),
+        responseToken: 'resp-1',
+      })
+      .mockResolvedValueOnce({
+        output: [
+          {
+            type: 'tool_call',
+            callId: 'call-finish-valid',
+            toolName: 'finish_thinking',
+            input: createFinishThinkingInput('done for real'),
+          },
+        ],
+        usage: createUsage({ totalTokens: 5 }),
+        responseToken: 'resp-2',
+      });
+    const executeFinish = vi
+      .fn()
+      .mockResolvedValueOnce('{"success":false,"error":"invalid finish"}')
+      .mockResolvedValueOnce('{"success":true}');
+
+    const result = await runAgentSession({
+      model: { generate },
+      tools: [
+        {
+          name: 'finish_thinking',
+          contract: createToolContract('finish_thinking'),
+          execute: executeFinish,
+        },
+      ],
+      initialInput: [
+        {
+          role: 'developer',
+          content: 'test',
+        },
+      ],
+    });
+
+    expect(generate).toHaveBeenNthCalledWith(2, {
+      input: [
+        {
+          type: 'tool_result',
+          callId: 'call-finish-invalid',
+          output: '{"success":false,"error":"invalid finish"}',
+        },
+      ],
+      tools: [createToolContract('finish_thinking')],
+      previousResponseToken: 'resp-1',
+    });
+    expect(result).toEqual({
+      context: createSessionContext(),
+      usage: createUsage({ totalTokens: 15 }),
+      responseToken: 'resp-2',
     });
   });
 

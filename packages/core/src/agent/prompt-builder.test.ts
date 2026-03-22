@@ -27,6 +27,7 @@ describe('buildRuntimeContextPrompt', () => {
   it('latest memory がない場合の runtime context block を生成する', () => {
     const result = buildRuntimeContextPrompt(
       new Date('2025-01-25T15:00:00.000Z'),
+      null,
       null
     );
 
@@ -47,13 +48,37 @@ describe('buildRuntimeContextPrompt', () => {
           arousal: 0.4,
           labels: ['joy', 'interest'],
         },
-      }
+      },
+      null
     );
 
     expect(result).toContain('Latest memory:');
     expect(result).toContain('"content": "Had a meaningful conversation."');
     expect(result).toContain('"created_at": "2日前 (2025年01月23日 13:56:07)"');
     expect(result).toContain('"valence": 0.7');
+    expect(result).toContain('"labels": [');
+  });
+
+  it('latest context がある場合の runtime context block を生成する', () => {
+    const result = buildRuntimeContextPrompt(
+      new Date('2025-01-25T15:00:00.000Z'),
+      null,
+      {
+        content: 'Finished replying to the urgent thread and queued the rest.',
+        createdAt: '2025-01-25T15:00:00.000Z',
+        emotion: {
+          valence: 0.4,
+          arousal: 0.2,
+          labels: ['calm', 'satisfied'],
+        },
+      }
+    );
+
+    expect(result).toContain('Latest context:');
+    expect(result).toContain(
+      '"content": "Finished replying to the urgent thread and queued the rest."'
+    );
+    expect(result).toContain('"created_at": "2025-01-25T15:00:00.000Z"');
     expect(result).toContain('"labels": [');
   });
 });
@@ -63,6 +88,7 @@ describe('buildAgentPromptMessages', () => {
     const result = buildAgentPromptMessages({
       systemPrompt: '<persona>Test persona</persona>',
       currentDatetime: new Date('2025-01-25T15:00:00.000Z'),
+      latestContext: null,
       latestMemory: null,
     });
 

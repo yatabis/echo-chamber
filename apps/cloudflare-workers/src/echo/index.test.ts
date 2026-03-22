@@ -4,6 +4,7 @@ import { MemorySystem } from '@echo-chamber/cloudflare-runtime/memory-system';
 import { canonicalRuntimeTools } from '@echo-chamber/core/agent/runtime-tools/catalog';
 import { bindRuntimeTools } from '@echo-chamber/core/agent/runtime-tools/tool';
 import { getEchoInstanceDefinition } from '@echo-chamber/core/echo/instance-definitions';
+import type { ContextSnapshot } from '@echo-chamber/core/ports/context';
 
 import { resolveEchoRuntimeBindings } from '../config/echo-runtime-bindings';
 import { createEmbeddingService } from '../embedding/create-embedding-service';
@@ -105,18 +106,22 @@ vi.mock('./tool-context', () => ({
 function createMockStorage(): {
   storage: DurableObjectStorage;
   deleteFn: ReturnType<typeof vi.fn>;
+  getFn: ReturnType<typeof vi.fn>;
   putFn: ReturnType<typeof vi.fn>;
 } {
   const deleteFn = vi.fn(async () => Promise.resolve(false));
+  const getFn = vi.fn(async () => Promise.resolve(undefined));
   const putFn = vi.fn(async () => Promise.resolve());
 
   return {
     storage: {
       delete: deleteFn,
+      get: getFn,
       put: putFn,
       sql: { exec: vi.fn() },
     } as unknown as DurableObjectStorage,
     deleteFn,
+    getFn,
     putFn,
   };
 }
@@ -211,5 +216,106 @@ describe('Echo.ensureInitialized', () => {
     expect(createToolExecutionContext).not.toHaveBeenCalled();
     expect(bindRuntimeTools).not.toHaveBeenCalled();
     expect(mockMemorySystem.reEmbedStaleMemories).not.toHaveBeenCalled();
+  });
+});
+
+describe('Echo context storage', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('DO storage から context を読み出せる', async () => {
+    const env = createMockEnv();
+    const { storage, getFn } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+    const context: ContextSnapshot = {
+      content: 'Latest context for the next wake.',
+      createdAt: '2025-01-25T15:00:00.000Z',
+      updatedAt: '2025-01-25T15:00:00.000Z',
+      emotion: {
+        valence: 0.4,
+        arousal: 0.2,
+        labels: ['calm'],
+      },
+    };
+    getFn.mockResolvedValue(context);
+
+    const result = await (
+      echo as unknown as {
+        loadContext(): Promise<ContextSnapshot | null>;
+      }
+    ).loadContext();
+
+    expect(getFn).toHaveBeenCalledWith('context');
+    expect(result).toEqual(context);
+  });
+
+  it('run 時に返却された context を DO storage へ保存する', async () => {
+    const env = createMockEnv();
+    const { storage, putFn } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+    const context: ContextSnapshot = {
+      content: 'Summarized the session for the next cycle.',
+      createdAt: '2025-01-25T15:00:00.000Z',
+      updatedAt: '2025-01-25T15:00:00.000Z',
+      emotion: {
+        valence: 0.4,
+        arousal: 0.2,
+        labels: ['calm', 'satisfied'],
+      },
+    };
+    const think = vi.fn().mockResolvedValue({
+      context,
+      usage: {
+        cachedInputTokens: 0,
+        uncachedInputTokens: 0,
+        totalInputTokens: 0,
+        outputTokens: 0,
+        reasoningTokens: 0,
+        totalTokens: 42,
+      },
+    });
+    const thoughtLogSend = vi.fn().mockResolvedValue(undefined);
+
+    vi.spyOn(
+      echo as unknown as { validateRunPreconditions(): Promise<boolean> },
+      'validateRunPreconditions'
+    ).mockResolvedValue(true);
+    vi.spyOn(
+      echo as unknown as { setState(state: string): Promise<void> },
+      'setState'
+    ).mockResolvedValue(undefined);
+    vi.spyOn(
+      echo as unknown as { getName(): Promise<string> },
+      'getName'
+    ).mockResolvedValue('リン');
+    vi.spyOn(
+      echo as unknown as {
+        createThinkingEngine(): { think(): Promise<unknown> };
+      },
+      'createThinkingEngine'
+    ).mockReturnValue({
+      think,
+    });
+    vi.spyOn(
+      echo as unknown as { updateUsage(): Promise<{ total_tokens: number }> },
+      'updateUsage'
+    ).mockResolvedValue({ total_tokens: 42 });
+    vi.spyOn(
+      echo as unknown as {
+        createThoughtLog(): { send(message: string): Promise<void> };
+      },
+      'createThoughtLog'
+    ).mockReturnValue({
+      send: thoughtLogSend,
+    });
+
+    await echo.run();
+
+    expect(think).toHaveBeenCalledTimes(1);
+    expect(putFn).toHaveBeenCalledWith('context', context);
+    expect(thoughtLogSend).toHaveBeenCalledWith(
+      'Usage: 42 tokens (Total: 42 tokens)'
+    );
   });
 });

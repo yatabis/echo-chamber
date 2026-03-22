@@ -1,5 +1,10 @@
 import { getErrorMessage } from '../utils/error';
 
+import {
+  finishThinkingInputSchema,
+  type FinishThinkingSessionRecord,
+} from './tools/thinking';
+
 import type { LoggerPort } from '../ports/logger';
 import type {
   ModelInputItem,
@@ -38,6 +43,7 @@ export interface RunAgentSessionInput {
  */
 export interface AgentSessionResult {
   usage: ModelUsage;
+  context?: FinishThinkingSessionRecord;
   responseToken?: string;
 }
 
@@ -117,10 +123,44 @@ function getToolCalls(response: ModelResponse): ModelToolCall[] {
   return response.output.filter((item) => item.type === 'tool_call');
 }
 
-function shouldFinish(toolCalls: readonly ModelToolCall[]): boolean {
-  return toolCalls.some((toolCall) => toolCall.toolName === 'finish_thinking');
+/**
+ * `finish_thinking` 呼び出し列から、有効な session_record を抜き出す。
+ * tool 名だけでは終了扱いにせず、schema に合致した入力を持つ場合だけ完了とみなす。
+ *
+ * @param toolCalls 現在ターンでモデルが返した tool call 一覧
+ * @returns 永続化可能な session_record。見つからない、または不正なら `null`
+ */
+function parseFinishThinkingContext(
+  toolCalls: readonly ModelToolCall[]
+): FinishThinkingSessionRecord | null {
+  for (const toolCall of toolCalls) {
+    if (toolCall.toolName !== 'finish_thinking') {
+      continue;
+    }
+
+    try {
+      const parsed = finishThinkingInputSchema.safeParse(
+        JSON.parse(toolCall.input)
+      );
+      if (parsed.success) {
+        return parsed.data.session_record;
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
 }
 
+/**
+ * 現在ターンの tool call 群を、次ターンへ渡す tool_result input 列へ変換する。
+ * tool が 1 件も無い場合は空配列を返し、そのまま次ターンを継続できるようにする。
+ *
+ * @param toolCalls 現在ターンで実行対象になった tool call
+ * @param tools 実行可能な tool 群
+ * @returns 次ターン input にそのまま渡せる tool_result 列
+ */
 async function createNextInput(
   toolCalls: readonly ModelToolCall[],
   tools: readonly AgentSessionTool[]
@@ -141,7 +181,7 @@ async function createNextInput(
 /**
  * provider 非依存の agent session loop。
  * モデル出力に tool call があれば実行結果を次ターン input に変換し、
- * `finish_thinking` が現れるか maxTurns に達するまで turn を繰り返す。
+ * 有効な `finish_thinking` が現れるか maxTurns に達するまで turn を繰り返す。
  */
 export async function runAgentSession(
   input: RunAgentSessionInput
@@ -171,12 +211,15 @@ export async function runAgentSession(
       await input.logger?.warn(NO_TOOL_CALLS_CONTINUING_WARNING);
     }
 
+    const finishThinkingContext = parseFinishThinkingContext(toolCalls);
+
     // Tool results, or an empty carry-over when no tools were used,
     // become the next model input for the following turn.
     // eslint-disable-next-line no-await-in-loop
     currentInput = await createNextInput(toolCalls, input.tools);
-    if (shouldFinish(toolCalls)) {
+    if (finishThinkingContext !== null) {
       return {
+        context: finishThinkingContext,
         usage: totalUsage,
         responseToken: previousResponseToken,
       };

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildAgentPromptMessages } from './prompt-builder';
 import { ThinkingEngine } from './thinking-engine';
 
+import type { ContextSnapshot } from '../ports/context';
 import type { MemoryRecord } from '../ports/memory';
 import type { ModelPort, ModelToolContract, ModelUsage } from '../ports/model';
 
@@ -27,6 +28,35 @@ function createToolContract(name: string): ModelToolContract {
   };
 }
 
+function createSessionContext(): ContextSnapshot {
+  return {
+    content:
+      'Replied to urgent messages and left a short recap for the next run.',
+    createdAt: '2025-01-24T12:34:56.000Z',
+    updatedAt: '2025-01-24T12:34:56.000Z',
+    emotion: {
+      valence: 0.4,
+      arousal: 0.2,
+      labels: ['calm', 'satisfied'],
+    },
+  };
+}
+
+function createFinishThinkingInput(): string {
+  return JSON.stringify({
+    reason: 'done',
+    session_record: {
+      content:
+        'Replied to urgent messages and left a short recap for the next run.',
+      emotion: {
+        valence: 0.4,
+        arousal: 0.2,
+        labels: ['calm', 'satisfied'],
+      },
+    },
+  });
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -45,7 +75,7 @@ describe('ThinkingEngine', () => {
           type: 'tool_call',
           callId: 'call-finish',
           toolName: 'finish_thinking',
-          input: '{"reason":"done"}',
+          input: createFinishThinkingInput(),
         },
       ],
       usage,
@@ -63,6 +93,7 @@ describe('ThinkingEngine', () => {
       createdAt: '2日前 (2025年01月23日 13:56:07)',
       updatedAt: '2日前 (2025年01月23日 13:56:07)',
     };
+    const latestContext = createSessionContext();
 
     const engine = new ThinkingEngine({
       model: { generate },
@@ -73,6 +104,9 @@ describe('ThinkingEngine', () => {
         info: vi.fn(),
         warn: vi.fn(),
         error: vi.fn(),
+      },
+      context: {
+        load: vi.fn().mockResolvedValue(latestContext),
       },
       memory: {
         getLatest: vi.fn().mockResolvedValue(latestMemory),
@@ -97,6 +131,11 @@ describe('ThinkingEngine', () => {
     const promptMessages = buildAgentPromptMessages({
       systemPrompt: '<persona>Test persona</persona>',
       currentDatetime: new Date('2025-01-25T15:00:00.000Z'),
+      latestContext: {
+        content: latestContext.content,
+        createdAt: latestContext.createdAt,
+        emotion: latestContext.emotion,
+      },
       latestMemory: {
         content: latestMemory.content,
         createdAt: latestMemory.createdAt,
@@ -131,8 +170,16 @@ describe('ThinkingEngine', () => {
     });
     expect(thoughtLogSend).toHaveBeenNthCalledWith(1, '*Thinking started...*');
     expect(thoughtLogSend).toHaveBeenNthCalledWith(2, '*Thinking completed.*');
-    expect(finishToolExecute).toHaveBeenCalledWith('{"reason":"done"}');
-    expect(result).toEqual(usage);
+    expect(finishToolExecute).toHaveBeenCalledWith(createFinishThinkingInput());
+    expect(result).toEqual({
+      context: {
+        content: latestContext.content,
+        createdAt: '2025-01-25T15:00:00.000Z',
+        emotion: latestContext.emotion,
+        updatedAt: '2025-01-25T15:00:00.000Z',
+      },
+      usage,
+    });
   });
 
   it('起動用 tool が未登録なら失敗する', async () => {
@@ -148,6 +195,9 @@ describe('ThinkingEngine', () => {
         info: vi.fn(),
         warn: vi.fn(),
         error: vi.fn(),
+      },
+      context: {
+        load: vi.fn().mockResolvedValue(null),
       },
       memory: {
         getLatest: vi.fn().mockResolvedValue(null),
@@ -185,6 +235,9 @@ describe('ThinkingEngine', () => {
         info: vi.fn(),
         warn: vi.fn(),
         error: vi.fn(),
+      },
+      context: {
+        load: vi.fn().mockResolvedValue(null),
       },
       memory: {
         getLatest: vi.fn().mockResolvedValue(null),

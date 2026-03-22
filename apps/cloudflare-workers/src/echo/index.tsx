@@ -32,6 +32,7 @@ import {
   convertUsage,
   getTodayUsageKey,
 } from '@echo-chamber/core/echo/usage';
+import type { ContextSnapshot } from '@echo-chamber/core/ports/context';
 import type { EchoInstanceId } from '@echo-chamber/core/types/echo-config';
 import { isValidInstanceId } from '@echo-chamber/core/types/echo-config';
 import { formatDatetime } from '@echo-chamber/core/utils/datetime';
@@ -416,7 +417,10 @@ export class Echo extends DurableObject<Env> {
     await this.logger.info(`${name}が思考を開始しました。`);
 
     try {
-      const usage = await this.createThinkingEngine().think();
+      const { context, usage } = await this.createThinkingEngine().think();
+      if (context !== null) {
+        await this.saveContext(context);
+      }
       await this.logger.info(`usage: ${usage.totalTokens}`);
       const totalUsage = await this.updateUsage(convertUsage(usage));
       await this.createThoughtLog().send(
@@ -538,6 +542,24 @@ export class Echo extends DurableObject<Env> {
   }
 
   /**
+   * 前回 `finish_thinking` が残した context を DO storage から読み出す。
+   *
+   * @returns 保存済み context。未保存なら `null`
+   */
+  private async loadContext(): Promise<ContextSnapshot | null> {
+    return (await this.storage.get<ContextSnapshot>('context')) ?? null;
+  }
+
+  /**
+   * 次回起動時に注入する最新 context を DO storage へ保存する。
+   *
+   * @param context 今回セッションの終了時に確定した context snapshot
+   */
+  private async saveContext(context: ContextSnapshot): Promise<void> {
+    await this.storage.put('context', context);
+  }
+
+  /**
    * @returns 実行ごとの thought log adapter
    */
   private createThoughtLog(): DiscordThoughtLog {
@@ -575,6 +597,10 @@ export class Echo extends DurableObject<Env> {
       model: this.createOpenAIClient(thoughtLog),
       thoughtLog,
       logger: this.logger,
+      context: {
+        load: async (): Promise<ContextSnapshot | null> =>
+          await this.loadContext(),
+      },
       memory: {
         getLatest: (): ReturnType<MemorySystem['getLatestMemory']> =>
           memorySystem.getLatestMemory(),

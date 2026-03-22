@@ -28,12 +28,23 @@ export interface PromptMemoryContext {
 }
 
 /**
+ * 起動時に prompt へ注入する最新 context の要約。
+ * 直前セッションの要点だけを表し、長期記憶とは別枠で扱う。
+ */
+export interface PromptContextSnapshot {
+  content: string;
+  createdAt: string;
+  emotion: Emotion;
+}
+
+/**
  * Agent の初期 developer prompt を組み立てるための入力。
  * static prompt、本時刻、直近 memory、利用可能ツール一覧をまとめて受け取る。
  */
 export interface BuildAgentPromptInput {
   systemPrompt: string;
   currentDatetime: Date;
+  latestContext: PromptContextSnapshot | null;
   latestMemory: PromptMemoryContext | null;
   toolSpecifications?: readonly PromptToolSpecification[];
 }
@@ -96,16 +107,33 @@ export function buildToolCatalogPrompt(
 
 /**
  * 起動時の runtime context を表す `<runtime_context>` ブロックを生成する。
- * 直近 memory と現在時刻をひとまとめにし、思考再開時の足掛かりとして prompt に差し込む。
+ * 直近 context / memory と現在時刻をひとまとめにし、
+ * 思考再開時の足掛かりとして prompt に差し込む。
  */
 export function buildRuntimeContextPrompt(
   currentDatetime: Date,
-  latestMemory: PromptMemoryContext | null
+  latestMemory: PromptMemoryContext | null,
+  latestContext: PromptContextSnapshot | null
 ): string {
   const currentDatetimeText = formatJapaneseDatetime(currentDatetime);
-  const latestMemoryBlock =
+  const persistedBlocks = [
+    latestContext === null
+      ? null
+      : `Latest context:\n${JSON.stringify(
+          {
+            content: latestContext.content,
+            created_at: latestContext.createdAt,
+            emotion: {
+              valence: latestContext.emotion.valence,
+              arousal: latestContext.emotion.arousal,
+              labels: latestContext.emotion.labels,
+            },
+          },
+          null,
+          2
+        )}`,
     latestMemory === null
-      ? 'No persisted context loaded.'
+      ? null
       : `Latest memory:\n${JSON.stringify(
           {
             content: latestMemory.content,
@@ -118,11 +146,16 @@ export function buildRuntimeContextPrompt(
           },
           null,
           2
-        )}`;
+        )}`,
+  ].filter((block): block is string => block !== null);
+  const persistedContextBlock =
+    persistedBlocks.length === 0
+      ? 'No persisted context loaded.'
+      : persistedBlocks.join('\n\n');
 
   return [
     '<runtime_context>',
-    latestMemoryBlock,
+    persistedContextBlock,
     `Current datetime: ${currentDatetimeText}`,
     '</runtime_context>',
   ].join('\n');
@@ -139,7 +172,8 @@ export function buildAgentPromptMessages(
   const toolCatalog = buildToolCatalogPrompt(input.toolSpecifications);
   const runtimeContext = buildRuntimeContextPrompt(
     input.currentDatetime,
-    input.latestMemory
+    input.latestMemory,
+    input.latestContext
   );
 
   return [
