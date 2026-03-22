@@ -3,7 +3,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemorySystem } from '@echo-chamber/cloudflare-runtime/memory-system';
 import { canonicalRuntimeTools } from '@echo-chamber/core/agent/runtime-tools/catalog';
 import { bindRuntimeTools } from '@echo-chamber/core/agent/runtime-tools/tool';
+import {
+  SCHEDULING_CONFIG,
+  TOKEN_LIMITS,
+} from '@echo-chamber/core/echo/constants';
 import { getEchoInstanceDefinition } from '@echo-chamber/core/echo/instance-definitions';
+import type { Usage } from '@echo-chamber/core/echo/types';
+import { calculateDynamicTokenLimit } from '@echo-chamber/core/echo/usage';
 import type { ContextSnapshot } from '@echo-chamber/core/ports/context';
 
 import { resolveEchoRuntimeBindings } from '../config/echo-runtime-bindings';
@@ -143,6 +149,18 @@ function createMockEnv(): Env {
   } as unknown as Env;
 }
 
+function createUsage(totalTokens: number): Usage {
+  return {
+    cached_input_tokens: 0,
+    uncached_input_tokens: 0,
+    total_input_tokens: 0,
+    output_tokens: 0,
+    reasoning_tokens: 0,
+    total_tokens: totalTokens,
+    total_cost: 0,
+  };
+}
+
 async function ensureInitialized(
   echo: Echo,
   id: 'rin' | 'marie'
@@ -152,6 +170,14 @@ async function ensureInitialized(
       ensureInitialized(instanceId: 'rin' | 'marie'): Promise<void>;
     }
   ).ensureInitialized(id);
+}
+
+async function validateRunPreconditions(echo: Echo): Promise<boolean> {
+  return await (
+    echo as unknown as {
+      validateRunPreconditions(): Promise<boolean>;
+    }
+  ).validateRunPreconditions();
 }
 
 describe('Echo.ensureInitialized', () => {
@@ -453,74 +479,208 @@ describe('Echo next_wake_at storage', () => {
 
     expect(deleteFn).toHaveBeenCalledWith('next_wake_at');
   });
+});
 
-  it('future の next_wake_at なら実行を見送る', async () => {
+describe('Echo run preconditions', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useRealTimers();
+  });
+
+  it('未読メッセージがあれば hard limit より優先して実行する', async () => {
+    const env = createMockEnv();
+    const { storage } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+
+    vi.spyOn(
+      echo as unknown as { validateEchoState(): Promise<boolean> },
+      'validateEchoState'
+    ).mockResolvedValue(true);
+    vi.spyOn(
+      echo as unknown as { validateChatMessage(): Promise<boolean> },
+      'validateChatMessage'
+    ).mockResolvedValue(true);
+    const getTodayUsage = vi.spyOn(
+      echo as unknown as { getTodayUsage(): Promise<Usage | null> },
+      'getTodayUsage'
+    );
+    const loadNextWakeAt = vi.spyOn(
+      echo as unknown as { loadNextWakeAt(): Promise<string | null> },
+      'loadNextWakeAt'
+    );
+
+    const result = await validateRunPreconditions(echo);
+
+    expect(result).toBe(true);
+    expect(getTodayUsage).not.toHaveBeenCalled();
+    expect(loadNextWakeAt).not.toHaveBeenCalled();
+  });
+
+  it('hard limit 超過時は到達済み next_wake_at より優先して起動しない', async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-03-22T00:00:00.000Z'));
+    vi.setSystemTime(new Date('2026-03-22T01:00:00.000Z'));
 
     const env = createMockEnv();
     const { storage } = createMockStorage();
     const echo = new Echo(createMockState(storage), env);
 
     vi.spyOn(
+      echo as unknown as { validateEchoState(): Promise<boolean> },
+      'validateEchoState'
+    ).mockResolvedValue(true);
+    vi.spyOn(
+      echo as unknown as { validateChatMessage(): Promise<boolean> },
+      'validateChatMessage'
+    ).mockResolvedValue(false);
+    const hardLimit = calculateDynamicTokenLimit(
+      TOKEN_LIMITS.DAILY_HARD_LIMIT,
+      TOKEN_LIMITS.HARD_LIMIT_BUFFER_FACTOR
+    );
+    vi.spyOn(
+      echo as unknown as { getTodayUsage(): Promise<Usage | null> },
+      'getTodayUsage'
+    ).mockResolvedValue(createUsage(hardLimit));
+    const loadNextWakeAt = vi.spyOn(
       echo as unknown as { loadNextWakeAt(): Promise<string | null> },
       'loadNextWakeAt'
-    ).mockResolvedValue('2026-03-23T00:00:00.000Z');
+    );
 
-    const result = await (
-      echo as unknown as {
-        validateNextWakeAt(): Promise<boolean | null>;
-      }
-    ).validateNextWakeAt();
+    const result = await validateRunPreconditions(echo);
 
     expect(result).toBe(false);
-    expect(mockLogger.info).toHaveBeenCalledWith(
-      'Skipping run until next_wake_at: 2026-03-23T00:00:00.000Z'
+    expect(loadNextWakeAt).not.toHaveBeenCalled();
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      `Usage hard limit reached: ${hardLimit}  (Hard limit: ${hardLimit})`
     );
   });
 
-  it('到達済みの next_wake_at なら実行を許可する', async () => {
+  it('到達済みの next_wake_at なら soft limit を超えていても実行する', async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-03-23T00:00:01.000Z'));
+    vi.setSystemTime(new Date('2026-03-22T01:00:00.000Z'));
 
     const env = createMockEnv();
     const { storage } = createMockStorage();
     const echo = new Echo(createMockState(storage), env);
 
     vi.spyOn(
+      echo as unknown as { validateEchoState(): Promise<boolean> },
+      'validateEchoState'
+    ).mockResolvedValue(true);
+    vi.spyOn(
+      echo as unknown as { validateChatMessage(): Promise<boolean> },
+      'validateChatMessage'
+    ).mockResolvedValue(false);
+    vi.spyOn(
+      echo as unknown as { getTodayUsage(): Promise<Usage | null> },
+      'getTodayUsage'
+    ).mockResolvedValue(createUsage(100_000));
+    vi.spyOn(
       echo as unknown as { loadNextWakeAt(): Promise<string | null> },
       'loadNextWakeAt'
-    ).mockResolvedValue('2026-03-23T00:00:00.000Z');
+    ).mockResolvedValue('2026-03-22T00:59:00.000Z');
 
-    const result = await (
-      echo as unknown as {
-        validateNextWakeAt(): Promise<boolean | null>;
-      }
-    ).validateNextWakeAt();
+    const result = await validateRunPreconditions(echo);
 
     expect(result).toBe(true);
     expect(mockLogger.info).toHaveBeenCalledWith(
-      'next_wake_at reached: 2026-03-23T00:00:00.000Z'
+      'next_wake_at reached: 2026-03-22T00:59:00.000Z'
     );
   });
 
-  it('不正な next_wake_at は warn して破棄する', async () => {
+  it('soft limit 未満でも next_wake_at が10分以内なら起動しない', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-22T01:00:00.000Z'));
+
+    const env = createMockEnv();
+    const { storage } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+
+    vi.spyOn(
+      echo as unknown as { validateEchoState(): Promise<boolean> },
+      'validateEchoState'
+    ).mockResolvedValue(true);
+    vi.spyOn(
+      echo as unknown as { validateChatMessage(): Promise<boolean> },
+      'validateChatMessage'
+    ).mockResolvedValue(false);
+    vi.spyOn(
+      echo as unknown as { getTodayUsage(): Promise<Usage | null> },
+      'getTodayUsage'
+    ).mockResolvedValue(createUsage(0));
+    vi.spyOn(
+      echo as unknown as { loadNextWakeAt(): Promise<string | null> },
+      'loadNextWakeAt'
+    ).mockResolvedValue('2026-03-22T01:05:00.000Z');
+
+    const result = await validateRunPreconditions(echo);
+
+    expect(result).toBe(false);
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      `Skipping soft-limit run because next_wake_at is within ${SCHEDULING_CONFIG.SOFT_LIMIT_NEXT_WAKE_AT_WINDOW_MINUTES} minutes: 2026-03-22T01:05:00.000Z`
+    );
+  });
+
+  it('soft limit 未満で next_wake_at が10分より先なら通常起動する', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-22T01:00:00.000Z'));
+
+    const env = createMockEnv();
+    const { storage } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+
+    vi.spyOn(
+      echo as unknown as { validateEchoState(): Promise<boolean> },
+      'validateEchoState'
+    ).mockResolvedValue(true);
+    vi.spyOn(
+      echo as unknown as { validateChatMessage(): Promise<boolean> },
+      'validateChatMessage'
+    ).mockResolvedValue(false);
+    vi.spyOn(
+      echo as unknown as { getTodayUsage(): Promise<Usage | null> },
+      'getTodayUsage'
+    ).mockResolvedValue(createUsage(0));
+    vi.spyOn(
+      echo as unknown as { loadNextWakeAt(): Promise<string | null> },
+      'loadNextWakeAt'
+    ).mockResolvedValue('2026-03-22T01:15:00.000Z');
+
+    const result = await validateRunPreconditions(echo);
+
+    expect(result).toBe(true);
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      'Usage: 0  (Soft limit: 45000)'
+    );
+  });
+
+  it('不正な next_wake_at は warn して破棄し、他条件が通れば起動する', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-22T01:00:00.000Z'));
+
     const env = createMockEnv();
     const { storage, deleteFn } = createMockStorage();
     const echo = new Echo(createMockState(storage), env);
 
     vi.spyOn(
+      echo as unknown as { validateEchoState(): Promise<boolean> },
+      'validateEchoState'
+    ).mockResolvedValue(true);
+    vi.spyOn(
+      echo as unknown as { validateChatMessage(): Promise<boolean> },
+      'validateChatMessage'
+    ).mockResolvedValue(false);
+    vi.spyOn(
+      echo as unknown as { getTodayUsage(): Promise<Usage | null> },
+      'getTodayUsage'
+    ).mockResolvedValue(createUsage(0));
+    vi.spyOn(
       echo as unknown as { loadNextWakeAt(): Promise<string | null> },
       'loadNextWakeAt'
     ).mockResolvedValue('not-a-date');
 
-    const result = await (
-      echo as unknown as {
-        validateNextWakeAt(): Promise<boolean | null>;
-      }
-    ).validateNextWakeAt();
+    const result = await validateRunPreconditions(echo);
 
-    expect(result).toBeNull();
+    expect(result).toBe(true);
     expect(mockLogger.warn).toHaveBeenCalledWith(
       'Stored next_wake_at is invalid and will be ignored: not-a-date'
     );

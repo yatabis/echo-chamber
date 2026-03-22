@@ -15,7 +15,11 @@ import { canonicalRuntimeTools } from '@echo-chamber/core/agent/runtime-tools/ca
 import { bindRuntimeTools } from '@echo-chamber/core/agent/runtime-tools/tool';
 import type { AgentSessionTool } from '@echo-chamber/core/agent/session';
 import { ThinkingEngine as AgentThinkingEngine } from '@echo-chamber/core/agent/thinking-engine';
-import { ALARM_CONFIG, TOKEN_LIMITS } from '@echo-chamber/core/echo/constants';
+import {
+  ALARM_CONFIG,
+  SCHEDULING_CONFIG,
+  TOKEN_LIMITS,
+} from '@echo-chamber/core/echo/constants';
 import {
   getEchoInstanceDefinition,
   type EchoInstanceDefinition,
@@ -456,23 +460,92 @@ export class Echo extends DurableObject<Env> {
       return true;
     }
 
-    const nextWakeAtDecision = await this.validateNextWakeAt();
-    if (nextWakeAtDecision != null) {
-      return nextWakeAtDecision;
-    }
-
-    // tokenが余っていれば実行
-    const softLimit = calculateDynamicTokenLimit(TOKEN_LIMITS.DAILY_SOFT_LIMIT);
     const todayUsage = await this.getTodayUsage();
     const totalTokens = todayUsage?.total_tokens ?? 0;
-    if (totalTokens < softLimit) {
-      await this.logger.info(
-        `Usage: ${totalTokens}  (Soft limit: ${Math.floor(softLimit)})`
-      );
+    if (!(await this.validateHardTokenLimit(totalTokens))) {
+      return false;
+    }
+
+    const nextWakeAt = await this.loadNextWakeAt();
+    const comparableNextWakeAt =
+      nextWakeAt === null ? null : await this.parseNextWakeAt(nextWakeAt);
+    if (await this.validateReachedNextWakeAt(comparableNextWakeAt)) {
       return true;
     }
 
-    // どの条件も満たしていない場合は実行しない
+    return await this.validateSoftLimitRun(totalTokens, comparableNextWakeAt);
+  }
+
+  /**
+   * 到達済みの `next_wake_at` が現在の起動トリガーになるかを判定する。
+   *
+   * @param nextWakeAt 比較可能な next_wake_at。未設定または不正なら `null`
+   * @returns 到達済みの next_wake_at があり、今回起動すべきなら `true`
+   */
+  private async validateReachedNextWakeAt(
+    nextWakeAt: Date | null
+  ): Promise<boolean> {
+    if (nextWakeAt === null || !this.hasNextWakeAtReached(nextWakeAt)) {
+      return false;
+    }
+
+    await this.logger.info(`next_wake_at reached: ${nextWakeAt.toISOString()}`);
+    return true;
+  }
+
+  /**
+   * soft limit の範囲で通常起動できるかを判定する。
+   * next_wake_at が直近にある場合は、soft limit 未満でも次回起動時刻を優先して待機する。
+   *
+   * @param totalTokens 今日すでに消費した総トークン数
+   * @param nextWakeAt 比較可能な next_wake_at。未設定または不正なら `null`
+   * @returns soft limit 起動を許可する場合は `true`
+   */
+  private async validateSoftLimitRun(
+    totalTokens: number,
+    nextWakeAt: Date | null
+  ): Promise<boolean> {
+    // soft limit 未満なら通常起動。ただし直近の next_wake_at があるときは待機する。
+    const softLimit = calculateDynamicTokenLimit(TOKEN_LIMITS.DAILY_SOFT_LIMIT);
+    if (totalTokens >= softLimit) {
+      return false;
+    }
+
+    if (
+      nextWakeAt !== null &&
+      this.isNextWakeAtWithinSoftLimitWindow(nextWakeAt)
+    ) {
+      await this.logger.info(
+        `Skipping soft-limit run because next_wake_at is within ${SCHEDULING_CONFIG.SOFT_LIMIT_NEXT_WAKE_AT_WINDOW_MINUTES} minutes: ${nextWakeAt.toISOString()}`
+      );
+      return false;
+    }
+
+    await this.logger.info(
+      `Usage: ${totalTokens}  (Soft limit: ${Math.floor(softLimit)})`
+    );
+    return true;
+  }
+
+  /**
+   * 未読メッセージ以外の通常起動で使えるトークン量が残っているかを検証する。
+   * hard limit を超えた場合は next_wake_at に到達していても起動しない。
+   *
+   * @param totalTokens 今日すでに消費した総トークン数
+   * @returns hard limit 未満なら `true`
+   */
+  private async validateHardTokenLimit(totalTokens: number): Promise<boolean> {
+    const hardLimit = calculateDynamicTokenLimit(
+      TOKEN_LIMITS.DAILY_HARD_LIMIT,
+      TOKEN_LIMITS.HARD_LIMIT_BUFFER_FACTOR
+    );
+    if (totalTokens < hardLimit) {
+      return true;
+    }
+
+    await this.logger.warn(
+      `Usage hard limit reached: ${totalTokens}  (Hard limit: ${Math.floor(hardLimit)})`
+    );
     return false;
   }
 
@@ -534,19 +607,15 @@ export class Echo extends DurableObject<Env> {
   }
 
   /**
-   * 保存済みの `next_wake_at` に基づいて、今回の起動を続行するか判定する。
-   * 未来時刻ならまだ実行せず、到達済みなら token soft limit より優先して実行する。
+   * 保存済みの `next_wake_at` を比較可能な時刻へ正規化する。
+   * 不正値は warn を出して storage から破棄し、未設定扱いにする。
    *
-   * @returns `true`: 今回は実行すべき, `false`: まだ待機, `null`: 判定材料なし
+   * @param nextWakeAt 保存済みの next_wake_at
+   * @returns 比較可能な Date。未設定または不正なら `null`
    */
-  private async validateNextWakeAt(): Promise<boolean | null> {
-    const nextWakeAt = await this.loadNextWakeAt();
-    if (nextWakeAt === null) {
-      return null;
-    }
-
-    const nextWakeAtMs = Date.parse(nextWakeAt);
-    if (Number.isNaN(nextWakeAtMs)) {
+  private async parseNextWakeAt(nextWakeAt: string): Promise<Date | null> {
+    const parsed = new Date(nextWakeAt);
+    if (Number.isNaN(parsed.getTime())) {
       await this.logger.warn(
         `Stored next_wake_at is invalid and will be ignored: ${nextWakeAt}`
       );
@@ -554,13 +623,29 @@ export class Echo extends DurableObject<Env> {
       return null;
     }
 
-    if (Date.now() < nextWakeAtMs) {
-      await this.logger.info(`Skipping run until next_wake_at: ${nextWakeAt}`);
-      return false;
-    }
+    return parsed;
+  }
 
-    await this.logger.info(`next_wake_at reached: ${nextWakeAt}`);
-    return true;
+  /**
+   * @param nextWakeAt 正規化済みの next_wake_at
+   * @returns `next_wake_at` が現在時刻以前なら `true`
+   */
+  private hasNextWakeAtReached(nextWakeAt: Date): boolean {
+    return Date.now() >= nextWakeAt.getTime();
+  }
+
+  /**
+   * soft limit 起動を抑制すべきほど近い `next_wake_at` かを判定する。
+   *
+   * @param nextWakeAt 正規化済みの next_wake_at
+   * @returns 未来の `next_wake_at` が suppression window 以内なら `true`
+   */
+  private isNextWakeAtWithinSoftLimitWindow(nextWakeAt: Date): boolean {
+    const msUntilNextWakeAt = nextWakeAt.getTime() - Date.now();
+    const suppressionWindowMs =
+      SCHEDULING_CONFIG.SOFT_LIMIT_NEXT_WAKE_AT_WINDOW_MINUTES * 60 * 1000;
+
+    return msUntilNextWakeAt > 0 && msUntilNextWakeAt <= suppressionWindowMs;
   }
 
   /**
