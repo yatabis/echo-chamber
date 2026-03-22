@@ -133,10 +133,6 @@ export class Echo extends DurableObject<Env> {
    * 最初のリクエスト時に呼び出され、definition と runtime bindings を設定する
    */
   private async ensureInitialized(id: EchoInstanceId): Promise<void> {
-    await this.storage.delete('context');
-    await this.storage.delete('tasks');
-    await this.storage.delete('knowledge');
-
     // 既に同じIDで初期化済みの場合はスキップ
     if (this.instanceDefinition?.id === id) {
       return;
