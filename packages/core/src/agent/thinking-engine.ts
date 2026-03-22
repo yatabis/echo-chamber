@@ -2,14 +2,10 @@ import { buildAgentPromptMessages } from './prompt-builder';
 import { runAgentSession } from './session';
 import { checkNotificationsToolSpec } from './tools/chat';
 
-import type {
-  PromptContextSnapshot,
-  PromptMemoryContext,
-} from './prompt-builder';
+import type { PromptContextSnapshot } from './prompt-builder';
 import type { AgentSessionTool } from './session';
 import type { ContextPort, ContextSnapshot } from '../ports/context';
 import type { LoggerPort } from '../ports/logger';
-import type { MemoryPort, MemoryRecord } from '../ports/memory';
 import type {
   ModelInputItem,
   ModelPort,
@@ -28,7 +24,6 @@ export interface ThinkingEngineInput {
   thoughtLog: ThoughtLogPort;
   logger: LoggerPort;
   context: Pick<ContextPort, 'load'>;
-  memory: Pick<MemoryPort, 'getLatest'>;
   tools: readonly AgentSessionTool[];
   systemPrompt: string;
 }
@@ -45,27 +40,6 @@ export interface ThinkingEngineResult {
 const STARTUP_TOOL_INPUT = '{}';
 const THINKING_STARTED_MESSAGE = '*Thinking started...*';
 const THINKING_COMPLETED_MESSAGE = '*Thinking completed.*';
-
-/**
- * MemoryPort のレコードを prompt builder が受け取る最小表現へ変換する。
- * 永続化用の余分な項目は持ち込まず、起動時の文脈再開に必要な情報だけ残す。
- *
- * @param memory MemoryPort から取得した最新 memory
- * @returns prompt builder に渡せる memory context。memory がなければ `null`
- */
-function toPromptMemoryContext(
-  memory: MemoryRecord | null
-): PromptMemoryContext | null {
-  if (memory === null) {
-    return null;
-  }
-
-  return {
-    content: memory.content,
-    createdAt: memory.createdAt,
-    emotion: memory.emotion,
-  };
-}
 
 /**
  * 永続化された context snapshot を prompt builder 用の最小表現へ変換する。
@@ -135,15 +109,11 @@ export class ThinkingEngine {
    * @returns `runAgentSession()` に渡す初期 input 一式
    */
   private async buildInitialInput(): Promise<ModelInputItem[]> {
-    const [latestMemory, latestContext] = await Promise.all([
-      this.input.memory.getLatest(),
-      this.input.context.load(),
-    ]);
+    const latestContext = await this.input.context.load();
     const promptMessages = buildAgentPromptMessages({
       systemPrompt: this.input.systemPrompt,
       currentDatetime: new Date(),
       latestContext: toPromptContext(latestContext),
-      latestMemory: toPromptMemoryContext(latestMemory),
     });
     const promptInputs: ModelInputItem[] = promptMessages.map((message) => ({
       role: message.role,

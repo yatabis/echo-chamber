@@ -4,7 +4,6 @@ import { buildAgentPromptMessages } from './prompt-builder';
 import { ThinkingEngine } from './thinking-engine';
 
 import type { ContextSnapshot } from '../ports/context';
-import type { MemoryRecord } from '../ports/memory';
 import type { ModelPort, ModelToolContract, ModelUsage } from '../ports/model';
 
 function createUsage(overrides?: Partial<ModelUsage>): ModelUsage {
@@ -82,17 +81,6 @@ describe('ThinkingEngine', () => {
       responseToken: 'resp-1',
     });
     const thoughtLogSend = vi.fn().mockResolvedValue(undefined);
-    const latestMemory: MemoryRecord = {
-      content: 'Had a meaningful conversation.',
-      type: 'episode',
-      emotion: {
-        valence: 0.7,
-        arousal: 0.4,
-        labels: ['joy', 'interest'],
-      },
-      createdAt: '2日前 (2025年01月23日 13:56:07)',
-      updatedAt: '2日前 (2025年01月23日 13:56:07)',
-    };
     const latestContext = createSessionContext();
 
     const engine = new ThinkingEngine({
@@ -107,9 +95,6 @@ describe('ThinkingEngine', () => {
       },
       context: {
         load: vi.fn().mockResolvedValue(latestContext),
-      },
-      memory: {
-        getLatest: vi.fn().mockResolvedValue(latestMemory),
       },
       tools: [
         {
@@ -135,11 +120,6 @@ describe('ThinkingEngine', () => {
         content: latestContext.content,
         createdAt: latestContext.createdAt,
         emotion: latestContext.emotion,
-      },
-      latestMemory: {
-        content: latestMemory.content,
-        createdAt: latestMemory.createdAt,
-        emotion: latestMemory.emotion,
       },
     });
 
@@ -199,9 +179,6 @@ describe('ThinkingEngine', () => {
       context: {
         load: vi.fn().mockResolvedValue(null),
       },
-      memory: {
-        getLatest: vi.fn().mockResolvedValue(null),
-      },
       tools: [
         {
           name: 'finish_thinking',
@@ -238,9 +215,6 @@ describe('ThinkingEngine', () => {
       },
       context: {
         load: vi.fn().mockResolvedValue(null),
-      },
-      memory: {
-        getLatest: vi.fn().mockResolvedValue(null),
       },
       tools: [
         {

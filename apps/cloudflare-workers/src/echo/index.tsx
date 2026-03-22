@@ -590,7 +590,6 @@ export class Echo extends DurableObject<Env> {
    */
   private createThinkingEngine(): AgentThinkingEngine {
     const definition = this.getInstanceDefinitionOrThrow();
-    const memorySystem = this.getMemorySystemOrThrow();
     const thoughtLog = this.createThoughtLog();
 
     return new AgentThinkingEngine({
@@ -600,10 +599,6 @@ export class Echo extends DurableObject<Env> {
       context: {
         load: async (): Promise<ContextSnapshot | null> =>
           await this.loadContext(),
-      },
-      memory: {
-        getLatest: (): ReturnType<MemorySystem['getLatestMemory']> =>
-          memorySystem.getLatestMemory(),
       },
       tools: this.getExecutableToolsOrThrow(),
       systemPrompt: definition.systemPrompt,
