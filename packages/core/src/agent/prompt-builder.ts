@@ -5,6 +5,7 @@ import { formatJapaneseDatetime } from '../utils/datetime';
 import { canonicalToolSpecifications } from './tools/catalog';
 
 import type { Emotion } from '../echo/types';
+import type { MemorySearchResult } from '../ports/memory';
 
 /**
  * Prompt builder が参照する最小限のツール仕様。
@@ -28,6 +29,18 @@ export interface PromptContextSnapshot {
 }
 
 /**
+ * 起動時の context から引いた関連メモリの最小表現。
+ * memory record 全体ではなく、再開判断に必要な要点だけを prompt に渡す。
+ */
+export interface PromptRelatedMemorySnapshot {
+  content: string;
+  type: MemorySearchResult['type'];
+  createdAt: string;
+  emotion: Emotion;
+  similarity: number;
+}
+
+/**
  * Agent の初期 developer prompt を組み立てるための入力。
  * static prompt、本時刻、直近 context、利用可能ツール一覧をまとめて受け取る。
  */
@@ -35,6 +48,7 @@ export interface BuildAgentPromptInput {
   systemPrompt: string;
   currentDatetime: Date;
   latestContext: PromptContextSnapshot | null;
+  relatedMemories?: readonly PromptRelatedMemorySnapshot[];
   toolSpecifications?: readonly PromptToolSpecification[];
 }
 
@@ -119,19 +133,46 @@ function formatLatestContextBlock(
 }
 
 /**
+ * 最新 context から検索した関連メモリを prompt 用ブロックへ整形する。
+ */
+function formatRelatedMemoriesBlock(
+  relatedMemories: readonly PromptRelatedMemorySnapshot[]
+): string {
+  return `Related memories:\n${JSON.stringify(
+    relatedMemories.map((memory) => ({
+      content: memory.content,
+      type: memory.type,
+      created_at: memory.createdAt,
+      emotion: {
+        valence: memory.emotion.valence,
+        arousal: memory.emotion.arousal,
+        labels: memory.emotion.labels,
+      },
+      similarity: memory.similarity,
+    })),
+    null,
+    2
+  )}`;
+}
+
+/**
  * 起動時の runtime context を表す `<runtime_context>` ブロックを生成する。
  * 直近 context と現在時刻をひとまとめにし、
  * 思考再開時の足掛かりとして prompt に差し込む。
  */
 export function buildRuntimeContextPrompt(
   currentDatetime: Date,
-  latestContext: PromptContextSnapshot | null
+  latestContext: PromptContextSnapshot | null,
+  relatedMemories: readonly PromptRelatedMemorySnapshot[] = []
 ): string {
   const currentDatetimeText = formatJapaneseDatetime(currentDatetime);
   const persistedContextBlock =
     latestContext === null
       ? 'No persisted context loaded.'
-      : formatLatestContextBlock(latestContext);
+      : [
+          formatLatestContextBlock(latestContext),
+          formatRelatedMemoriesBlock(relatedMemories),
+        ].join('\n');
 
   return [
     '<runtime_context>',
@@ -152,7 +193,8 @@ export function buildAgentPromptMessages(
   const toolCatalog = buildToolCatalogPrompt(input.toolSpecifications);
   const runtimeContext = buildRuntimeContextPrompt(
     input.currentDatetime,
-    input.latestContext
+    input.latestContext,
+    input.relatedMemories ?? []
   );
 
   return [

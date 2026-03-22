@@ -1,11 +1,17 @@
+import { getErrorMessage } from '../utils/error';
+
 import { buildAgentPromptMessages } from './prompt-builder';
 import { runAgentSession } from './session';
 import { checkNotificationsToolSpec } from './tools/chat';
 
-import type { PromptContextSnapshot } from './prompt-builder';
+import type {
+  PromptContextSnapshot,
+  PromptRelatedMemorySnapshot,
+} from './prompt-builder';
 import type { AgentSessionTool } from './session';
 import type { ContextPort, ContextSnapshot } from '../ports/context';
 import type { LoggerPort } from '../ports/logger';
+import type { MemoryPort, MemorySearchResult } from '../ports/memory';
 import type {
   ModelInputItem,
   ModelPort,
@@ -24,6 +30,7 @@ export interface ThinkingEngineInput {
   thoughtLog: ThoughtLogPort;
   logger: LoggerPort;
   context: Pick<ContextPort, 'load'>;
+  memory: Pick<MemoryPort, 'search'>;
   tools: readonly AgentSessionTool[];
   systemPrompt: string;
 }
@@ -61,6 +68,21 @@ function toPromptContext(
     createdAt: context.createdAt,
     emotion: context.emotion,
   };
+}
+
+/**
+ * memory search 結果を prompt builder 用の最小表現へ変換する。
+ */
+function toPromptRelatedMemories(
+  memories: MemorySearchResult[]
+): PromptRelatedMemorySnapshot[] {
+  return memories.map((memory) => ({
+    content: memory.content,
+    type: memory.type,
+    createdAt: memory.createdAt,
+    emotion: memory.emotion,
+    similarity: memory.similarity,
+  }));
 }
 
 /**
@@ -114,10 +136,12 @@ export class ThinkingEngine {
    */
   private async buildInitialInput(): Promise<ModelInputItem[]> {
     const latestContext = await this.input.context.load();
+    const relatedMemories = await this.loadRelatedMemories(latestContext);
     const promptMessages = buildAgentPromptMessages({
       systemPrompt: this.input.systemPrompt,
       currentDatetime: new Date(),
       latestContext: toPromptContext(latestContext),
+      relatedMemories: toPromptRelatedMemories(relatedMemories),
     });
     const promptInputs: ModelInputItem[] = promptMessages.map((message) => ({
       role: message.role,
@@ -129,6 +153,27 @@ export class ThinkingEngine {
       this.createStartupToolCallInput(),
       await this.createStartupToolResultInput(),
     ];
+  }
+
+  /**
+   * 最新 context があれば、それをクエリに関連メモリを読み出す。
+   * 検索に失敗しても起動自体は継続する。
+   */
+  private async loadRelatedMemories(
+    latestContext: ContextSnapshot | null
+  ): Promise<MemorySearchResult[]> {
+    if (latestContext === null) {
+      return [];
+    }
+
+    try {
+      return await this.input.memory.search(latestContext.content);
+    } catch (error) {
+      await this.input.logger.warn(
+        `Failed to load related memories for startup context: ${getErrorMessage(error)}`
+      );
+      return [];
+    }
   }
 
   /**
