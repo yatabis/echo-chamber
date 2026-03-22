@@ -9,6 +9,9 @@ import {
 
 import type { ModelPort, ModelToolContract, ModelUsage } from '../ports/model';
 
+const NO_TOOL_CALLS_CONTINUING_WARNING =
+  'No tool calls returned; continuing until finish_thinking is called';
+
 function createUsage(overrides?: Partial<ModelUsage>): ModelUsage {
   return {
     cachedInputTokens: 0,
@@ -121,22 +124,47 @@ describe('executeAgentToolCall', () => {
 });
 
 describe('runAgentSession', () => {
-  it('tool call がなければ1ターンで終了する', async () => {
-    const generate = vi.fn<ModelPort['generate']>().mockResolvedValue({
-      output: [
-        {
-          type: 'message',
-          role: 'assistant',
-          content: 'done',
-        },
-      ],
-      usage: createUsage({ totalTokens: 10 }),
-      responseToken: 'resp-1',
-    });
+  it('tool call がなくても空 input で継続する', async () => {
+    const logger = {
+      warn: vi.fn().mockResolvedValue(undefined),
+    };
+    const generate = vi
+      .fn<ModelPort['generate']>()
+      .mockResolvedValueOnce({
+        output: [
+          {
+            type: 'message',
+            role: 'assistant',
+            content: 'done',
+          },
+        ],
+        usage: createUsage({ totalTokens: 10 }),
+        responseToken: 'resp-1',
+      })
+      .mockResolvedValueOnce({
+        output: [
+          {
+            type: 'tool_call',
+            callId: 'call-finish',
+            toolName: 'finish_thinking',
+            input: '{"reason":"done"}',
+          },
+        ],
+        usage: createUsage({ totalTokens: 5 }),
+        responseToken: 'resp-2',
+      });
+    const executeFinish = vi.fn().mockResolvedValue('{"success":true}');
 
     const result = await runAgentSession({
       model: { generate },
-      tools: [],
+      tools: [
+        {
+          name: 'finish_thinking',
+          contract: createToolContract('finish_thinking'),
+          execute: executeFinish,
+        },
+      ],
+      logger,
       initialInput: [
         {
           role: 'developer',
@@ -145,19 +173,27 @@ describe('runAgentSession', () => {
       ],
     });
 
-    expect(generate).toHaveBeenCalledWith({
+    expect(generate).toHaveBeenNthCalledWith(1, {
       input: [
         {
           role: 'developer',
           content: 'test',
         },
       ],
-      tools: [],
+      tools: [createToolContract('finish_thinking')],
       previousResponseToken: undefined,
     });
+    expect(generate).toHaveBeenNthCalledWith(2, {
+      input: [],
+      tools: [createToolContract('finish_thinking')],
+      previousResponseToken: 'resp-1',
+    });
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(NO_TOOL_CALLS_CONTINUING_WARNING);
+    expect(executeFinish).toHaveBeenCalledWith('{"reason":"done"}');
     expect(result).toEqual({
-      usage: createUsage({ totalTokens: 10 }),
-      responseToken: 'resp-1',
+      usage: createUsage({ totalTokens: 15 }),
+      responseToken: 'resp-2',
     });
   });
 
@@ -200,8 +236,28 @@ describe('runAgentSession', () => {
           totalTokens: 60,
         }),
         responseToken: 'resp-2',
+      })
+      .mockResolvedValueOnce({
+        output: [
+          {
+            type: 'tool_call',
+            callId: 'call-finish',
+            toolName: 'finish_thinking',
+            input: '{"reason":"done"}',
+          },
+        ],
+        usage: createUsage({
+          cachedInputTokens: 100,
+          uncachedInputTokens: 200,
+          totalInputTokens: 300,
+          outputTokens: 400,
+          reasoningTokens: 500,
+          totalTokens: 600,
+        }),
+        responseToken: 'resp-3',
       });
     const execute = vi.fn().mockResolvedValue('{"success":true}');
+    const executeFinish = vi.fn().mockResolvedValue('{"success":true}');
 
     const result = await runAgentSession({
       model: { generate },
@@ -210,6 +266,11 @@ describe('runAgentSession', () => {
           name: 'think_deeply',
           contract: createToolContract('think_deeply'),
           execute,
+        },
+        {
+          name: 'finish_thinking',
+          contract: createToolContract('finish_thinking'),
+          execute: executeFinish,
         },
       ],
       initialInput: [
@@ -229,19 +290,31 @@ describe('runAgentSession', () => {
           output: '{"success":true}',
         },
       ],
-      tools: [createToolContract('think_deeply')],
+      tools: [
+        createToolContract('think_deeply'),
+        createToolContract('finish_thinking'),
+      ],
       previousResponseToken: 'resp-1',
     });
+    expect(generate).toHaveBeenNthCalledWith(3, {
+      input: [],
+      tools: [
+        createToolContract('think_deeply'),
+        createToolContract('finish_thinking'),
+      ],
+      previousResponseToken: 'resp-2',
+    });
+    expect(executeFinish).toHaveBeenCalledWith('{"reason":"done"}');
     expect(result).toEqual({
       usage: createUsage({
-        cachedInputTokens: 11,
-        uncachedInputTokens: 22,
-        totalInputTokens: 33,
-        outputTokens: 44,
-        reasoningTokens: 55,
-        totalTokens: 66,
+        cachedInputTokens: 111,
+        uncachedInputTokens: 222,
+        totalInputTokens: 333,
+        outputTokens: 444,
+        reasoningTokens: 555,
+        totalTokens: 666,
       }),
-      responseToken: 'resp-2',
+      responseToken: 'resp-3',
     });
   });
 
@@ -335,7 +408,65 @@ describe('runAgentSession', () => {
     });
 
     expect(generate).toHaveBeenCalledTimes(2);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
     expect(logger.warn).toHaveBeenCalledWith('Maximum turns exceeded');
+    expect(result).toEqual({
+      usage: createUsage({ totalTokens: 20 }),
+      responseToken: 'resp-1',
+    });
+  });
+
+  it('tool call が無い状態が続くと maxTurns で warn を出す', async () => {
+    const logger = {
+      warn: vi.fn().mockResolvedValue(undefined),
+    };
+    const generate = vi.fn<ModelPort['generate']>().mockResolvedValue({
+      output: [
+        {
+          type: 'message',
+          role: 'assistant',
+          content: 'still thinking',
+        },
+      ],
+      usage: createUsage({ totalTokens: 10 }),
+      responseToken: 'resp-1',
+    });
+
+    const result = await runAgentSession({
+      model: { generate },
+      tools: [
+        {
+          name: 'finish_thinking',
+          contract: createToolContract('finish_thinking'),
+          execute: vi.fn(),
+        },
+      ],
+      initialInput: [
+        {
+          role: 'developer',
+          content: 'test',
+        },
+      ],
+      logger,
+      maxTurns: 2,
+    });
+
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(generate).toHaveBeenNthCalledWith(2, {
+      input: [],
+      tools: [createToolContract('finish_thinking')],
+      previousResponseToken: 'resp-1',
+    });
+    expect(logger.warn).toHaveBeenCalledTimes(3);
+    expect(logger.warn).toHaveBeenNthCalledWith(
+      1,
+      NO_TOOL_CALLS_CONTINUING_WARNING
+    );
+    expect(logger.warn).toHaveBeenNthCalledWith(
+      2,
+      NO_TOOL_CALLS_CONTINUING_WARNING
+    );
+    expect(logger.warn).toHaveBeenNthCalledWith(3, 'Maximum turns exceeded');
     expect(result).toEqual({
       usage: createUsage({ totalTokens: 20 }),
       responseToken: 'resp-1',

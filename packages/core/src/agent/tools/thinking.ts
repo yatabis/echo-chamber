@@ -15,7 +15,7 @@ export const thinkDeeplyToolSpec = defineToolSpecification({
 export const finishThinkingToolSpec = defineToolSpecification({
   name: 'finish_thinking',
   description:
-    '思考プロセスを終了し、エージェントループを停止する。十分な情報を得た、または現在のサイクルで行うべきことが完了したと判断した場合に呼び出せ。',
+    '思考プロセスを終了し、エージェントループを停止する。現在のサイクルを正常終了する唯一の方法であり、十分な情報を得た、または現在のサイクルで行うべきことが完了したと判断した場合に必ず呼び出せ。',
   parameters: {
     reason: z.string().describe('思考を終了する理由'),
     next_wake_at: z

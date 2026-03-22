@@ -53,6 +53,9 @@ export const ZERO_MODEL_USAGE: ModelUsage = {
   totalTokens: 0,
 };
 
+const NO_TOOL_CALLS_CONTINUING_WARNING =
+  'No tool calls returned; continuing until finish_thinking is called';
+
 /**
  * 各ターンの usage を session 全体の usage に加算する。
  */
@@ -122,6 +125,10 @@ async function createNextInput(
   toolCalls: readonly ModelToolCall[],
   tools: readonly AgentSessionTool[]
 ): Promise<ModelInputItem[]> {
+  if (toolCalls.length === 0) {
+    return [];
+  }
+
   return await Promise.all(
     toolCalls.map(async (toolCall) => ({
       type: 'tool_result' as const,
@@ -134,7 +141,7 @@ async function createNextInput(
 /**
  * provider 非依存の agent session loop。
  * モデル出力に tool call があれば実行結果を次ターン input に変換し、
- * `finish_thinking` が現れるか tool call が尽きるまで turn を繰り返す。
+ * `finish_thinking` が現れるか maxTurns に達するまで turn を繰り返す。
  */
 export async function runAgentSession(
   input: RunAgentSessionInput
@@ -159,13 +166,13 @@ export async function runAgentSession(
 
     const toolCalls = getToolCalls(response);
     if (toolCalls.length === 0) {
-      return {
-        usage: totalUsage,
-        responseToken: previousResponseToken,
-      };
+      // The loop stays alive until finish_thinking appears explicitly.
+      // eslint-disable-next-line no-await-in-loop
+      await input.logger?.warn(NO_TOOL_CALLS_CONTINUING_WARNING);
     }
 
-    // Tool results become the next model input for the following turn.
+    // Tool results, or an empty carry-over when no tools were used,
+    // become the next model input for the following turn.
     // eslint-disable-next-line no-await-in-loop
     currentInput = await createNextInput(toolCalls, input.tools);
     if (shouldFinish(toolCalls)) {

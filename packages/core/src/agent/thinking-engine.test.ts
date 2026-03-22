@@ -38,12 +38,14 @@ describe('ThinkingEngine', () => {
 
     const usage = createUsage({ totalTokens: 42 });
     const startupToolExecute = vi.fn().mockResolvedValue('{"success":true}');
+    const finishToolExecute = vi.fn().mockResolvedValue('{"success":true}');
     const generate = vi.fn<ModelPort['generate']>().mockResolvedValue({
       output: [
         {
-          type: 'message',
-          role: 'assistant',
-          content: 'done',
+          type: 'tool_call',
+          callId: 'call-finish',
+          toolName: 'finish_thinking',
+          input: '{"reason":"done"}',
         },
       ],
       usage,
@@ -84,7 +86,7 @@ describe('ThinkingEngine', () => {
         {
           name: 'finish_thinking',
           contract: createToolContract('finish_thinking'),
-          execute: vi.fn(),
+          execute: finishToolExecute,
         },
       ],
       systemPrompt: '<persona>Test persona</persona>',
@@ -129,6 +131,7 @@ describe('ThinkingEngine', () => {
     });
     expect(thoughtLogSend).toHaveBeenNthCalledWith(1, '*Thinking started...*');
     expect(thoughtLogSend).toHaveBeenNthCalledWith(2, '*Thinking completed.*');
+    expect(finishToolExecute).toHaveBeenCalledWith('{"reason":"done"}');
     expect(result).toEqual(usage);
   });
 
