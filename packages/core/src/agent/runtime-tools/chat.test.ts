@@ -1,13 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { mockToolContext } from '../../../../test/mocks/tool';
-
 import {
-  addReactionToChatMessageFunction,
-  checkNotificationsFunction,
-  readChatMessagesFunction,
-  sendChatMessageFunction,
+  addReactionToChatMessageTool,
+  checkNotificationsTool,
+  readChatMessagesTool,
+  sendChatMessageTool,
 } from './chat';
+import { mockToolContext } from './mock-tool-context';
 
 const CHAT_API_ERROR = 'Chat API error';
 
@@ -33,9 +32,9 @@ beforeEach(() => {
   mockedAddReaction.mockResolvedValue(undefined);
 });
 
-describe('checkNotificationsFunction', () => {
+describe('checkNotificationsTool', () => {
   it('name', () => {
-    expect(checkNotificationsFunction.name).toBe('check_notifications');
+    expect(checkNotificationsTool.name).toBe('check_notifications');
   });
 
   it('0件（最新メッセージをプレビュー表示）', async () => {
@@ -49,10 +48,7 @@ describe('checkNotificationsFunction', () => {
       },
     });
 
-    const result = await checkNotificationsFunction.handler(
-      {},
-      mockToolContext
-    );
+    const result = await checkNotificationsTool.handler({}, mockToolContext);
 
     expect(result).toEqual({
       success: true,
@@ -80,10 +76,7 @@ describe('checkNotificationsFunction', () => {
       },
     });
 
-    const result = await checkNotificationsFunction.handler(
-      {},
-      mockToolContext
-    );
+    const result = await checkNotificationsTool.handler({}, mockToolContext);
 
     expect(result).toEqual({
       success: true,
@@ -101,10 +94,7 @@ describe('checkNotificationsFunction', () => {
   });
 
   it('最新メッセージがない場合はnullを返す', async () => {
-    const result = await checkNotificationsFunction.handler(
-      {},
-      mockToolContext
-    );
+    const result = await checkNotificationsTool.handler({}, mockToolContext);
 
     expect(result).toEqual({
       success: true,
@@ -119,10 +109,7 @@ describe('checkNotificationsFunction', () => {
   it('NotificationPortエラー時は失敗を返す', async () => {
     mockedGetNotificationSummary.mockRejectedValue(new Error(CHAT_API_ERROR));
 
-    const result = await checkNotificationsFunction.handler(
-      {},
-      mockToolContext
-    );
+    const result = await checkNotificationsTool.handler({}, mockToolContext);
 
     expect(result).toEqual({
       success: false,
@@ -131,9 +118,9 @@ describe('checkNotificationsFunction', () => {
   });
 });
 
-describe('readChatMessagesFunction', () => {
+describe('readChatMessagesTool', () => {
   it('name', () => {
-    expect(readChatMessagesFunction.name).toBe('read_chat_messages');
+    expect(readChatMessagesTool.name).toBe('read_chat_messages');
   });
 
   it('メッセージ一覧をそのまま返す', async () => {
@@ -147,7 +134,7 @@ describe('readChatMessagesFunction', () => {
       },
     ]);
 
-    const result = await readChatMessagesFunction.handler(
+    const result = await readChatMessagesTool.handler(
       { limit: 1 },
       mockToolContext
     );
@@ -181,7 +168,7 @@ describe('readChatMessagesFunction', () => {
       },
     ]);
 
-    const result = await readChatMessagesFunction.handler(
+    const result = await readChatMessagesTool.handler(
       { limit: 1 },
       mockToolContext
     );
@@ -206,7 +193,7 @@ describe('readChatMessagesFunction', () => {
   it('ChatPortエラー時は失敗を返す', async () => {
     mockedReadMessages.mockRejectedValue(new Error(CHAT_API_ERROR));
 
-    const result = await readChatMessagesFunction.handler(
+    const result = await readChatMessagesTool.handler(
       { limit: 1 },
       mockToolContext
     );
@@ -218,13 +205,13 @@ describe('readChatMessagesFunction', () => {
   });
 });
 
-describe('sendChatMessageFunction', () => {
+describe('sendChatMessageTool', () => {
   it('name', () => {
-    expect(sendChatMessageFunction.name).toBe('send_chat_message');
+    expect(sendChatMessageTool.name).toBe('send_chat_message');
   });
 
   it('ChatPort.sendMessageを呼ぶ', async () => {
-    const result = await sendChatMessageFunction.handler(
+    const result = await sendChatMessageTool.handler(
       { message: 'Hello' },
       mockToolContext
     );
@@ -236,7 +223,7 @@ describe('sendChatMessageFunction', () => {
   it('ChatPortエラー時は失敗を返す', async () => {
     mockedSendMessage.mockRejectedValue(new Error(CHAT_API_ERROR));
 
-    const result = await sendChatMessageFunction.handler(
+    const result = await sendChatMessageTool.handler(
       { message: 'Hello' },
       mockToolContext
     );
@@ -248,15 +235,15 @@ describe('sendChatMessageFunction', () => {
   });
 });
 
-describe('addReactionToChatMessageFunction', () => {
+describe('addReactionToChatMessageTool', () => {
   it('name', () => {
-    expect(addReactionToChatMessageFunction.name).toBe(
+    expect(addReactionToChatMessageTool.name).toBe(
       'add_reaction_to_chat_message'
     );
   });
 
   it('ChatPort.addReactionを呼ぶ', async () => {
-    const result = await addReactionToChatMessageFunction.handler(
+    const result = await addReactionToChatMessageTool.handler(
       { messageId: '123456789', reaction: '👍' },
       mockToolContext
     );
@@ -268,7 +255,7 @@ describe('addReactionToChatMessageFunction', () => {
   it('ChatPortエラー時は失敗を返す', async () => {
     mockedAddReaction.mockRejectedValue(new Error(CHAT_API_ERROR));
 
-    const result = await addReactionToChatMessageFunction.handler(
+    const result = await addReactionToChatMessageTool.handler(
       { messageId: '123456789', reaction: '👍' },
       mockToolContext
     );

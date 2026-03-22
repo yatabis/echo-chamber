@@ -1,10 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { Emotion } from '@echo-chamber/core/echo/types';
+import { searchMemoryTool, storeMemoryTool } from './memory';
+import { mockToolContext } from './mock-tool-context';
 
-import { mockToolContext } from '../../../../test/mocks/tool';
-
-import { storeMemoryFunction, searchMemoryFunction } from './memory';
+import type { Emotion } from '../../echo/types';
 
 const mockedStoreMemory = vi.mocked(mockToolContext.memory.store);
 const mockedSearchMemory = vi.mocked(mockToolContext.memory.search);
@@ -23,17 +22,17 @@ const createMockEmotion = (overrides?: Partial<Emotion>): Emotion => {
 };
 
 describe('Memory Functions', () => {
-  describe('storeMemoryFunction', () => {
+  describe('storeMemoryTool', () => {
     it('name', () => {
-      expect(storeMemoryFunction.name).toBe('store_memory');
+      expect(storeMemoryTool.name).toBe('store_memory');
     });
 
     it('description', () => {
-      expect(storeMemoryFunction.description).toBeDefined();
+      expect(storeMemoryTool.description).toBeDefined();
     });
 
     it('parameters', () => {
-      const { parameters } = storeMemoryFunction;
+      const { parameters } = storeMemoryTool;
       expect(parameters).toBeDefined();
 
       expect(parameters).toHaveProperty('content');
@@ -53,7 +52,7 @@ describe('Memory Functions', () => {
           }),
         };
 
-        const result = await storeMemoryFunction.handler(args, mockToolContext);
+        const result = await storeMemoryTool.handler(args, mockToolContext);
 
         expect(mockedStoreMemory).toHaveBeenCalledWith(
           'Had a great conversation about AI',
@@ -74,7 +73,7 @@ describe('Memory Functions', () => {
           emotion: createMockEmotion(),
         };
 
-        const result = await storeMemoryFunction.handler(args, mockToolContext);
+        const result = await storeMemoryTool.handler(args, mockToolContext);
 
         expect(mockedStoreMemory).toHaveBeenCalledWith(
           'General knowledge about AI',
@@ -93,7 +92,7 @@ describe('Memory Functions', () => {
           emotion: createMockEmotion(),
         };
 
-        const result = await storeMemoryFunction.handler(args, mockToolContext);
+        const result = await storeMemoryTool.handler(args, mockToolContext);
 
         expect(result).toEqual({
           success: false,
@@ -103,17 +102,17 @@ describe('Memory Functions', () => {
     });
   });
 
-  describe('searchMemoryFunction', () => {
+  describe('searchMemoryTool', () => {
     it('name', () => {
-      expect(searchMemoryFunction.name).toBe('search_memory');
+      expect(searchMemoryTool.name).toBe('search_memory');
     });
 
     it('description', () => {
-      expect(searchMemoryFunction.description).toBeDefined();
+      expect(searchMemoryTool.description).toBeDefined();
     });
 
     it('parameters', () => {
-      const { parameters } = searchMemoryFunction;
+      const { parameters } = searchMemoryTool;
       expect(parameters).toBeDefined();
 
       expect(parameters).toHaveProperty('query');
@@ -142,10 +141,7 @@ describe('Memory Functions', () => {
         mockedSearchMemory.mockResolvedValue(mockResults);
 
         const args = { query: 'test query' };
-        const result = await searchMemoryFunction.handler(
-          args,
-          mockToolContext
-        );
+        const result = await searchMemoryTool.handler(args, mockToolContext);
 
         expect(mockedSearchMemory).toHaveBeenCalledWith(
           'test query',
@@ -174,10 +170,7 @@ describe('Memory Functions', () => {
         mockedSearchMemory.mockResolvedValue([]);
 
         const args = { query: 'test query' };
-        const result = await searchMemoryFunction.handler(
-          args,
-          mockToolContext
-        );
+        const result = await searchMemoryTool.handler(args, mockToolContext);
 
         expect(result).toEqual({
           success: true,
@@ -189,10 +182,7 @@ describe('Memory Functions', () => {
         mockedSearchMemory.mockRejectedValue(new Error('Memory System Error'));
 
         const args = { query: 'test query' };
-        const result = await searchMemoryFunction.handler(
-          args,
-          mockToolContext
-        );
+        const result = await searchMemoryTool.handler(args, mockToolContext);
 
         expect(result).toEqual({
           success: false,
@@ -204,7 +194,7 @@ describe('Memory Functions', () => {
         mockedSearchMemory.mockResolvedValue([]);
 
         const args = { query: 'test query', type: 'episode' as const };
-        await searchMemoryFunction.handler(args, mockToolContext);
+        await searchMemoryTool.handler(args, mockToolContext);
 
         expect(mockedSearchMemory).toHaveBeenCalledWith(
           'test query',
@@ -216,7 +206,7 @@ describe('Memory Functions', () => {
         mockedSearchMemory.mockResolvedValue([]);
 
         const args = { query: 'test query' };
-        await searchMemoryFunction.handler(args, mockToolContext);
+        await searchMemoryTool.handler(args, mockToolContext);
 
         expect(mockedSearchMemory).toHaveBeenCalledWith(
           'test query',

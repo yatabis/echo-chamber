@@ -19,6 +19,8 @@
     "./ports/thought-log": "./src/ports/thought-log.ts",
     "./agent/tool-context": "./src/agent/tool-context.ts",
     "./agent/prompt-builder": "./src/agent/prompt-builder.ts",
+    "./agent/runtime-tools/catalog": "./src/agent/runtime-tools/catalog.ts",
+    "./agent/runtime-tools/tool": "./src/agent/runtime-tools/tool.ts",
     "./agent/thinking-engine": "./src/agent/thinking-engine.ts",
     "./agent/session": "./src/agent/session.ts",
     "./agent/tools/shared": "./src/agent/tools/shared.ts",

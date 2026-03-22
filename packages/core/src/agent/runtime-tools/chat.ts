@@ -1,17 +1,15 @@
+import { getErrorMessage } from '../../utils/error';
 import {
   addReactionToChatMessageToolSpec,
   checkNotificationsToolSpec,
   readChatMessagesToolSpec,
   sendChatMessageToolSpec,
-} from '@echo-chamber/core/agent/tools/chat';
-import { getErrorMessage } from '@echo-chamber/core/utils/error';
+} from '../tools/chat';
 
-import { Tool } from '.';
+import { Tool } from './tool';
 
-export const checkNotificationsFunction = new Tool(
-  checkNotificationsToolSpec.name,
-  checkNotificationsToolSpec.description,
-  checkNotificationsToolSpec.parameters,
+export const checkNotificationsTool = new Tool(
+  checkNotificationsToolSpec,
   async (_, ctx) => {
     try {
       const notificationDetails =
@@ -49,10 +47,8 @@ export const checkNotificationsFunction = new Tool(
   }
 );
 
-export const readChatMessagesFunction = new Tool(
-  readChatMessagesToolSpec.name,
-  readChatMessagesToolSpec.description,
-  readChatMessagesToolSpec.parameters,
+export const readChatMessagesTool = new Tool(
+  readChatMessagesToolSpec,
   async ({ limit }, ctx) => {
     try {
       const messages = await ctx.chat.readMessages(limit);
@@ -79,10 +75,8 @@ export const readChatMessagesFunction = new Tool(
   }
 );
 
-export const sendChatMessageFunction = new Tool(
-  sendChatMessageToolSpec.name,
-  sendChatMessageToolSpec.description,
-  sendChatMessageToolSpec.parameters,
+export const sendChatMessageTool = new Tool(
+  sendChatMessageToolSpec,
   async ({ message }, ctx) => {
     try {
       await ctx.chat.sendMessage(message);
@@ -102,10 +96,8 @@ export const sendChatMessageFunction = new Tool(
   }
 );
 
-export const addReactionToChatMessageFunction = new Tool(
-  addReactionToChatMessageToolSpec.name,
-  addReactionToChatMessageToolSpec.description,
-  addReactionToChatMessageToolSpec.parameters,
+export const addReactionToChatMessageTool = new Tool(
+  addReactionToChatMessageToolSpec,
   async ({ messageId, reaction }, ctx) => {
     try {
       await ctx.chat.addReaction(messageId, reaction);

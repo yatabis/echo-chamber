@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createEmbeddingService } from './embedding-factory';
-import { OpenAIEmbeddingService } from './openai/embedding';
-import { WorkersAIEmbeddingService } from './workersai/embedding';
+import { createEmbeddingService } from './create-embedding-service';
+import { OpenAIEmbeddingService } from './providers/openai';
+import { WorkersAIEmbeddingService } from './providers/workersai';
 
-vi.mock('./openai/embedding', () => ({
+vi.mock('./providers/openai', () => ({
   OpenAIEmbeddingService: vi.fn(),
 }));
 
-vi.mock('./workersai/embedding', () => ({
+vi.mock('./providers/workersai', () => ({
   WorkersAIEmbeddingService: vi.fn(),
 }));
 

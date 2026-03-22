@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { WorkersAIEmbeddingService } from './embedding';
+import { WorkersAIEmbeddingService } from './workersai';
 
 const mockAiRun = vi.fn();
 

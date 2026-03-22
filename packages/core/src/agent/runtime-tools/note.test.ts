@@ -1,17 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { Note } from '@echo-chamber/core/echo/types';
-
 import {
-  createNoteFunction,
-  deleteNoteFunction,
-  getNoteFunction,
-  listNotesFunction,
-  searchNotesFunction,
-  updateNoteFunction,
+  createNoteTool,
+  deleteNoteTool,
+  getNoteTool,
+  listNotesTool,
+  searchNotesTool,
+  updateNoteTool,
 } from './note';
 
-import type { ToolContext } from './index';
+import type { ToolContext } from './tool';
+import type { Note } from '../../echo/types';
 
 const createNoteMock =
   vi.fn<(input: { title: string; content: string }) => Promise<Note>>();
@@ -81,16 +80,16 @@ const createMockNote = (overrides?: Partial<Note>): Note => {
 };
 
 describe('Note Functions', () => {
-  describe('createNoteFunction', () => {
+  describe('createNoteTool', () => {
     it('name', () => {
-      expect(createNoteFunction.name).toBe('create_note');
+      expect(createNoteTool.name).toBe('create_note');
     });
 
     it('handler creates note', async () => {
       const note = createMockNote();
       createNoteMock.mockResolvedValue(note);
 
-      const result = await createNoteFunction.handler(
+      const result = await createNoteTool.handler(
         {
           title: 'Meeting Notes',
           content: 'Discuss roadmap',
@@ -113,7 +112,7 @@ describe('Note Functions', () => {
         new Error('Note capacity reached (max 200)')
       );
 
-      const result = await createNoteFunction.handler(
+      const result = await createNoteTool.handler(
         {
           title: 'New Note',
           content: 'Body',
@@ -128,16 +127,16 @@ describe('Note Functions', () => {
     });
   });
 
-  describe('listNotesFunction', () => {
+  describe('listNotesTool', () => {
     it('name', () => {
-      expect(listNotesFunction.name).toBe('list_notes');
+      expect(listNotesTool.name).toBe('list_notes');
     });
 
     it('handler lists notes', async () => {
       const notes = [createMockNote(), createMockNote({ id: 'note-2' })];
       listNotesMock.mockResolvedValue(notes);
 
-      const result = await listNotesFunction.handler({}, mockToolContext);
+      const result = await listNotesTool.handler({}, mockToolContext);
 
       expect(listNotesMock).toHaveBeenCalled();
       const noteSummaries = notes.map((note) => ({
@@ -157,16 +156,16 @@ describe('Note Functions', () => {
     });
   });
 
-  describe('getNoteFunction', () => {
+  describe('getNoteTool', () => {
     it('name', () => {
-      expect(getNoteFunction.name).toBe('get_note');
+      expect(getNoteTool.name).toBe('get_note');
     });
 
     it('handler gets note', async () => {
       const note = createMockNote({ id: 'note-3' });
       getNoteMock.mockResolvedValue(note);
 
-      const result = await getNoteFunction.handler(
+      const result = await getNoteTool.handler(
         { id: 'note-3' },
         mockToolContext
       );
@@ -181,7 +180,7 @@ describe('Note Functions', () => {
     it('存在しないノートはnot found', async () => {
       getNoteMock.mockResolvedValue(null);
 
-      const result = await getNoteFunction.handler(
+      const result = await getNoteTool.handler(
         { id: 'missing-note' },
         mockToolContext
       );
@@ -193,16 +192,16 @@ describe('Note Functions', () => {
     });
   });
 
-  describe('searchNotesFunction', () => {
+  describe('searchNotesTool', () => {
     it('name', () => {
-      expect(searchNotesFunction.name).toBe('search_notes');
+      expect(searchNotesTool.name).toBe('search_notes');
     });
 
     it('handler searches notes', async () => {
       const notes = [createMockNote({ title: 'Roadmap' })];
       searchNotesMock.mockResolvedValue(notes);
 
-      const result = await searchNotesFunction.handler(
+      const result = await searchNotesTool.handler(
         { query: 'road' },
         mockToolContext
       );
@@ -215,9 +214,9 @@ describe('Note Functions', () => {
     });
   });
 
-  describe('updateNoteFunction', () => {
+  describe('updateNoteTool', () => {
     it('name', () => {
-      expect(updateNoteFunction.name).toBe('update_note');
+      expect(updateNoteTool.name).toBe('update_note');
     });
 
     it('handler updates note', async () => {
@@ -227,7 +226,7 @@ describe('Note Functions', () => {
       });
       updateNoteMock.mockResolvedValue(updated);
 
-      const result = await updateNoteFunction.handler(
+      const result = await updateNoteTool.handler(
         { id: 'note-1', title: 'Updated' },
         mockToolContext
       );
@@ -243,7 +242,7 @@ describe('Note Functions', () => {
     });
 
     it('title/content未指定時はバリデーションエラー', async () => {
-      const result = await updateNoteFunction.handler(
+      const result = await updateNoteTool.handler(
         { id: 'note-1', title: undefined, content: undefined },
         mockToolContext
       );
@@ -257,7 +256,7 @@ describe('Note Functions', () => {
     it('更新対象がない場合はnot found', async () => {
       updateNoteMock.mockResolvedValue(null);
 
-      const result = await updateNoteFunction.handler(
+      const result = await updateNoteTool.handler(
         { id: 'missing-note', content: 'Body' },
         mockToolContext
       );
@@ -269,15 +268,15 @@ describe('Note Functions', () => {
     });
   });
 
-  describe('deleteNoteFunction', () => {
+  describe('deleteNoteTool', () => {
     it('name', () => {
-      expect(deleteNoteFunction.name).toBe('delete_note');
+      expect(deleteNoteTool.name).toBe('delete_note');
     });
 
     it('handler deletes note', async () => {
       deleteNoteMock.mockResolvedValue(true);
 
-      const result = await deleteNoteFunction.handler(
+      const result = await deleteNoteTool.handler(
         { id: 'note-1' },
         mockToolContext
       );
@@ -291,7 +290,7 @@ describe('Note Functions', () => {
     it('削除対象がない場合はnot found', async () => {
       deleteNoteMock.mockResolvedValue(false);
 
-      const result = await deleteNoteFunction.handler(
+      const result = await deleteNoteTool.handler(
         { id: 'missing-note' },
         mockToolContext
       );

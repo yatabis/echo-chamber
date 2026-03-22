@@ -1,18 +1,13 @@
 import { z } from 'zod';
 
-import type { ToolExecutionContext } from '@echo-chamber/core/agent/tool-context';
-import type { ModelToolContract } from '@echo-chamber/core/ports/model';
-import { getErrorMessage } from '@echo-chamber/core/utils/error';
+import { getErrorMessage } from '../../utils/error';
+
+import type { ModelToolContract } from '../../ports/model';
+import type { AgentSessionTool } from '../session';
+import type { ToolExecutionContext } from '../tool-context';
+import type { ToolSpecification } from '../tools/shared';
 
 export type ToolContext = ToolExecutionContext;
-
-interface FunctionToolDefinition {
-  type: 'function';
-  name: string;
-  description: string;
-  parameters: unknown;
-  strict: boolean;
-}
 
 interface ToolResultSuccess {
   success: true;
@@ -26,24 +21,38 @@ interface ToolResultError {
 
 export type ToolResult = ToolResultSuccess | ToolResultError;
 
-export interface ITool {
+export interface RuntimeTool {
   name: string;
   description: string;
+  parameters: z.ZodRawShape;
   contract: ModelToolContract;
-  definition: FunctionToolDefinition;
   execute(args: string, ctx: ToolContext): Promise<string>;
 }
 
-export class Tool<Args extends z.ZodRawShape> implements ITool {
+export class Tool<
+  Parameters extends z.ZodRawShape,
+  OutputSchema extends z.ZodType,
+> implements RuntimeTool
+{
   constructor(
-    readonly name: string,
-    readonly description: string,
-    readonly parameters: Args,
+    readonly specification: ToolSpecification<Parameters, OutputSchema>,
     readonly handler: (
-      args: z.infer<z.ZodObject<Args>>,
+      args: z.infer<z.ZodObject<Parameters>>,
       ctx: ToolContext
     ) => ToolResult | Promise<ToolResult>
   ) {}
+
+  get name(): string {
+    return this.specification.name;
+  }
+
+  get description(): string {
+    return this.specification.description;
+  }
+
+  get parameters(): Parameters {
+    return this.specification.parameters;
+  }
 
   get contract(): ModelToolContract {
     const strict = Object.values(this.parameters).every((param) => {
@@ -55,17 +64,6 @@ export class Tool<Args extends z.ZodRawShape> implements ITool {
       description: this.description,
       inputSchema: z.toJSONSchema(z.object(this.parameters)),
       strict,
-    };
-  }
-
-  get definition(): FunctionToolDefinition {
-    const { name, description, inputSchema, strict } = this.contract;
-    return {
-      type: 'function',
-      name,
-      description,
-      parameters: inputSchema,
-      strict: strict ?? false,
     };
   }
 
@@ -92,4 +90,23 @@ export class Tool<Args extends z.ZodRawShape> implements ITool {
       return JSON.stringify({ success: false, error: getErrorMessage(error) });
     }
   }
+}
+
+export function bindRuntimeTool(
+  tool: RuntimeTool,
+  toolContext: ToolContext
+): AgentSessionTool {
+  return {
+    name: tool.name,
+    contract: tool.contract,
+    execute: async (input: string): Promise<string> =>
+      await tool.execute(input, toolContext),
+  };
+}
+
+export function bindRuntimeTools(
+  tools: readonly RuntimeTool[],
+  toolContext: ToolContext
+): readonly AgentSessionTool[] {
+  return tools.map((tool) => bindRuntimeTool(tool, toolContext));
 }

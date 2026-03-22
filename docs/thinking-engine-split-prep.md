@@ -146,7 +146,7 @@
 - embedding provider の選択
 - `Echo.run()` 側で usage 永続化が継続すること
 
-今ある `apps/cloudflare-workers/src/llm/openai/functions/*.test.ts` は、thinking-engine 分割とは別軸のテストなので、この段階では原則そのまま維持する。
+今ある `packages/core/src/agent/runtime-tools/*.test.ts` は、thinking-engine 分割とは別軸のテストなので、この段階では原則そのまま維持する。
 
 ## 段階的な実装順
 

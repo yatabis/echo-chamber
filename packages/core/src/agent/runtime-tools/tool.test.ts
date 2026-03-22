@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
-import { mockToolContext } from '../../../../test/mocks/tool';
+import { mockToolContext } from './mock-tool-context';
+import { Tool, type ToolResult } from './tool';
 
-import { Tool, type ToolResult } from './index';
+import type { ToolSpecification } from '../tools/shared';
 
 describe('Tool', () => {
   const mockName = 'test_tool';
@@ -14,38 +15,41 @@ describe('Tool', () => {
   };
   const mockHandler = vi.fn();
 
-  describe('definition', () => {
-    it('正しいFunctionTool形式のオブジェクトを返す', () => {
-      const tool = new Tool(
-        mockName,
-        mockDescription,
-        mockParameters,
-        mockHandler
-      );
-      const { type, name, description, parameters, strict } = tool.definition;
+  function createSpecification<Parameters extends z.ZodRawShape>(
+    parameters: Parameters
+  ): ToolSpecification<Parameters, z.ZodObject<{ success: z.ZodBoolean }>> {
+    return {
+      name: mockName,
+      description: mockDescription,
+      parameters,
+      outputSchema: z.object({
+        success: z.boolean(),
+      }),
+    };
+  }
 
-      expect(type).toBe('function');
-      expect(name).toBe(mockName);
-      expect(description).toBe(mockDescription);
-      expect(parameters).toEqual(z.toJSONSchema(z.object(mockParameters)));
-      expect(strict).toBe(true);
+  describe('contract', () => {
+    it('ModelToolContract を正しく生成する', () => {
+      const tool = new Tool(createSpecification(mockParameters), mockHandler);
+
+      expect(tool.contract).toEqual({
+        name: mockName,
+        description: mockDescription,
+        inputSchema: z.toJSONSchema(z.object(mockParameters)),
+        strict: true,
+      });
     });
 
     it('空のparametersでも正しく動作する', () => {
       const emptyParameters = {};
-      const tool = new Tool(
-        mockName,
-        mockDescription,
-        emptyParameters,
-        mockHandler
-      );
-      const { type, name, description, parameters, strict } = tool.definition;
+      const tool = new Tool(createSpecification(emptyParameters), mockHandler);
 
-      expect(type).toBe('function');
-      expect(name).toBe(mockName);
-      expect(description).toBe(mockDescription);
-      expect(parameters).toEqual(z.toJSONSchema(z.object(emptyParameters)));
-      expect(strict).toBe(true);
+      expect(tool.contract).toEqual({
+        name: mockName,
+        description: mockDescription,
+        inputSchema: z.toJSONSchema(z.object(emptyParameters)),
+        strict: true,
+      });
     });
   });
 
@@ -59,12 +63,7 @@ describe('Tool', () => {
         const successResult: ToolResult = { success: true };
         mockHandler.mockReturnValue(successResult);
 
-        const tool = new Tool(
-          mockName,
-          mockDescription,
-          mockParameters,
-          mockHandler
-        );
+        const tool = new Tool(createSpecification(mockParameters), mockHandler);
         const args = JSON.stringify({ message: 'test', count: 1 });
         const result = await tool.execute(args, mockToolContext);
 
@@ -79,12 +78,7 @@ describe('Tool', () => {
         const successResult: ToolResult = { success: true };
         mockHandler.mockResolvedValue(successResult);
 
-        const tool = new Tool(
-          mockName,
-          mockDescription,
-          mockParameters,
-          mockHandler
-        );
+        const tool = new Tool(createSpecification(mockParameters), mockHandler);
         const args = JSON.stringify({ message: 'test', count: 1 });
         const result = await tool.execute(args, mockToolContext);
 
@@ -102,12 +96,7 @@ describe('Tool', () => {
         };
         mockHandler.mockReturnValue(errorResult);
 
-        const tool = new Tool(
-          mockName,
-          mockDescription,
-          mockParameters,
-          mockHandler
-        );
+        const tool = new Tool(createSpecification(mockParameters), mockHandler);
         const args = JSON.stringify({ message: 'test', count: 1 });
         const result = await tool.execute(args, mockToolContext);
 
@@ -121,12 +110,7 @@ describe('Tool', () => {
 
     describe('失敗ケース', () => {
       it('不正なJSON文字列でエラーレスポンスが返される', async () => {
-        const tool = new Tool(
-          mockName,
-          mockDescription,
-          mockParameters,
-          mockHandler
-        );
+        const tool = new Tool(createSpecification(mockParameters), mockHandler);
         const args = '{"message": "test", "count":}';
         const result = await tool.execute(args, mockToolContext);
 
@@ -140,12 +124,7 @@ describe('Tool', () => {
       });
 
       it('パラメータバリデーション失敗でエラーレスポンスが返される', async () => {
-        const tool = new Tool(
-          mockName,
-          mockDescription,
-          mockParameters,
-          mockHandler
-        );
+        const tool = new Tool(createSpecification(mockParameters), mockHandler);
         const args = JSON.stringify({
           message: 'test',
           count: 'invalid',
@@ -168,12 +147,7 @@ describe('Tool', () => {
       });
 
       it('必須パラメータが不足している場合エラーレスポンスが返される', async () => {
-        const tool = new Tool(
-          mockName,
-          mockDescription,
-          mockParameters,
-          mockHandler
-        );
+        const tool = new Tool(createSpecification(mockParameters), mockHandler);
         const args = JSON.stringify({ message: 'test' });
         const result = await tool.execute(args, mockToolContext);
         const expected = {
@@ -198,12 +172,7 @@ describe('Tool', () => {
           throw error;
         });
 
-        const tool = new Tool(
-          mockName,
-          mockDescription,
-          mockParameters,
-          mockHandler
-        );
+        const tool = new Tool(createSpecification(mockParameters), mockHandler);
         const args = JSON.stringify({ message: 'test', count: 1 });
         const result = await tool.execute(args, mockToolContext);
 
@@ -220,9 +189,7 @@ describe('Tool', () => {
         const asyncHandler = vi.fn().mockRejectedValue(error);
 
         const tool = new Tool(
-          mockName,
-          mockDescription,
-          mockParameters,
+          createSpecification(mockParameters),
           asyncHandler
         );
         const args = JSON.stringify({ message: 'test', count: 1 });
@@ -243,12 +210,7 @@ describe('Tool', () => {
         const successResult: ToolResult = { success: true };
         const handler = vi.fn().mockReturnValue(successResult);
 
-        const tool = new Tool(
-          mockName,
-          mockDescription,
-          emptyParameters,
-          handler
-        );
+        const tool = new Tool(createSpecification(emptyParameters), handler);
         const args = JSON.stringify({});
         const result = await tool.execute(args, mockToolContext);
 
@@ -265,9 +227,7 @@ describe('Tool', () => {
         const handler = vi.fn().mockReturnValue(successResult);
 
         const tool = new Tool(
-          mockName,
-          mockDescription,
-          parametersWithOptional,
+          createSpecification(parametersWithOptional),
           handler
         );
         const args = JSON.stringify({ message: 'test' });
@@ -293,9 +253,7 @@ describe('Tool', () => {
         const handler = vi.fn().mockReturnValue(successResult);
 
         const tool = new Tool(
-          mockName,
-          mockDescription,
-          parametersWithDefault,
+          createSpecification(parametersWithDefault),
           handler
         );
         const args = JSON.stringify({ message: 'test' });

@@ -11,6 +11,8 @@ import type {
   DashboardInstanceSummary,
   EchoStatus,
 } from '@echo-chamber/contracts/dashboard/types';
+import { canonicalRuntimeTools } from '@echo-chamber/core/agent/runtime-tools/catalog';
+import { bindRuntimeTools } from '@echo-chamber/core/agent/runtime-tools/tool';
 import type { AgentSessionTool } from '@echo-chamber/core/agent/session';
 import { ThinkingEngine as AgentThinkingEngine } from '@echo-chamber/core/agent/thinking-engine';
 import { ALARM_CONFIG, TOKEN_LIMITS } from '@echo-chamber/core/echo/constants';
@@ -42,31 +44,11 @@ import {
   resolveEchoRuntimeBindings,
   type EchoRuntimeBindings,
 } from '../config/echo-runtime-bindings';
-import { createEmbeddingService } from '../llm/embedding-factory';
-import {
-  addReactionToChatMessageFunction,
-  checkNotificationsFunction,
-  readChatMessagesFunction,
-  sendChatMessageFunction,
-} from '../llm/openai/functions/chat';
-import { finishThinkingFunction } from '../llm/openai/functions/finish';
-import {
-  searchMemoryFunction,
-  storeMemoryFunction,
-} from '../llm/openai/functions/memory';
-import {
-  createNoteFunction,
-  deleteNoteFunction,
-  getNoteFunction,
-  listNotesFunction,
-  searchNotesFunction,
-  updateNoteFunction,
-} from '../llm/openai/functions/note';
-import { thinkDeeplyFunction } from '../llm/openai/functions/think';
-import { createToolExecutionContext } from '../llm/openai/functions/tool-context';
+import { createEmbeddingService } from '../embedding/create-embedding-service';
 import { createLogger } from '../utils/logger';
 
-import type { ITool, ToolContext } from '../llm/openai/functions';
+import { createToolExecutionContext } from './tool-context';
+
 import type { Logger } from '../utils/logger';
 
 async function fetchUnreadMessageCount(
@@ -74,40 +56,6 @@ async function fetchUnreadMessageCount(
   channelId: string
 ): Promise<number> {
   return getUnreadMessageCount(token, channelId);
-}
-
-const RUNTIME_TOOLS: readonly ITool[] = [
-  checkNotificationsFunction,
-  readChatMessagesFunction,
-  sendChatMessageFunction,
-  addReactionToChatMessageFunction,
-  storeMemoryFunction,
-  searchMemoryFunction,
-  createNoteFunction,
-  listNotesFunction,
-  getNoteFunction,
-  searchNotesFunction,
-  updateNoteFunction,
-  deleteNoteFunction,
-  thinkDeeplyFunction,
-  finishThinkingFunction,
-];
-
-/**
- * @param tool Worker runtime tool
- * @param toolContext tool 実行時に共有する runtime context
- * @returns core session loop が扱える executable tool
- */
-function toExecutableTool(
-  tool: ITool,
-  toolContext: ToolContext
-): AgentSessionTool {
-  return {
-    name: tool.name,
-    contract: tool.contract,
-    execute: async (input: string): Promise<string> =>
-      await tool.execute(input, toolContext),
-  };
 }
 
 export class Echo extends DurableObject<Env> {
@@ -215,9 +163,7 @@ export class Echo extends DurableObject<Env> {
       noteSystem: this.noteSystem,
       logger: this.logger,
     });
-    this.executableTools = RUNTIME_TOOLS.map((tool) =>
-      toExecutableTool(tool, toolContext)
-    );
+    this.executableTools = bindRuntimeTools(canonicalRuntimeTools, toolContext);
     // embedding モデル変更時の自動再 embedding
     await this.memorySystem.reEmbedStaleMemories();
 

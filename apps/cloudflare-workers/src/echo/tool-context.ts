@@ -8,8 +8,8 @@ import type { NotePort } from '@echo-chamber/core/ports/note';
 import { createDiscordChatPort } from '@echo-chamber/discord-adapter/chat-port';
 import { createDiscordNotificationPort } from '@echo-chamber/discord-adapter/notification-port';
 
-import type { EchoChatRuntimeBindings } from '../../../config/echo-runtime-bindings';
-import type { Logger } from '../../../utils/logger';
+import type { EchoChatRuntimeBindings } from '../config/echo-runtime-bindings';
+import type { Logger } from '../utils/logger';
 
 function createMemoryPort(
   memorySystem: MemorySystem

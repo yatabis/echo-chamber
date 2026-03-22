@@ -1,15 +1,10 @@
-import {
-  searchMemoryToolSpec,
+import { getErrorMessage } from '../../utils/error';
+import { searchMemoryToolSpec, storeMemoryToolSpec } from '../tools/memory';
+
+import { Tool } from './tool';
+
+export const storeMemoryTool = new Tool(
   storeMemoryToolSpec,
-} from '@echo-chamber/core/agent/tools/memory';
-import { getErrorMessage } from '@echo-chamber/core/utils/error';
-
-import { Tool } from './index';
-
-export const storeMemoryFunction = new Tool(
-  storeMemoryToolSpec.name,
-  storeMemoryToolSpec.description,
-  storeMemoryToolSpec.parameters,
   async ({ content, type, emotion }, ctx) => {
     try {
       await ctx.memory.store(content, emotion, type);
@@ -24,10 +19,8 @@ export const storeMemoryFunction = new Tool(
   }
 );
 
-export const searchMemoryFunction = new Tool(
-  searchMemoryToolSpec.name,
-  searchMemoryToolSpec.description,
-  searchMemoryToolSpec.parameters,
+export const searchMemoryTool = new Tool(
+  searchMemoryToolSpec,
   async ({ query, type }, ctx) => {
     try {
       const results = await ctx.memory.search(query, type);

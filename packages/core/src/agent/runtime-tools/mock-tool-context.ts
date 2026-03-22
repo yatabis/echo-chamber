@@ -1,6 +1,6 @@
 import { vi } from 'vitest';
 
-import type { ToolContext } from '../../src/llm/openai/functions';
+import type { ToolContext } from './tool';
 
 export const mockToolContext: ToolContext = {
   chat: {

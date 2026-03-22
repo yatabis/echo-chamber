@@ -1,21 +1,20 @@
 import { describe, expect, it } from 'vitest';
 
-import { mockToolContext } from '../../../../test/mocks/tool';
+import { finishThinkingTool } from './finish';
+import { mockToolContext } from './mock-tool-context';
 
-import { finishThinkingFunction } from './finish';
-
-describe('finishThinkingFunction', () => {
+describe('finishThinkingTool', () => {
   it('name', () => {
-    expect(finishThinkingFunction.name).toBe('finish_thinking');
+    expect(finishThinkingTool.name).toBe('finish_thinking');
   });
 
   it('description', () => {
-    expect(finishThinkingFunction.description).toBeDefined();
-    expect(finishThinkingFunction.description).toContain('終了');
+    expect(finishThinkingTool.description).toBeDefined();
+    expect(finishThinkingTool.description).toContain('終了');
   });
 
   describe('parameters', () => {
-    const { parameters } = finishThinkingFunction;
+    const { parameters } = finishThinkingTool;
     expect(parameters).toBeDefined();
 
     it('reason', () => {
@@ -33,7 +32,7 @@ describe('finishThinkingFunction', () => {
 
   describe('handler', () => {
     it('returns success with next_wake_at', () => {
-      const result = finishThinkingFunction.handler(
+      const result = finishThinkingTool.handler(
         {
           reason: '十分な情報を得たので思考を終了する',
           next_wake_at: '2025-01-01T12:00:00Z',
@@ -44,7 +43,7 @@ describe('finishThinkingFunction', () => {
     });
 
     it('returns success without next_wake_at', () => {
-      const result = finishThinkingFunction.handler(
+      const result = finishThinkingTool.handler(
         { reason: '十分な情報を得たので思考を終了する' },
         mockToolContext
       );

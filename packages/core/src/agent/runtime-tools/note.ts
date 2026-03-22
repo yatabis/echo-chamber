@@ -1,3 +1,4 @@
+import { getErrorMessage } from '../../utils/error';
 import {
   createNoteToolSpec,
   deleteNoteToolSpec,
@@ -5,18 +6,16 @@ import {
   listNotesToolSpec,
   searchNotesToolSpec,
   updateNoteToolSpec,
-} from '@echo-chamber/core/agent/tools/note';
-import type { Note } from '@echo-chamber/core/echo/types';
-import { getErrorMessage } from '@echo-chamber/core/utils/error';
+} from '../tools/note';
 
-import { Tool } from './index';
+import { Tool } from './tool';
+
+import type { Note } from '../../echo/types';
 
 type NoteSummary = Pick<Note, 'id' | 'title' | 'createdAt' | 'updatedAt'>;
 
-export const createNoteFunction = new Tool(
-  createNoteToolSpec.name,
-  createNoteToolSpec.description,
-  createNoteToolSpec.parameters,
+export const createNoteTool = new Tool(
+  createNoteToolSpec,
   async ({ title, content }, ctx) => {
     try {
       const note = await ctx.notes.create({ title, content });
@@ -35,66 +34,54 @@ export const createNoteFunction = new Tool(
   }
 );
 
-export const listNotesFunction = new Tool(
-  listNotesToolSpec.name,
-  listNotesToolSpec.description,
-  listNotesToolSpec.parameters,
-  async (_, ctx) => {
-    try {
-      const notes = await ctx.notes.list();
-      const summaries: NoteSummary[] = notes.map((note) => ({
-        id: note.id,
-        title: note.title,
-        createdAt: note.createdAt,
-        updatedAt: note.updatedAt,
-      }));
-      return {
-        success: true,
-        notes: summaries,
-      };
-    } catch (error) {
-      const message = getErrorMessage(error);
-      await ctx.logger.error(`Error listing notes: ${message}`);
+export const listNotesTool = new Tool(listNotesToolSpec, async (_, ctx) => {
+  try {
+    const notes = await ctx.notes.list();
+    const summaries: NoteSummary[] = notes.map((note) => ({
+      id: note.id,
+      title: note.title,
+      createdAt: note.createdAt,
+      updatedAt: note.updatedAt,
+    }));
+    return {
+      success: true,
+      notes: summaries,
+    };
+  } catch (error) {
+    const message = getErrorMessage(error);
+    await ctx.logger.error(`Error listing notes: ${message}`);
+    return {
+      success: false,
+      error: message,
+    };
+  }
+});
+
+export const getNoteTool = new Tool(getNoteToolSpec, async ({ id }, ctx) => {
+  try {
+    const note = await ctx.notes.get(id);
+    if (note === null) {
       return {
         success: false,
-        error: message,
+        error: 'Note not found',
       };
     }
+    return {
+      success: true,
+      note,
+    };
+  } catch (error) {
+    const message = getErrorMessage(error);
+    await ctx.logger.error(`Error getting note: ${message}`);
+    return {
+      success: false,
+      error: message,
+    };
   }
-);
+});
 
-export const getNoteFunction = new Tool(
-  getNoteToolSpec.name,
-  getNoteToolSpec.description,
-  getNoteToolSpec.parameters,
-  async ({ id }, ctx) => {
-    try {
-      const note = await ctx.notes.get(id);
-      if (note === null) {
-        return {
-          success: false,
-          error: 'Note not found',
-        };
-      }
-      return {
-        success: true,
-        note,
-      };
-    } catch (error) {
-      const message = getErrorMessage(error);
-      await ctx.logger.error(`Error getting note: ${message}`);
-      return {
-        success: false,
-        error: message,
-      };
-    }
-  }
-);
-
-export const searchNotesFunction = new Tool(
-  searchNotesToolSpec.name,
-  searchNotesToolSpec.description,
-  searchNotesToolSpec.parameters,
+export const searchNotesTool = new Tool(
+  searchNotesToolSpec,
   async ({ query }, ctx) => {
     try {
       const notes = await ctx.notes.search(query);
@@ -113,10 +100,8 @@ export const searchNotesFunction = new Tool(
   }
 );
 
-export const updateNoteFunction = new Tool(
-  updateNoteToolSpec.name,
-  updateNoteToolSpec.description,
-  updateNoteToolSpec.parameters,
+export const updateNoteTool = new Tool(
+  updateNoteToolSpec,
   async ({ id, title, content }, ctx) => {
     if (title === undefined && content === undefined) {
       return {
@@ -148,10 +133,8 @@ export const updateNoteFunction = new Tool(
   }
 );
 
-export const deleteNoteFunction = new Tool(
-  deleteNoteToolSpec.name,
-  deleteNoteToolSpec.description,
-  deleteNoteToolSpec.parameters,
+export const deleteNoteTool = new Tool(
+  deleteNoteToolSpec,
   async ({ id }, ctx) => {
     try {
       const deleted = await ctx.notes.delete(id);

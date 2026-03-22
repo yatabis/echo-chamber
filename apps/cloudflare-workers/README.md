@@ -13,7 +13,7 @@ Cloudflare Worker / Durable Object の実装本体です。
   - `ALL /:instanceId`
   - `ALL /:instanceId/*`（Durable Object へフォワード）
 - Durable Object `Echo` 実装 (`src/echo`)
-- Cloudflare KV / Workers AI / OpenAI 連携 (`src/config`, `src/llm`, `src/utils`)
+- Cloudflare KV / Workers AI / OpenAI 連携 (`src/config`, `src/echo`, `src/embedding`, `src/utils`)
 - Echo の runtime bindings 解決 (`src/config/echo-runtime-bindings.ts`)
 - Cloudflare 依存テスト (`src/**/*.test.ts`, `test/**`)
 - Wrangler 設定と bindings 管理

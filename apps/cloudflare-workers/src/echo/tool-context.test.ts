@@ -8,7 +8,7 @@ import { createDiscordNotificationPort } from '@echo-chamber/discord-adapter/not
 
 import { createToolExecutionContext } from './tool-context';
 
-import type { Logger } from '../../../utils/logger';
+import type { Logger } from '../utils/logger';
 
 vi.mock('@echo-chamber/discord-adapter/chat-port', () => ({
   createDiscordChatPort: vi.fn(),

@@ -56,7 +56,7 @@ worker は Cloudflare 依存の runtime binding を解決する。
 実装:
 
 - [apps/cloudflare-workers/src/echo/index.tsx](../apps/cloudflare-workers/src/echo/index.tsx)
-- [apps/cloudflare-workers/src/llm/openai/functions/tool-context.ts](../apps/cloudflare-workers/src/llm/openai/functions/tool-context.ts)
+- [apps/cloudflare-workers/src/echo/tool-context.ts](../apps/cloudflare-workers/src/echo/tool-context.ts)
 
 ## 削除したもの
 

@@ -1,20 +1,19 @@
 import { describe, expect, it } from 'vitest';
 
-import { mockToolContext } from '../../../../test/mocks/tool';
+import { mockToolContext } from './mock-tool-context';
+import { thinkDeeplyTool } from './think';
 
-import { thinkDeeplyFunction } from './think';
-
-describe('thinkDeeplyFunction', () => {
+describe('thinkDeeplyTool', () => {
   it('name', () => {
-    expect(thinkDeeplyFunction.name).toBe('think_deeply');
+    expect(thinkDeeplyTool.name).toBe('think_deeply');
   });
 
   it('description', () => {
-    expect(thinkDeeplyFunction.description).toBeDefined();
+    expect(thinkDeeplyTool.description).toBeDefined();
   });
 
   describe('parameters', () => {
-    const { parameters } = thinkDeeplyFunction;
+    const { parameters } = thinkDeeplyTool;
     expect(parameters).toBeDefined();
 
     it('thought', () => {
@@ -26,7 +25,7 @@ describe('thinkDeeplyFunction', () => {
 
   describe('handler', () => {
     it('thought', () => {
-      const result = thinkDeeplyFunction.handler(
+      const result = thinkDeeplyTool.handler(
         { thought: 'What is the meaning of life?' },
         mockToolContext
       );
