@@ -198,28 +198,6 @@ export class MemorySystem {
   }
 
   /**
-   * 最新のメモリを取得する
-   * @returns 最新のメモリ、存在しない場合はnull
-   */
-  getLatestMemory(): MemorySnapshot | null {
-    this.ensureSchema();
-
-    // 0行の可能性があるのでtoArray()を使用（one()は0行で例外をスロー）
-    const rows = this.sql
-      .exec<StoredMemoryRow>(
-        'SELECT * FROM memories ORDER BY created_at DESC LIMIT 1'
-      )
-      .toArray();
-
-    const row = rows[0];
-    if (row === undefined) {
-      return null;
-    }
-
-    return this.rowToSnapshot(row);
-  }
-
-  /**
    * セマンティック検索でメモリを取得する
    * @param query 検索クエリ
    * @param type 検索対象のメモリタイプ（省略時は全タイプ）

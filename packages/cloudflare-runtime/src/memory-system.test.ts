@@ -248,66 +248,6 @@ describe('MemorySystem', () => {
     vi.useRealTimers();
   });
 
-  describe('getLatestMemory', () => {
-    it('メモリが存在しない場合はnullを返す', () => {
-      const result = memorySystem.getLatestMemory();
-
-      expect(result).toBeNull();
-    });
-
-    it('最も新しいメモリを返す（created_atで判定）', () => {
-      // データをモックに追加
-      mockSql._tables.memories = [
-        createMockMemoryRow({
-          content: 'Older memory',
-          created_at: '2025-01-24T10:00:00.000Z',
-          updated_at: '2025-01-24T10:00:00.000Z',
-        }),
-        createMockMemoryRow({
-          content: 'Newer memory',
-          created_at: '2025-01-25T15:00:00.000Z',
-          updated_at: '2025-01-25T15:00:00.000Z',
-        }),
-        createMockMemoryRow({
-          content: 'Middle memory',
-          created_at: '2025-01-25T10:00:00.000Z',
-          updated_at: '2025-01-25T10:00:00.000Z',
-        }),
-      ];
-
-      const result = memorySystem.getLatestMemory();
-
-      expect(result).toEqual({
-        content: 'Newer memory',
-        type: 'episode',
-        emotion: {
-          valence: 0.5,
-          arousal: 0.3,
-          labels: ['neutral'],
-        },
-        createdAt: '2日前 (2025年01月26日 00:00:00)',
-        updatedAt: '2日前 (2025年01月26日 00:00:00)',
-      });
-    });
-
-    it('embeddingを含まない結果を返す', () => {
-      mockSql._tables.memories = [
-        createMockMemoryRow({
-          content: 'Test memory',
-          embedding: float32ArrayToBuffer(new Array<number>(1536).fill(0.1)),
-        }),
-      ];
-
-      const result = memorySystem.getLatestMemory();
-
-      expect(result).not.toHaveProperty('embedding');
-      expect(result).toHaveProperty('content');
-      expect(result).toHaveProperty('type');
-      expect(result).toHaveProperty('emotion');
-      expect(result).toHaveProperty('createdAt');
-    });
-  });
-
   describe('storeMemory', () => {
     it('新しいメモリを保存できる', async () => {
       const emotion: Emotion = {

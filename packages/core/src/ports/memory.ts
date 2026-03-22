@@ -13,7 +13,6 @@ export interface MemorySearchResult extends MemoryRecord {
 }
 
 export interface MemoryPort {
-  getLatest(): Promise<MemoryRecord | null> | MemoryRecord | null;
   list(): Promise<MemoryRecord[]> | MemoryRecord[];
   store(content: string, emotion: Emotion, type: MemoryType): Promise<void>;
   search(query: string, type?: MemoryType): Promise<MemorySearchResult[]>;
