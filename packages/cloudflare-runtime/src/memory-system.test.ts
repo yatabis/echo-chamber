@@ -6,6 +6,7 @@ import type { LoggerPort } from '@echo-chamber/core/ports/logger';
 import { MemorySystem } from './memory-system';
 
 import type { EmbeddingService } from './embedding-service';
+import type { RerankingService } from './reranking-service';
 
 interface MockMemoryRow {
   id: string;
@@ -185,6 +186,13 @@ const mockEmbeddingService: EmbeddingService = {
   modelIdentifier: 'test/mock-embedding-model',
 };
 
+const rerankMock = vi.fn();
+const mockRerankingService: RerankingService = {
+  rerank: rerankMock,
+  modelIdentifier: 'workersai/@cf/baai/bge-reranker-base',
+};
+const mockedRerank = vi.mocked(rerankMock);
+
 const mockLogger: Pick<LoggerPort, 'debug' | 'info' | 'error'> = {
   debug: vi.fn(),
   info: vi.fn(),
@@ -236,10 +244,20 @@ describe('MemorySystem', () => {
     (mockEmbeddingService.embed as ReturnType<typeof vi.fn>).mockResolvedValue(
       new Array<number>(1536).fill(0)
     );
+    mockedRerank.mockImplementation(
+      async (_query: string, contexts: string[], topK?: number) =>
+        Promise.resolve(
+          contexts.slice(0, topK ?? contexts.length).map((_context, index) => ({
+            id: index,
+            score: 1 - index * 0.01,
+          }))
+        )
+    );
     mockSql = createMockSqlStorage();
     memorySystem = new MemorySystem({
       sql: mockSql as unknown as SqlStorage,
       embeddingService: mockEmbeddingService,
+      rerankingService: mockRerankingService,
       logger: mockLogger,
     });
   });
@@ -359,6 +377,7 @@ describe('MemorySystem', () => {
       const results = await memorySystem.searchMemory('test query');
 
       expect(results).toEqual([]);
+      expect(mockRerankingService.rerank).not.toHaveBeenCalled(); // eslint-disable-line @typescript-eslint/unbound-method
     });
 
     it('検索クエリに対してembeddingを生成する', async () => {
@@ -375,29 +394,43 @@ describe('MemorySystem', () => {
       expect(mockEmbeddingService.embed).toHaveBeenCalledWith('search query'); // eslint-disable-line @typescript-eslint/unbound-method
     });
 
-    it('類似度に基づいて結果を返す', async () => {
-      // 同じembeddingを使うことで類似度1.0を期待
+    it('ベクトル候補を rerank した順序で結果を返す', async () => {
       const embedding = new Float32Array(1536).fill(0.5);
       (
         mockEmbeddingService.embed as ReturnType<typeof vi.fn>
       ).mockResolvedValue(Array.from(embedding));
+      mockedRerank.mockResolvedValue([
+        { id: 1, score: 0.97 },
+        { id: 0, score: 0.88 },
+      ]);
 
       mockSql._tables.memories = [
         createMockMemoryRow({
-          content: 'Similar memory',
+          content: 'Vector top 1',
           embedding: embedding.buffer,
+          updated_at: '2025-01-25T10:00:00.000Z',
+        }),
+        createMockMemoryRow({
+          content: 'Vector top 2',
+          embedding: embedding.buffer,
+          updated_at: '2025-01-25T10:01:00.000Z',
         }),
       ];
 
       const results = await memorySystem.searchMemory('test query');
 
-      expect(results).toHaveLength(1);
-      const firstResult = results[0];
-      expect(firstResult).toBeDefined();
-      expect(firstResult).toMatchObject({
-        content: 'Similar memory',
-      });
-      expect(firstResult?.similarity).toBeCloseTo(1.0, 5);
+      expect(mockedRerank).toHaveBeenCalledWith(
+        'test query',
+        ['Vector top 1', 'Vector top 2'],
+        5
+      );
+      expect(results).toHaveLength(2);
+      expect(results.map((result) => result.content)).toEqual([
+        'Vector top 2',
+        'Vector top 1',
+      ]);
+      expect(results[0]?.similarity).toBeCloseTo(0.97, 5);
+      expect(results[1]?.similarity).toBeCloseTo(0.88, 5);
     });
 
     it('type未指定時は全タイプのメモリを検索する', async () => {
@@ -488,46 +521,46 @@ describe('MemorySystem', () => {
 
       expect(results).toEqual([]);
       expect(mockEmbeddingService.embed).not.toHaveBeenCalled(); // eslint-disable-line @typescript-eslint/unbound-method
+      expect(mockRerankingService.rerank).not.toHaveBeenCalled(); // eslint-disable-line @typescript-eslint/unbound-method
     });
 
-    it('閾値未満を除外し、類似度順で上位5件を返す', async () => {
+    it('ベクトル上位20件だけを rerank 対象にし、その上位5件を返す', async () => {
       (
         mockEmbeddingService.embed as ReturnType<typeof vi.fn>
       ).mockResolvedValue([1, 0]);
+      mockedRerank.mockImplementation(
+        async (_query: string, contexts: string[]) =>
+          Promise.resolve(
+            contexts
+              .map((_context, index) => ({
+                id: index,
+                score: 100 - index,
+              }))
+              .slice(0, 5)
+          )
+      );
 
-      mockSql._tables.memories = [
+      mockSql._tables.memories = Array.from({ length: 21 }, (_, index) =>
         createMockMemoryRow({
-          content: 'Memory 1',
-          embedding: float32ArrayToBuffer([1, 0]),
-        }),
-        createMockMemoryRow({
-          content: 'Memory 2',
-          embedding: float32ArrayToBuffer([0.98, 0.02]),
-        }),
-        createMockMemoryRow({
-          content: 'Memory 3',
-          embedding: float32ArrayToBuffer([0.95, 0.05]),
-        }),
-        createMockMemoryRow({
-          content: 'Memory 4',
-          embedding: float32ArrayToBuffer([0.9, 0.1]),
-        }),
-        createMockMemoryRow({
-          content: 'Memory 5',
-          embedding: float32ArrayToBuffer([0.8, 0.2]),
-        }),
-        createMockMemoryRow({
-          content: 'Memory 6',
-          embedding: float32ArrayToBuffer([0.6, 0.4]),
-        }),
+          content: `Memory ${index + 1}`,
+          embedding: float32ArrayToBuffer([1 - index * 0.01, index * 0.01]),
+          updated_at: `2025-01-25T10:${String(index).padStart(2, '0')}:00.000Z`,
+        })
+      );
+      mockSql._tables.memories.push(
         createMockMemoryRow({
           content: 'Filtered out',
           embedding: float32ArrayToBuffer([0, 1]),
-        }),
-      ];
+        })
+      );
 
       const results = await memorySystem.searchMemory('sorted query');
 
+      expect(mockedRerank).toHaveBeenCalledWith(
+        'sorted query',
+        Array.from({ length: 20 }, (_, index) => `Memory ${index + 1}`),
+        5
+      );
       expect(results).toHaveLength(5);
       expect(results.map((result) => result.content)).toEqual([
         'Memory 1',
@@ -540,8 +573,41 @@ describe('MemorySystem', () => {
       expect(results.some((result) => result.content === 'Filtered out')).toBe(
         false
       );
+      expect(results.some((result) => result.content === 'Memory 21')).toBe(
+        false
+      );
       expect(mockLogger.info).toHaveBeenCalledWith(
-        expect.stringContaining('[undefined] sorted query')
+        expect.stringContaining('[all] sorted query')
+      );
+    });
+
+    it('rerank に失敗した場合はベクトル順位へフォールバックする', async () => {
+      (
+        mockEmbeddingService.embed as ReturnType<typeof vi.fn>
+      ).mockResolvedValue([1, 0]);
+      mockedRerank.mockRejectedValue(new Error('rerank failed'));
+
+      mockSql._tables.memories = [
+        createMockMemoryRow({
+          content: 'Memory 1',
+          embedding: float32ArrayToBuffer([1, 0]),
+        }),
+        createMockMemoryRow({
+          content: 'Memory 2',
+          embedding: float32ArrayToBuffer([0.9, 0.1]),
+        }),
+      ];
+
+      const results = await memorySystem.searchMemory('fallback query');
+
+      expect(results.map((result) => result.content)).toEqual([
+        'Memory 1',
+        'Memory 2',
+      ]);
+      expect(results[0]?.similarity).toBeCloseTo(1, 5);
+      expect(results[1]?.similarity).toBeCloseTo(0.9938837346736189, 5);
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        'Failed to rerank memory search results: rerank failed'
       );
     });
   });

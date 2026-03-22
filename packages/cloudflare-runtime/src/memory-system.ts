@@ -7,8 +7,10 @@ import { cosineSimilarity } from '@echo-chamber/core/utils/vector';
 import { bufferToNumberArray, float32ArrayToBuffer } from './memory-codec';
 
 import type { EmbeddingService } from './embedding-service';
+import type { RerankingService } from './reranking-service';
 
 const MAX_MEMORY_COUNT = 500;
+const VECTOR_CANDIDATE_LIMIT = 20;
 const SEARCH_RESULT_LIMIT = 5;
 const SIMILARITY_THRESHOLD = 0.001;
 
@@ -59,6 +61,7 @@ export interface StoredMemoryRow extends Record<string, SqlStorageValue> {
 export class MemorySystem {
   private readonly sql: SqlStorage;
   private readonly embeddingService: EmbeddingService;
+  private readonly rerankingService: RerankingService;
   private readonly logger: Pick<LoggerPort, 'debug' | 'info' | 'error'>;
   private initialized = false;
 
@@ -70,10 +73,12 @@ export class MemorySystem {
   constructor(options: {
     sql: SqlStorage;
     embeddingService: EmbeddingService;
+    rerankingService: RerankingService;
     logger: Pick<LoggerPort, 'debug' | 'info' | 'error'>;
   }) {
     this.sql = options.sql;
     this.embeddingService = options.embeddingService;
+    this.rerankingService = options.rerankingService;
     this.logger = options.logger;
   }
 
@@ -231,24 +236,38 @@ export class MemorySystem {
       ),
     }));
 
-    // 閾値でフィルタ、類似度降順でソート、上位N件を取得
-    const filteredMemories = memoriesWithSimilarity
+    // 閾値でフィルタ、類似度降順でソートした上位候補だけを rerank へ渡す
+    const vectorCandidates = memoriesWithSimilarity
       .filter((m) => m.similarity >= SIMILARITY_THRESHOLD)
       .sort((a, b) => b.similarity - a.similarity)
-      .slice(0, SEARCH_RESULT_LIMIT);
+      .slice(0, VECTOR_CANDIDATE_LIMIT);
+
+    if (vectorCandidates.length === 0) {
+      return [];
+    }
+
+    const rerankedMemories = await this.rerankCandidates(
+      query,
+      vectorCandidates
+    );
 
     await this.logger.info(
-      `Search Memory with query:\n[${type}] ${query}\nResults:\n${filteredMemories
+      `Search Memory with query:\n[${type ?? 'all'}] ${query}\nVector candidates:\n${vectorCandidates
         .map(
           ({ row, similarity }) =>
-            `[${row.type}] ${row.content} (${similarity.toFixed(4)})`
+            `[${row.type}] ${row.content} (vector=${similarity.toFixed(4)})`
+        )
+        .join('\n')}\nFinal results:\n${rerankedMemories
+        .map(
+          ({ row, similarity, rerankScore }) =>
+            `[${row.type}] ${row.content} (vector=${similarity.toFixed(4)}, rerank=${rerankScore.toFixed(4)})`
         )
         .join('\n')}`
     );
 
-    return filteredMemories.map(({ row, similarity }) => ({
+    return rerankedMemories.map(({ row, rerankScore }) => ({
       ...this.rowToSnapshot(row),
-      similarity,
+      similarity: rerankScore,
     }));
   }
 
@@ -347,5 +366,50 @@ export class MemorySystem {
       createdAt: formatDatetimeForAgent(new Date(row.created_at)),
       updatedAt: formatDatetimeForAgent(new Date(row.updated_at)),
     };
+  }
+
+  /**
+   * ベクトル検索で絞った候補を rerank し、最終順位を返す。
+   * reranker が失敗した場合はベクトル順位へフォールバックする。
+   */
+  private async rerankCandidates(
+    query: string,
+    candidates: { row: StoredMemoryRow; similarity: number }[]
+  ): Promise<
+    { row: StoredMemoryRow; similarity: number; rerankScore: number }[]
+  > {
+    try {
+      const rerankedResults = await this.rerankingService.rerank(
+        query,
+        candidates.map(({ row }) => row.content),
+        SEARCH_RESULT_LIMIT
+      );
+      const seenIds = new Set<number>();
+      const rerankedCandidates = rerankedResults.flatMap(({ id, score }) => {
+        const candidate = candidates[id];
+        if (candidate === undefined || seenIds.has(id)) {
+          return [];
+        }
+        seenIds.add(id);
+        return [{ ...candidate, rerankScore: score }];
+      });
+
+      if (rerankedCandidates.length > 0) {
+        return rerankedCandidates;
+      }
+
+      await this.logger.error(
+        'Reranker returned no usable results. Falling back to vector ranking.'
+      );
+    } catch (error) {
+      await this.logger.error(
+        `Failed to rerank memory search results: ${getErrorMessage(error)}`
+      );
+    }
+
+    return candidates.slice(0, SEARCH_RESULT_LIMIT).map((candidate) => ({
+      ...candidate,
+      rerankScore: candidate.similarity,
+    }));
   }
 }

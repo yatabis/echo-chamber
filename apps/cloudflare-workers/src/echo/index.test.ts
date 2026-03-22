@@ -14,6 +14,7 @@ import type { ContextSnapshot } from '@echo-chamber/core/ports/context';
 
 import { resolveEchoRuntimeBindings } from '../config/echo-runtime-bindings';
 import { createEmbeddingService } from '../embedding/create-embedding-service';
+import { createRerankingService } from '../reranking/create-reranking-service';
 import { createLogger } from '../utils/logger';
 
 import { createToolExecutionContext } from './tool-context';
@@ -27,6 +28,7 @@ const {
   mockLogger,
   mockMemorySystem,
   mockNoteSystem,
+  mockRerankingService,
   mockRuntimeBindings,
   mockToolContext,
 } = vi.hoisted(() => ({
@@ -47,6 +49,7 @@ const {
     reEmbedStaleMemories: vi.fn(async () => Promise.resolve()),
   },
   mockNoteSystem: {},
+  mockRerankingService: { provider: 'test-reranker' },
   mockRuntimeBindings: {
     discordBotToken: 'discord-token',
     chatChannelId: 'chat-channel',
@@ -99,6 +102,10 @@ vi.mock('../config/echo-runtime-bindings', () => ({
 
 vi.mock('../embedding/create-embedding-service', () => ({
   createEmbeddingService: vi.fn(() => mockEmbeddingService),
+}));
+
+vi.mock('../reranking/create-reranking-service', () => ({
+  createRerankingService: vi.fn(() => mockRerankingService),
 }));
 
 vi.mock('../utils/logger', () => ({
@@ -204,9 +211,11 @@ describe('Echo.ensureInitialized', () => {
       env,
       mockRuntimeBindings.embeddingConfig
     );
+    expect(createRerankingService).toHaveBeenCalledWith(env);
     expect(MemorySystem).toHaveBeenCalledWith({
       sql: storage.sql,
       embeddingService: mockEmbeddingService,
+      rerankingService: mockRerankingService,
       logger: mockLogger,
     });
     expect(createToolExecutionContext).toHaveBeenCalledWith({
@@ -238,6 +247,7 @@ describe('Echo.ensureInitialized', () => {
     expect(putFn).not.toHaveBeenCalled();
     expect(resolveEchoRuntimeBindings).not.toHaveBeenCalled();
     expect(createEmbeddingService).not.toHaveBeenCalled();
+    expect(createRerankingService).not.toHaveBeenCalled();
     expect(MemorySystem).not.toHaveBeenCalled();
     expect(createToolExecutionContext).not.toHaveBeenCalled();
     expect(bindRuntimeTools).not.toHaveBeenCalled();

@@ -6,7 +6,8 @@
   "exports": {
     "./embedding-service": "./src/embedding-service.ts",
     "./memory-system": "./src/memory-system.ts",
-    "./note-system": "./src/note-system.ts"
+    "./note-system": "./src/note-system.ts",
+    "./reranking-service": "./src/reranking-service.ts"
   },
   "scripts": {
     "test:run": "vitest run",

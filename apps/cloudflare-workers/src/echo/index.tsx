@@ -50,6 +50,7 @@ import {
   type EchoRuntimeBindings,
 } from '../config/echo-runtime-bindings';
 import { createEmbeddingService } from '../embedding/create-embedding-service';
+import { createRerankingService } from '../reranking/create-reranking-service';
 import { createLogger } from '../utils/logger';
 
 import { createToolExecutionContext } from './tool-context';
@@ -153,9 +154,11 @@ export class Echo extends DurableObject<Env> {
       this._env,
       this.runtimeBindings.embeddingConfig
     );
+    const rerankingService = createRerankingService(this._env);
     this.memorySystem = new MemorySystem({
       sql: this.ctx.storage.sql,
       embeddingService,
+      rerankingService,
       logger: this.logger,
     });
     const toolContext = createToolExecutionContext({
