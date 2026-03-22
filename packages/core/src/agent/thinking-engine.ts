@@ -81,7 +81,6 @@ function toPromptRelatedMemories(
     type: memory.type,
     createdAt: memory.createdAt,
     emotion: memory.emotion,
-    similarity: memory.similarity,
   }));
 }
 

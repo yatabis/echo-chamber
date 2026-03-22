@@ -4,8 +4,7 @@ import { formatJapaneseDatetime } from '../utils/datetime';
 
 import { canonicalToolSpecifications } from './tools/catalog';
 
-import type { Emotion } from '../echo/types';
-import type { MemorySearchResult } from '../ports/memory';
+import type { Emotion, MemoryType } from '../echo/types';
 
 /**
  * Prompt builder が参照する最小限のツール仕様。
@@ -34,10 +33,9 @@ export interface PromptContextSnapshot {
  */
 export interface PromptRelatedMemorySnapshot {
   content: string;
-  type: MemorySearchResult['type'];
+  type: MemoryType;
   createdAt: string;
   emotion: Emotion;
-  similarity: number;
 }
 
 /**
@@ -148,7 +146,6 @@ function formatRelatedMemoriesBlock(
         arousal: memory.emotion.arousal,
         labels: memory.emotion.labels,
       },
-      similarity: memory.similarity,
     })),
     null,
     2

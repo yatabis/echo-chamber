@@ -169,7 +169,6 @@ describe('ThinkingEngine', () => {
           type: relatedMemory.type,
           createdAt: relatedMemory.createdAt,
           emotion: relatedMemory.emotion,
-          similarity: relatedMemory.similarity,
         },
       ],
     });

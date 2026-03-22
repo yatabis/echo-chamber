@@ -27,7 +27,6 @@ const testRelatedMemories = [
       arousal: 0.1,
       labels: ['calm'],
     },
-    similarity: 0.91,
   },
 ];
 
@@ -100,7 +99,8 @@ describe('buildRuntimeContextPrompt', () => {
     expect(result).toContain(
       '"content": "Remembered an earlier similar conversation."'
     );
-    expect(result).toContain('"similarity": 0.91');
+    expect(result).toContain('"type": "episode"');
+    expect(result).not.toContain('"similarity"');
   });
 });
 
