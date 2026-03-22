@@ -237,7 +237,18 @@ function formatDeleteNoteCall(args: FunctionFormatterArgs): string {
  */
 function formatFinishThinkingCall(args: FunctionFormatterArgs): string {
   const nextWakeAt = args.next_wake_at as string | undefined;
-  return `*finish_thinking: ${args.reason as string}(next_wake_at: ${nextWakeAt})*`;
+  const sessionRecord = args.session_record as
+    | {
+        content: string;
+        emotion: {
+          valence: number;
+          arousal: number;
+          labels: string[];
+        };
+      }
+    | undefined;
+
+  return `*finish_thinking: ${args.reason as string}(next_wake_at: ${nextWakeAt})\nsession_record: ${sessionRecord?.content}\n(${sessionRecord?.emotion.valence}, ${sessionRecord?.emotion.arousal}) [${sessionRecord?.emotion.labels.join(', ')}]*`;
 }
 
 const functionCallFormatters: Record<

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { emotionSchema } from '../../echo/schemas';
 import { MEMORY_TYPES } from '../../echo/types';
 
 import { createToolResultSchema, defineToolSpecification } from './shared';
@@ -8,22 +9,6 @@ const MAX_MEMORY_CONTENT_LENGTH = 500;
 const MAX_MEMORY_QUERY_LENGTH = 500;
 
 const memoryTypeSchema = z.enum(MEMORY_TYPES);
-
-const emotionSchema = z.object({
-  valence: z
-    .number()
-    .min(-1.0)
-    .max(1.0)
-    .describe('感情価（-1.0：ネガティブ 〜 1.0：ポジティブ）'),
-  arousal: z
-    .number()
-    .min(0.0)
-    .max(1.0)
-    .describe('覚醒度（0.0：穏やか 〜 1.0：興奮）'),
-  labels: z
-    .array(z.string())
-    .describe('感情ラベル（例: "楽しい", "悲しい", "驚き", "知的好奇心"）'),
-});
 
 const memorySearchResultSchema = z.object({
   content: z.string(),

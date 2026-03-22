@@ -604,13 +604,22 @@ describe('formatLogOutput', () => {
         arguments: JSON.stringify({
           reason: 'No further action needed',
           next_wake_at: '2026-03-20T08:00:00.000Z',
+          session_record: {
+            content:
+              'Replied to unread messages and left a concise session recap.',
+            emotion: {
+              valence: 0.4,
+              arousal: 0.2,
+              labels: ['calm', 'satisfied'],
+            },
+          },
         }),
         status: 'completed',
       },
     ];
 
     expect(formatLogOutput(output)).toBe(
-      '*finish_thinking: No further action needed(next_wake_at: 2026-03-20T08:00:00.000Z)*'
+      '*finish_thinking: No further action needed(next_wake_at: 2026-03-20T08:00:00.000Z)\nsession_record: Replied to unread messages and left a concise session recap.\n(0.4, 0.2) [calm, satisfied]*'
     );
   });
 

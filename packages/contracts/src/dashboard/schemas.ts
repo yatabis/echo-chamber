@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { emotionSchema as coreEmotionSchema } from '@echo-chamber/core/echo/schemas';
 import { MEMORY_TYPES } from '@echo-chamber/core/echo/types';
 import { ECHO_INSTANCE_IDS } from '@echo-chamber/core/types/echo-config';
 
@@ -53,14 +54,6 @@ export const noteSchema = z
   })
   .strict();
 
-const emotionSchema = z
-  .object({
-    valence: finiteNumber,
-    arousal: finiteNumber,
-    labels: z.array(z.string()),
-  })
-  .strict();
-
 /**
  * Dashboard に返す memory payload。
  */
@@ -68,7 +61,7 @@ export const echoMemorySchema = z
   .object({
     content: z.string(),
     type: z.enum(MEMORY_TYPES),
-    emotion: emotionSchema,
+    emotion: coreEmotionSchema.strict(),
     embedding_model: z.string(),
     createdAt: z.string(),
     updatedAt: z.string(),
