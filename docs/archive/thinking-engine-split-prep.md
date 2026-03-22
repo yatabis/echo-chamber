@@ -1,5 +1,7 @@
 # Thinking Engine Split Prep
 
+> Archived note: この文書は thinking-engine 分離前後の検討メモであり、現行実装の正本ではない。
+
 ## 目的
 
 もともと `apps/cloudflare-workers/src/echo/thinking-engine/index.ts` にあった責務を分解し、agent の思考 orchestration を `packages/core` に移しつつ、Cloudflare / Discord / OpenAI / Workers AI への具体依存は `apps/cloudflare-workers` に残す。

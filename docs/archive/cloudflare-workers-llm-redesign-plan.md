@@ -1,5 +1,7 @@
 # Cloudflare Workers LLM Redesign Plan
 
+> Archived note: この文書は `apps/cloudflare-workers/src/llm` 周りの整理を進めた際の作業計画メモであり、現行実装の正本ではない。
+
 ## 目的
 
 `apps/cloudflare-workers/src/llm` に残っているリファクタ途中の責務混在を解消し、次の境界に揃える。
