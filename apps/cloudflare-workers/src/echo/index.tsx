@@ -417,9 +417,15 @@ export class Echo extends DurableObject<Env> {
     await this.logger.info(`${name}が思考を開始しました。`);
 
     try {
-      const { context, usage } = await this.createThinkingEngine().think();
-      if (context !== null) {
+      const { context, nextWakeAt, usage } =
+        await this.createThinkingEngine().think();
+      if (context != null) {
         await this.saveContext(context);
+      }
+      if (nextWakeAt == null) {
+        await this.clearNextWakeAt();
+      } else {
+        await this.saveNextWakeAt(nextWakeAt);
       }
       await this.logger.info(`usage: ${usage.totalTokens}`);
       const totalUsage = await this.updateUsage(convertUsage(usage));
@@ -448,6 +454,11 @@ export class Echo extends DurableObject<Env> {
     // 未読メッセージがあれば実行
     if (await this.validateChatMessage()) {
       return true;
+    }
+
+    const nextWakeAtDecision = await this.validateNextWakeAt();
+    if (nextWakeAtDecision != null) {
+      return nextWakeAtDecision;
     }
 
     // tokenが余っていれば実行
@@ -523,6 +534,36 @@ export class Echo extends DurableObject<Env> {
   }
 
   /**
+   * 保存済みの `next_wake_at` に基づいて、今回の起動を続行するか判定する。
+   * 未来時刻ならまだ実行せず、到達済みなら token soft limit より優先して実行する。
+   *
+   * @returns `true`: 今回は実行すべき, `false`: まだ待機, `null`: 判定材料なし
+   */
+  private async validateNextWakeAt(): Promise<boolean | null> {
+    const nextWakeAt = await this.loadNextWakeAt();
+    if (nextWakeAt === null) {
+      return null;
+    }
+
+    const nextWakeAtMs = Date.parse(nextWakeAt);
+    if (Number.isNaN(nextWakeAtMs)) {
+      await this.logger.warn(
+        `Stored next_wake_at is invalid and will be ignored: ${nextWakeAt}`
+      );
+      await this.clearNextWakeAt();
+      return null;
+    }
+
+    if (Date.now() < nextWakeAtMs) {
+      await this.logger.info(`Skipping run until next_wake_at: ${nextWakeAt}`);
+      return false;
+    }
+
+    await this.logger.info(`next_wake_at reached: ${nextWakeAt}`);
+    return true;
+  }
+
+  /**
    * Usage情報を日別に累積保存
    */
   async updateUsage(usage: Usage): Promise<Usage> {
@@ -557,6 +598,32 @@ export class Echo extends DurableObject<Env> {
    */
   private async saveContext(context: ContextSnapshot): Promise<void> {
     await this.storage.put('context', context);
+  }
+
+  /**
+   * 前回 `finish_thinking` が残した next_wake_at を DO storage から読み出す。
+   *
+   * @returns 保存済み next_wake_at。未保存なら `null`
+   */
+  private async loadNextWakeAt(): Promise<string | null> {
+    return (await this.storage.get<string>('next_wake_at')) ?? null;
+  }
+
+  /**
+   * 次回起動の目安時刻を DO storage へ保存する。
+   *
+   * @param nextWakeAt 今回の終了時に確定した次回起動時刻
+   */
+  private async saveNextWakeAt(nextWakeAt: string): Promise<void> {
+    await this.storage.put('next_wake_at', nextWakeAt);
+  }
+
+  /**
+   * 保存済みの次回起動時刻を破棄する。
+   * 今回の session が next_wake_at を指定しなかった場合のリセットに使う。
+   */
+  private async clearNextWakeAt(): Promise<void> {
+    await this.storage.delete('next_wake_at');
   }
 
   /**

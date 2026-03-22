@@ -319,3 +319,211 @@ describe('Echo context storage', () => {
     );
   });
 });
+
+describe('Echo next_wake_at storage', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useRealTimers();
+  });
+
+  it('DO storage から next_wake_at を読み出せる', async () => {
+    const env = createMockEnv();
+    const { storage, getFn } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+    const nextWakeAt = '2026-03-23T00:00:00.000Z';
+    getFn.mockResolvedValue(nextWakeAt);
+
+    const result = await (
+      echo as unknown as {
+        loadNextWakeAt(): Promise<string | null>;
+      }
+    ).loadNextWakeAt();
+
+    expect(getFn).toHaveBeenCalledWith('next_wake_at');
+    expect(result).toBe(nextWakeAt);
+  });
+
+  it('run 時に返却された next_wake_at を DO storage へ保存する', async () => {
+    const env = createMockEnv();
+    const { storage, putFn } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+    const nextWakeAt = '2026-03-23T00:00:00.000Z';
+    const think = vi.fn().mockResolvedValue({
+      context: null,
+      nextWakeAt,
+      usage: {
+        cachedInputTokens: 0,
+        uncachedInputTokens: 0,
+        totalInputTokens: 0,
+        outputTokens: 0,
+        reasoningTokens: 0,
+        totalTokens: 42,
+      },
+    });
+
+    vi.spyOn(
+      echo as unknown as { validateRunPreconditions(): Promise<boolean> },
+      'validateRunPreconditions'
+    ).mockResolvedValue(true);
+    vi.spyOn(
+      echo as unknown as { setState(state: string): Promise<void> },
+      'setState'
+    ).mockResolvedValue(undefined);
+    vi.spyOn(
+      echo as unknown as { getName(): Promise<string> },
+      'getName'
+    ).mockResolvedValue('リン');
+    vi.spyOn(
+      echo as unknown as {
+        createThinkingEngine(): { think(): Promise<unknown> };
+      },
+      'createThinkingEngine'
+    ).mockReturnValue({
+      think,
+    });
+    vi.spyOn(
+      echo as unknown as { updateUsage(): Promise<{ total_tokens: number }> },
+      'updateUsage'
+    ).mockResolvedValue({ total_tokens: 42 });
+    vi.spyOn(
+      echo as unknown as {
+        createThoughtLog(): { send(message: string): Promise<void> };
+      },
+      'createThoughtLog'
+    ).mockReturnValue({
+      send: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await echo.run();
+
+    expect(putFn).toHaveBeenCalledWith('next_wake_at', nextWakeAt);
+  });
+
+  it('run 時に next_wake_at が無ければ保存済み値をクリアする', async () => {
+    const env = createMockEnv();
+    const { storage, deleteFn } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+    const think = vi.fn().mockResolvedValue({
+      context: null,
+      nextWakeAt: null,
+      usage: {
+        cachedInputTokens: 0,
+        uncachedInputTokens: 0,
+        totalInputTokens: 0,
+        outputTokens: 0,
+        reasoningTokens: 0,
+        totalTokens: 42,
+      },
+    });
+
+    vi.spyOn(
+      echo as unknown as { validateRunPreconditions(): Promise<boolean> },
+      'validateRunPreconditions'
+    ).mockResolvedValue(true);
+    vi.spyOn(
+      echo as unknown as { setState(state: string): Promise<void> },
+      'setState'
+    ).mockResolvedValue(undefined);
+    vi.spyOn(
+      echo as unknown as { getName(): Promise<string> },
+      'getName'
+    ).mockResolvedValue('リン');
+    vi.spyOn(
+      echo as unknown as {
+        createThinkingEngine(): { think(): Promise<unknown> };
+      },
+      'createThinkingEngine'
+    ).mockReturnValue({
+      think,
+    });
+    vi.spyOn(
+      echo as unknown as { updateUsage(): Promise<{ total_tokens: number }> },
+      'updateUsage'
+    ).mockResolvedValue({ total_tokens: 42 });
+    vi.spyOn(
+      echo as unknown as {
+        createThoughtLog(): { send(message: string): Promise<void> };
+      },
+      'createThoughtLog'
+    ).mockReturnValue({
+      send: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await echo.run();
+
+    expect(deleteFn).toHaveBeenCalledWith('next_wake_at');
+  });
+
+  it('future の next_wake_at なら実行を見送る', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-22T00:00:00.000Z'));
+
+    const env = createMockEnv();
+    const { storage } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+
+    vi.spyOn(
+      echo as unknown as { loadNextWakeAt(): Promise<string | null> },
+      'loadNextWakeAt'
+    ).mockResolvedValue('2026-03-23T00:00:00.000Z');
+
+    const result = await (
+      echo as unknown as {
+        validateNextWakeAt(): Promise<boolean | null>;
+      }
+    ).validateNextWakeAt();
+
+    expect(result).toBe(false);
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      'Skipping run until next_wake_at: 2026-03-23T00:00:00.000Z'
+    );
+  });
+
+  it('到達済みの next_wake_at なら実行を許可する', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-23T00:00:01.000Z'));
+
+    const env = createMockEnv();
+    const { storage } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+
+    vi.spyOn(
+      echo as unknown as { loadNextWakeAt(): Promise<string | null> },
+      'loadNextWakeAt'
+    ).mockResolvedValue('2026-03-23T00:00:00.000Z');
+
+    const result = await (
+      echo as unknown as {
+        validateNextWakeAt(): Promise<boolean | null>;
+      }
+    ).validateNextWakeAt();
+
+    expect(result).toBe(true);
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      'next_wake_at reached: 2026-03-23T00:00:00.000Z'
+    );
+  });
+
+  it('不正な next_wake_at は warn して破棄する', async () => {
+    const env = createMockEnv();
+    const { storage, deleteFn } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+
+    vi.spyOn(
+      echo as unknown as { loadNextWakeAt(): Promise<string | null> },
+      'loadNextWakeAt'
+    ).mockResolvedValue('not-a-date');
+
+    const result = await (
+      echo as unknown as {
+        validateNextWakeAt(): Promise<boolean | null>;
+      }
+    ).validateNextWakeAt();
+
+    expect(result).toBeNull();
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      'Stored next_wake_at is invalid and will be ignored: not-a-date'
+    );
+    expect(deleteFn).toHaveBeenCalledWith('next_wake_at');
+  });
+});

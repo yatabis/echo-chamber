@@ -41,9 +41,10 @@ function createSessionContext(): ContextSnapshot {
   };
 }
 
-function createFinishThinkingInput(): string {
+function createFinishThinkingInput(nextWakeAt?: string): string {
   return JSON.stringify({
     reason: 'done',
+    next_wake_at: nextWakeAt,
     session_record: {
       content:
         'Replied to urgent messages and left a short recap for the next run.',
@@ -64,6 +65,7 @@ describe('ThinkingEngine', () => {
   it('起動時 input を組み立てて session を実行する', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2025-01-25T15:00:00.000Z'));
+    const nextWakeAt = '2026-03-23T00:00:00.000Z';
 
     const usage = createUsage({ totalTokens: 42 });
     const startupToolExecute = vi.fn().mockResolvedValue('{"success":true}');
@@ -74,7 +76,7 @@ describe('ThinkingEngine', () => {
           type: 'tool_call',
           callId: 'call-finish',
           toolName: 'finish_thinking',
-          input: createFinishThinkingInput(),
+          input: createFinishThinkingInput(nextWakeAt),
         },
       ],
       usage,
@@ -150,7 +152,9 @@ describe('ThinkingEngine', () => {
     });
     expect(thoughtLogSend).toHaveBeenNthCalledWith(1, '*Thinking started...*');
     expect(thoughtLogSend).toHaveBeenNthCalledWith(2, '*Thinking completed.*');
-    expect(finishToolExecute).toHaveBeenCalledWith(createFinishThinkingInput());
+    expect(finishToolExecute).toHaveBeenCalledWith(
+      createFinishThinkingInput(nextWakeAt)
+    );
     expect(result).toEqual({
       context: {
         content: latestContext.content,
@@ -158,6 +162,7 @@ describe('ThinkingEngine', () => {
         emotion: latestContext.emotion,
         updatedAt: '2025-01-25T15:00:00.000Z',
       },
+      nextWakeAt,
       usage,
     });
   });
@@ -229,5 +234,55 @@ describe('ThinkingEngine', () => {
     await expect(engine.think()).rejects.toThrow('startup failed');
     expect(thoughtLogSend).toHaveBeenCalledTimes(1);
     expect(generate).not.toHaveBeenCalled();
+  });
+
+  it('finish_thinking に next_wake_at が無ければ null を返す', async () => {
+    const usage = createUsage({ totalTokens: 10 });
+    const startupToolExecute = vi.fn().mockResolvedValue('{"success":true}');
+    const finishToolExecute = vi.fn().mockResolvedValue('{"success":true}');
+    const generate = vi.fn<ModelPort['generate']>().mockResolvedValue({
+      output: [
+        {
+          type: 'tool_call',
+          callId: 'call-finish',
+          toolName: 'finish_thinking',
+          input: createFinishThinkingInput(),
+        },
+      ],
+      usage,
+      responseToken: 'resp-1',
+    });
+
+    const engine = new ThinkingEngine({
+      model: { generate },
+      thoughtLog: { send: vi.fn().mockResolvedValue(undefined) },
+      logger: {
+        log: vi.fn(),
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      context: {
+        load: vi.fn().mockResolvedValue(null),
+      },
+      tools: [
+        {
+          name: 'check_notifications',
+          contract: createToolContract('check_notifications'),
+          execute: startupToolExecute,
+        },
+        {
+          name: 'finish_thinking',
+          contract: createToolContract('finish_thinking'),
+          execute: finishToolExecute,
+        },
+      ],
+      systemPrompt: '<persona>Test persona</persona>',
+    });
+
+    const result = await engine.think();
+
+    expect(result.nextWakeAt).toBeNull();
   });
 });

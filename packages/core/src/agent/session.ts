@@ -2,6 +2,7 @@ import { getErrorMessage } from '../utils/error';
 
 import {
   finishThinkingInputSchema,
+  type FinishThinkingInput,
   type FinishThinkingSessionRecord,
 } from './tools/thinking';
 
@@ -39,11 +40,13 @@ export interface RunAgentSessionInput {
 
 /**
  * session 全体の実行結果。
- * 現時点では usage 集計と provider 側の継続 token を返す。
+ * usage 集計に加えて、`finish_thinking` が返した session record と
+ * 次回起動時刻、provider 側の継続 token を返す。
  */
 export interface AgentSessionResult {
   usage: ModelUsage;
   context?: FinishThinkingSessionRecord;
+  nextWakeAt: string | null;
   responseToken?: string;
 }
 
@@ -124,15 +127,15 @@ function getToolCalls(response: ModelResponse): ModelToolCall[] {
 }
 
 /**
- * `finish_thinking` 呼び出し列から、有効な session_record を抜き出す。
+ * `finish_thinking` 呼び出し列から、有効な入力 payload を抜き出す。
  * tool 名だけでは終了扱いにせず、schema に合致した入力を持つ場合だけ完了とみなす。
  *
  * @param toolCalls 現在ターンでモデルが返した tool call 一覧
- * @returns 永続化可能な session_record。見つからない、または不正なら `null`
+ * @returns 正常終了に使える finish_thinking 入力。見つからない、または不正なら `null`
  */
-function parseFinishThinkingContext(
+function parseFinishThinkingInput(
   toolCalls: readonly ModelToolCall[]
-): FinishThinkingSessionRecord | null {
+): FinishThinkingInput | null {
   for (const toolCall of toolCalls) {
     if (toolCall.toolName !== 'finish_thinking') {
       continue;
@@ -143,7 +146,7 @@ function parseFinishThinkingContext(
         JSON.parse(toolCall.input)
       );
       if (parsed.success) {
-        return parsed.data.session_record;
+        return parsed.data;
       }
     } catch {
       continue;
@@ -211,15 +214,16 @@ export async function runAgentSession(
       await input.logger?.warn(NO_TOOL_CALLS_CONTINUING_WARNING);
     }
 
-    const finishThinkingContext = parseFinishThinkingContext(toolCalls);
+    const finishThinking = parseFinishThinkingInput(toolCalls);
 
     // Tool results, or an empty carry-over when no tools were used,
     // become the next model input for the following turn.
     // eslint-disable-next-line no-await-in-loop
     currentInput = await createNextInput(toolCalls, input.tools);
-    if (finishThinkingContext !== null) {
+    if (finishThinking !== null) {
       return {
-        context: finishThinkingContext,
+        context: finishThinking.session_record,
+        nextWakeAt: finishThinking.next_wake_at ?? null,
         usage: totalUsage,
         responseToken: previousResponseToken,
       };
@@ -228,6 +232,7 @@ export async function runAgentSession(
 
   await input.logger?.warn('Maximum turns exceeded');
   return {
+    nextWakeAt: null,
     usage: totalUsage,
     responseToken: previousResponseToken,
   };

@@ -25,9 +25,13 @@ function createSessionContext(): FinishThinkingSessionRecord {
   };
 }
 
-function createFinishThinkingInput(reason = 'done'): string {
+function createFinishThinkingInput(
+  reason = 'done',
+  nextWakeAt?: string
+): string {
   return JSON.stringify({
     reason,
+    next_wake_at: nextWakeAt,
     session_record: createSessionContext(),
   });
 }
@@ -213,6 +217,7 @@ describe('runAgentSession', () => {
     expect(executeFinish).toHaveBeenCalledWith(createFinishThinkingInput());
     expect(result).toEqual({
       context: createSessionContext(),
+      nextWakeAt: null,
       usage: createUsage({ totalTokens: 15 }),
       responseToken: 'resp-2',
     });
@@ -328,6 +333,7 @@ describe('runAgentSession', () => {
     expect(executeFinish).toHaveBeenCalledWith(createFinishThinkingInput());
     expect(result).toEqual({
       context: createSessionContext(),
+      nextWakeAt: null,
       usage: createUsage({
         cachedInputTokens: 111,
         uncachedInputTokens: 222,
@@ -389,6 +395,47 @@ describe('runAgentSession', () => {
     expect(generate).toHaveBeenCalledTimes(1);
     expect(result).toEqual({
       context: createSessionContext(),
+      nextWakeAt: null,
+      usage: createUsage({ totalTokens: 10 }),
+      responseToken: 'resp-1',
+    });
+  });
+
+  it('finish_thinking の next_wake_at を返す', async () => {
+    const nextWakeAt = '2026-03-23T00:00:00.000Z';
+    const generate = vi.fn<ModelPort['generate']>().mockResolvedValue({
+      output: [
+        {
+          type: 'tool_call',
+          callId: 'call-finish',
+          toolName: 'finish_thinking',
+          input: createFinishThinkingInput('done', nextWakeAt),
+        },
+      ],
+      usage: createUsage({ totalTokens: 10 }),
+      responseToken: 'resp-1',
+    });
+
+    const result = await runAgentSession({
+      model: { generate },
+      tools: [
+        {
+          name: 'finish_thinking',
+          contract: createToolContract('finish_thinking'),
+          execute: vi.fn().mockResolvedValue('{"success":true}'),
+        },
+      ],
+      initialInput: [
+        {
+          role: 'developer',
+          content: 'test',
+        },
+      ],
+    });
+
+    expect(result).toEqual({
+      context: createSessionContext(),
+      nextWakeAt,
       usage: createUsage({ totalTokens: 10 }),
       responseToken: 'resp-1',
     });
@@ -457,6 +504,7 @@ describe('runAgentSession', () => {
     });
     expect(result).toEqual({
       context: createSessionContext(),
+      nextWakeAt: null,
       usage: createUsage({ totalTokens: 15 }),
       responseToken: 'resp-2',
     });
@@ -502,6 +550,7 @@ describe('runAgentSession', () => {
     expect(logger.warn).toHaveBeenCalledTimes(1);
     expect(logger.warn).toHaveBeenCalledWith('Maximum turns exceeded');
     expect(result).toEqual({
+      nextWakeAt: null,
       usage: createUsage({ totalTokens: 20 }),
       responseToken: 'resp-1',
     });
@@ -559,6 +608,7 @@ describe('runAgentSession', () => {
     );
     expect(logger.warn).toHaveBeenNthCalledWith(3, 'Maximum turns exceeded');
     expect(result).toEqual({
+      nextWakeAt: null,
       usage: createUsage({ totalTokens: 20 }),
       responseToken: 'resp-1',
     });

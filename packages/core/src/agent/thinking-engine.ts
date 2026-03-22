@@ -30,11 +30,13 @@ export interface ThinkingEngineInput {
 
 /**
  * 1 回の思考実行が返す集約結果。
- * usage に加え、次回起動用の最新 context を caller が保存できる形で返す。
+ * usage に加え、次回起動用の最新 context と次回起動時刻を
+ * caller が保存できる形で返す。
  */
 export interface ThinkingEngineResult {
   usage: ModelUsage;
   context: ContextSnapshot | null;
+  nextWakeAt: string | null;
 }
 
 const STARTUP_TOOL_INPUT = '{}';
@@ -72,9 +74,10 @@ export class ThinkingEngine {
   constructor(private readonly input: ThinkingEngineInput) {}
 
   /**
-   * 1 回分の思考 session を開始し、usage と次回再開用 context を返す。
+   * 1 回分の思考 session を開始し、usage と次回再開用 state を返す。
    *
-   * @returns session 全体で集計した usage と、保存可能な最新 context
+   * @returns session 全体で集計した usage、保存可能な最新 context、
+   * 次回起動時刻
    */
   async think(): Promise<ThinkingEngineResult> {
     await this.input.thoughtLog.send(THINKING_STARTED_MESSAGE);
@@ -98,6 +101,7 @@ export class ThinkingEngine {
               emotion: session.context.emotion,
               updatedAt: completedAt,
             },
+      nextWakeAt: session.nextWakeAt,
       usage: session.usage,
     };
   }
