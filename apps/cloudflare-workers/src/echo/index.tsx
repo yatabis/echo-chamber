@@ -471,35 +471,44 @@ export class Echo extends DurableObject<Env> {
 
     const todayUsage = await this.getTodayUsage();
     const totalTokens = todayUsage?.total_tokens ?? 0;
-    if (!(await this.validateHardTokenLimit(totalTokens))) {
+    const { nextWakeAt, hasReachedNextWakeAt } =
+      await this.resolveNextWakeAtStatus();
+    if (
+      !(await this.validateHardTokenLimit(totalTokens, hasReachedNextWakeAt))
+    ) {
       return false;
     }
 
-    const nextWakeAt = await this.loadNextWakeAt();
-    const comparableNextWakeAt =
-      nextWakeAt === null ? null : await this.parseNextWakeAt(nextWakeAt);
-    if (await this.validateReachedNextWakeAt(comparableNextWakeAt)) {
+    if (hasReachedNextWakeAt && nextWakeAt !== null) {
+      await this.logger.info(
+        `next_wake_at reached: ${nextWakeAt.toISOString()}`
+      );
       return true;
     }
 
-    return await this.validateSoftLimitRun(totalTokens, comparableNextWakeAt);
+    return await this.validateSoftLimitRun(totalTokens, nextWakeAt);
   }
 
   /**
-   * 到達済みの `next_wake_at` が現在の起動トリガーになるかを判定する。
+   * 保存済みの `next_wake_at` を読み込み、比較可能な状態へ正規化する。
    *
-   * @param nextWakeAt 比較可能な next_wake_at。未設定または不正なら `null`
-   * @returns 到達済みの next_wake_at があり、今回起動すべきなら `true`
+   * @returns 比較可能な next_wake_at と、現在時刻までに到達済みかどうか
    */
-  private async validateReachedNextWakeAt(
-    nextWakeAt: Date | null
-  ): Promise<boolean> {
-    if (nextWakeAt === null || !this.hasNextWakeAtReached(nextWakeAt)) {
-      return false;
-    }
+  private async resolveNextWakeAtStatus(): Promise<{
+    nextWakeAt: Date | null;
+    hasReachedNextWakeAt: boolean;
+  }> {
+    const storedNextWakeAt = await this.loadNextWakeAt();
+    const nextWakeAt =
+      storedNextWakeAt === null
+        ? null
+        : await this.parseNextWakeAt(storedNextWakeAt);
 
-    await this.logger.info(`next_wake_at reached: ${nextWakeAt.toISOString()}`);
-    return true;
+    return {
+      nextWakeAt,
+      hasReachedNextWakeAt:
+        nextWakeAt !== null && this.hasNextWakeAtReached(nextWakeAt),
+    };
   }
 
   /**
@@ -541,9 +550,13 @@ export class Echo extends DurableObject<Env> {
    * hard limit を超えた場合は next_wake_at に到達していても起動しない。
    *
    * @param totalTokens 今日すでに消費した総トークン数
+   * @param shouldWarnOnHardLimit hard limit 到達時に warn を出すべきなら `true`
    * @returns hard limit 未満なら `true`
    */
-  private async validateHardTokenLimit(totalTokens: number): Promise<boolean> {
+  private async validateHardTokenLimit(
+    totalTokens: number,
+    shouldWarnOnHardLimit: boolean
+  ): Promise<boolean> {
     const hardLimit = calculateDynamicTokenLimit(
       TOKEN_LIMITS.DAILY_HARD_LIMIT,
       TOKEN_LIMITS.HARD_LIMIT_BUFFER_FACTOR
@@ -552,9 +565,11 @@ export class Echo extends DurableObject<Env> {
       return true;
     }
 
-    await this.logger.warn(
-      `Usage hard limit reached: ${totalTokens}  (Hard limit: ${Math.floor(hardLimit)})`
-    );
+    if (shouldWarnOnHardLimit) {
+      await this.logger.warn(
+        `Usage hard limit reached: ${totalTokens}  (Hard limit: ${Math.floor(hardLimit)})`
+      );
+    }
     return false;
   }
 

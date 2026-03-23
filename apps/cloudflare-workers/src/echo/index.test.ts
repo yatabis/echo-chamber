@@ -562,16 +562,55 @@ describe('Echo run preconditions', () => {
       echo as unknown as { getTodayUsage(): Promise<Usage | null> },
       'getTodayUsage'
     ).mockResolvedValue(createUsage(hardLimit));
-    const loadNextWakeAt = vi.spyOn(
-      echo as unknown as { loadNextWakeAt(): Promise<string | null> },
-      'loadNextWakeAt'
-    );
+    const loadNextWakeAt = vi
+      .spyOn(
+        echo as unknown as { loadNextWakeAt(): Promise<string | null> },
+        'loadNextWakeAt'
+      )
+      .mockResolvedValue('2026-03-22T00:59:00.000Z');
 
     const result = await validateRunPreconditions(echo);
 
     expect(result).toBe(false);
-    expect(loadNextWakeAt).not.toHaveBeenCalled();
+    expect(loadNextWakeAt).toHaveBeenCalled();
     expect(mockLogger.warn).toHaveBeenCalledWith(
+      `Usage hard limit reached: ${hardLimit}  (Hard limit: ${hardLimit})`
+    );
+  });
+
+  it('hard limit 超過でも next_wake_at 未到達なら warn しない', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-22T01:00:00.000Z'));
+
+    const env = createMockEnv();
+    const { storage } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+
+    vi.spyOn(
+      echo as unknown as { validateEchoState(): Promise<boolean> },
+      'validateEchoState'
+    ).mockResolvedValue(true);
+    vi.spyOn(
+      echo as unknown as { validateChatMessage(): Promise<boolean> },
+      'validateChatMessage'
+    ).mockResolvedValue(false);
+    const hardLimit = calculateDynamicTokenLimit(
+      TOKEN_LIMITS.DAILY_HARD_LIMIT,
+      TOKEN_LIMITS.HARD_LIMIT_BUFFER_FACTOR
+    );
+    vi.spyOn(
+      echo as unknown as { getTodayUsage(): Promise<Usage | null> },
+      'getTodayUsage'
+    ).mockResolvedValue(createUsage(hardLimit));
+    vi.spyOn(
+      echo as unknown as { loadNextWakeAt(): Promise<string | null> },
+      'loadNextWakeAt'
+    ).mockResolvedValue('2026-03-22T01:15:00.000Z');
+
+    const result = await validateRunPreconditions(echo);
+
+    expect(result).toBe(false);
+    expect(mockLogger.warn).not.toHaveBeenCalledWith(
       `Usage hard limit reached: ${hardLimit}  (Hard limit: ${hardLimit})`
     );
   });
