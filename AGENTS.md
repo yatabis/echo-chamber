@@ -3,6 +3,8 @@
 ## Working Agreement
 
 - ユーザー向けの最終出力は日本語で行う
+- JSDoc は原則として省略せず、基本的にきっちり記述する
+- ユーザーは音声入力を用いるため typo が多い前提で読み取り、表記ゆれや誤記があっても文脈から意図を汲んで対応する
 - unresolved な error / warning を残したまま完了しない
 - code change 後は `pnpm lint:check`、`pnpm typecheck`、`pnpm format:check`、関連する test を実行し、問題があれば修正して再実行する
 - 振る舞いを変える変更では、可能な限り test を先に追加または更新してから実装する
