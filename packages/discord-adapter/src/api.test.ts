@@ -1,3 +1,4 @@
+import { REST } from '@discordjs/rest';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -62,6 +63,10 @@ describe('discord api helpers', () => {
     const rest = getRestInstance();
 
     expect(result).toBe(expected);
+    expect(vi.mocked(REST)).toHaveBeenCalledWith({
+      handlerSweepInterval: 0,
+      hashSweepInterval: 0,
+    });
     expect(rest.setToken).toHaveBeenCalledWith('token');
     expect(rest.get).toHaveBeenCalledTimes(1);
     expect(rest.get.mock.calls[0]?.[0]).toBe('/channels/channel-1/messages');
@@ -83,6 +88,10 @@ describe('discord api helpers', () => {
     const rest = getRestInstance();
 
     expect(result).toBe(expected);
+    expect(vi.mocked(REST)).toHaveBeenCalledWith({
+      handlerSweepInterval: 0,
+      hashSweepInterval: 0,
+    });
     expect(rest.setToken).toHaveBeenCalledWith('token');
     expect(rest.post).toHaveBeenCalledWith('/channels/channel-1/messages', {
       body: { content: 'hello' },
@@ -96,6 +105,10 @@ describe('discord api helpers', () => {
 
     const rest = getRestInstance();
 
+    expect(vi.mocked(REST)).toHaveBeenCalledWith({
+      handlerSweepInterval: 0,
+      hashSweepInterval: 0,
+    });
     expect(rest.setToken).toHaveBeenCalledWith('token');
     expect(rest.put).toHaveBeenCalledWith(
       '/channels/channel-1/messages/message-1/reactions/%F0%9F%91%8D/@me'
@@ -111,6 +124,10 @@ describe('discord api helpers', () => {
     const rest = getRestInstance();
 
     expect(result).toBe(expected);
+    expect(vi.mocked(REST)).toHaveBeenCalledWith({
+      handlerSweepInterval: 0,
+      hashSweepInterval: 0,
+    });
     expect(rest.setToken).toHaveBeenCalledWith('token');
     expect(rest.get).toHaveBeenCalledWith('/users/@me');
   });

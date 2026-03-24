@@ -10,6 +10,22 @@ import type {
 
 type DiscordRoute = `/${string}`;
 
+const DISCORD_REST_OPTIONS = {
+  handlerSweepInterval: 0,
+  hashSweepInterval: 0,
+} as const;
+
+/**
+ * Durable Object を non-hibernateable にしやすい internal sweeper を無効化した
+ * Discord REST client を生成する。
+ *
+ * @param token Discord bot token
+ * @returns 認証済み REST client
+ */
+function createDiscordRestClient(token: string): REST {
+  return new REST(DISCORD_REST_OPTIONS).setToken(token);
+}
+
 /**
  * チャンネルメッセージ取得・投稿に使う route を組み立てる。
  *
@@ -59,7 +75,7 @@ export async function getChannelMessages(
   channelId: string,
   options: RESTGetAPIChannelMessagesQuery = {}
 ): Promise<RESTGetAPIChannelMessagesResult> {
-  const rest = new REST().setToken(token);
+  const rest = createDiscordRestClient(token);
   return rest.get(routeChannelMessages(channelId), {
     query: new URLSearchParams(
       Object.entries(options).map(([key, value]) => [key, String(value)])
@@ -80,7 +96,7 @@ export async function sendChannelMessage(
   channelId: string,
   options: RESTPostAPIChannelMessageJSONBody
 ): Promise<RESTPostAPIChannelMessageResult> {
-  const rest = new REST().setToken(token);
+  const rest = createDiscordRestClient(token);
   return rest.post(routeChannelMessages(channelId), {
     body: options,
   }) as Promise<RESTPostAPIChannelMessageResult>;
@@ -101,7 +117,7 @@ export async function addReactionToMessage(
   messageId: string,
   reaction: string
 ): Promise<void> {
-  const rest = new REST().setToken(token);
+  const rest = createDiscordRestClient(token);
   await rest.put(
     routeChannelMessageOwnReaction(channelId, messageId, reaction)
   );
@@ -116,6 +132,6 @@ export async function addReactionToMessage(
 export async function getCurrentUser(
   token: string
 ): Promise<RESTGetAPICurrentUserResult> {
-  const rest = new REST().setToken(token);
+  const rest = createDiscordRestClient(token);
   return rest.get(routeCurrentUser()) as Promise<RESTGetAPICurrentUserResult>;
 }
