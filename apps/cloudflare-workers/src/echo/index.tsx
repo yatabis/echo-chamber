@@ -133,7 +133,7 @@ export class Echo extends DurableObject<Env> {
         await this.run();
         return c.text('OK.');
       });
-    void this.logger.info('Echo Durable Object created');
+    console.log('Echo Durable Object created');
   }
 
   async fetch(request: Request): Promise<Response> {
