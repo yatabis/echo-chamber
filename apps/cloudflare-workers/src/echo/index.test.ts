@@ -40,10 +40,18 @@ const {
     systemPrompt: '<persona>Rin</persona>',
   },
   mockLogger: {
-    debug: vi.fn(async () => Promise.resolve()),
-    info: vi.fn(async () => Promise.resolve()),
-    warn: vi.fn(async () => Promise.resolve()),
-    error: vi.fn(async () => Promise.resolve()),
+    debug: vi.fn(async (_message?: unknown, _context?: unknown) =>
+      Promise.resolve()
+    ),
+    info: vi.fn(async (_message?: unknown, _context?: unknown) =>
+      Promise.resolve()
+    ),
+    warn: vi.fn(async (_message?: unknown, _context?: unknown) =>
+      Promise.resolve()
+    ),
+    error: vi.fn(async (_message?: unknown, _error?: unknown) =>
+      Promise.resolve()
+    ),
   },
   mockMemorySystem: {
     reEmbedStaleMemories: vi.fn(async () => Promise.resolve()),
@@ -191,12 +199,18 @@ async function ensureInitialized(
   ).ensureInitialized(id);
 }
 
-async function validateRunPreconditions(echo: Echo): Promise<boolean> {
+async function resolveRunDecision(echo: Echo): Promise<{
+  shouldRun: boolean;
+  unreadCheckMs: number;
+}> {
   return await (
     echo as unknown as {
-      validateRunPreconditions(): Promise<boolean>;
+      resolveRunDecision(): Promise<{
+        shouldRun: boolean;
+        unreadCheckMs: number;
+      }>;
     }
-  ).validateRunPreconditions();
+  ).resolveRunDecision();
 }
 
 describe('Echo.ensureInitialized', () => {
@@ -212,15 +226,19 @@ describe('Echo.ensureInitialized', () => {
     await ensureInitialized(echo, 'rin');
 
     expect(deleteFn).not.toHaveBeenCalled();
-    expect(createLogger).toHaveBeenCalledWith(env);
+    const loggerCreateCalls = vi.mocked(createLogger).mock.calls;
+    expect(loggerCreateCalls).toHaveLength(1);
+    expect(loggerCreateCalls[0]?.[0]).toBe(env);
     expect(getEchoInstanceDefinition).toHaveBeenCalledWith('rin');
     expect(resolveEchoRuntimeBindings).toHaveBeenCalledWith(
       env,
       env.ECHO_KV,
       'rin'
     );
-    expect(createEmbeddingService).toHaveBeenCalledWith(
-      env,
+    const embeddingServiceCalls = vi.mocked(createEmbeddingService).mock.calls;
+    expect(embeddingServiceCalls).toHaveLength(1);
+    expect(embeddingServiceCalls[0]?.[0]).toBe(env);
+    expect(embeddingServiceCalls[0]?.[1]).toBe(
       mockRuntimeBindings.embeddingConfig
     );
     expect(createRerankingService).toHaveBeenCalledWith(env);
@@ -230,7 +248,9 @@ describe('Echo.ensureInitialized', () => {
       rerankingService: mockRerankingService,
       logger: mockLogger,
     });
-    expect(createToolExecutionContext).toHaveBeenCalledWith({
+    const toolContextCalls = vi.mocked(createToolExecutionContext).mock.calls;
+    expect(toolContextCalls).toHaveLength(1);
+    expect(toolContextCalls[0]?.[0]).toMatchObject({
       chatBindings: mockRuntimeBindings,
       memorySystem: mockMemorySystem,
       noteSystem: mockNoteSystem,
@@ -326,10 +346,6 @@ describe('Echo context storage', () => {
     const thoughtLogSend = vi.fn().mockResolvedValue(undefined);
 
     vi.spyOn(
-      echo as unknown as { validateRunPreconditions(): Promise<boolean> },
-      'validateRunPreconditions'
-    ).mockResolvedValue(true);
-    vi.spyOn(
       echo as unknown as { setState(state: string): Promise<void> },
       'setState'
     ).mockResolvedValue(undefined);
@@ -337,6 +353,18 @@ describe('Echo context storage', () => {
       echo as unknown as { getName(): Promise<string> },
       'getName'
     ).mockResolvedValue('リン');
+    vi.spyOn(
+      echo as unknown as {
+        resolveRunDecision(): Promise<{
+          shouldRun: boolean;
+          unreadCheckMs: number;
+        }>;
+      },
+      'resolveRunDecision'
+    ).mockResolvedValue({
+      shouldRun: true,
+      unreadCheckMs: 12,
+    });
     vi.spyOn(
       echo as unknown as {
         createThinkingEngine(): { think(): Promise<unknown> };
@@ -358,13 +386,17 @@ describe('Echo context storage', () => {
       send: thoughtLogSend,
     });
 
-    await echo.run();
+    const result = await echo.run();
 
     expect(think).toHaveBeenCalledTimes(1);
     expect(putFn).toHaveBeenCalledWith('context', context);
     expect(thoughtLogSend).toHaveBeenCalledWith(
       'Usage: 42 tokens (Total: 42 tokens)'
     );
+    expect(result).toMatchObject({
+      unreadCheckMs: 12,
+    });
+    expect(typeof result.thinkMs).toBe('number');
   });
 });
 
@@ -410,10 +442,6 @@ describe('Echo next_wake_at storage', () => {
     });
 
     vi.spyOn(
-      echo as unknown as { validateRunPreconditions(): Promise<boolean> },
-      'validateRunPreconditions'
-    ).mockResolvedValue(true);
-    vi.spyOn(
       echo as unknown as { setState(state: string): Promise<void> },
       'setState'
     ).mockResolvedValue(undefined);
@@ -421,6 +449,18 @@ describe('Echo next_wake_at storage', () => {
       echo as unknown as { getName(): Promise<string> },
       'getName'
     ).mockResolvedValue('リン');
+    vi.spyOn(
+      echo as unknown as {
+        resolveRunDecision(): Promise<{
+          shouldRun: boolean;
+          unreadCheckMs: number;
+        }>;
+      },
+      'resolveRunDecision'
+    ).mockResolvedValue({
+      shouldRun: true,
+      unreadCheckMs: 7,
+    });
     vi.spyOn(
       echo as unknown as {
         createThinkingEngine(): { think(): Promise<unknown> };
@@ -442,9 +482,13 @@ describe('Echo next_wake_at storage', () => {
       send: vi.fn().mockResolvedValue(undefined),
     });
 
-    await echo.run();
+    const result = await echo.run();
 
     expect(putFn).toHaveBeenCalledWith('next_wake_at', nextWakeAt);
+    expect(result).toMatchObject({
+      unreadCheckMs: 7,
+    });
+    expect(typeof result.thinkMs).toBe('number');
   });
 
   it('run 時に next_wake_at が無ければ保存済み値をクリアする', async () => {
@@ -465,10 +509,6 @@ describe('Echo next_wake_at storage', () => {
     });
 
     vi.spyOn(
-      echo as unknown as { validateRunPreconditions(): Promise<boolean> },
-      'validateRunPreconditions'
-    ).mockResolvedValue(true);
-    vi.spyOn(
       echo as unknown as { setState(state: string): Promise<void> },
       'setState'
     ).mockResolvedValue(undefined);
@@ -476,6 +516,18 @@ describe('Echo next_wake_at storage', () => {
       echo as unknown as { getName(): Promise<string> },
       'getName'
     ).mockResolvedValue('リン');
+    vi.spyOn(
+      echo as unknown as {
+        resolveRunDecision(): Promise<{
+          shouldRun: boolean;
+          unreadCheckMs: number;
+        }>;
+      },
+      'resolveRunDecision'
+    ).mockResolvedValue({
+      shouldRun: true,
+      unreadCheckMs: 5,
+    });
     vi.spyOn(
       echo as unknown as {
         createThinkingEngine(): { think(): Promise<unknown> };
@@ -497,9 +549,13 @@ describe('Echo next_wake_at storage', () => {
       send: vi.fn().mockResolvedValue(undefined),
     });
 
-    await echo.run();
+    const result = await echo.run();
 
     expect(deleteFn).toHaveBeenCalledWith('next_wake_at');
+    expect(result).toMatchObject({
+      unreadCheckMs: 5,
+    });
+    expect(typeof result.thinkMs).toBe('number');
   });
 });
 
@@ -530,10 +586,9 @@ describe('Echo run preconditions', () => {
       echo as unknown as { loadNextWakeAt(): Promise<string | null> },
       'loadNextWakeAt'
     );
+    const result = await resolveRunDecision(echo);
 
-    const result = await validateRunPreconditions(echo);
-
-    expect(result).toBe(true);
+    expect(result.shouldRun).toBe(true);
     expect(getTodayUsage).not.toHaveBeenCalled();
     expect(loadNextWakeAt).not.toHaveBeenCalled();
   });
@@ -569,9 +624,9 @@ describe('Echo run preconditions', () => {
       )
       .mockResolvedValue('2026-03-22T00:59:00.000Z');
 
-    const result = await validateRunPreconditions(echo);
+    const result = await resolveRunDecision(echo);
 
-    expect(result).toBe(false);
+    expect(result.shouldRun).toBe(false);
     expect(loadNextWakeAt).toHaveBeenCalled();
     expect(mockLogger.warn).toHaveBeenCalledWith(
       `Usage hard limit reached: ${hardLimit}  (Hard limit: ${hardLimit})`
@@ -607,9 +662,9 @@ describe('Echo run preconditions', () => {
       'loadNextWakeAt'
     ).mockResolvedValue('2026-03-22T01:15:00.000Z');
 
-    const result = await validateRunPreconditions(echo);
+    const result = await resolveRunDecision(echo);
 
-    expect(result).toBe(false);
+    expect(result.shouldRun).toBe(false);
     expect(mockLogger.warn).not.toHaveBeenCalledWith(
       `Usage hard limit reached: ${hardLimit}  (Hard limit: ${hardLimit})`
     );
@@ -640,9 +695,9 @@ describe('Echo run preconditions', () => {
       'loadNextWakeAt'
     ).mockResolvedValue('2026-03-22T00:59:00.000Z');
 
-    const result = await validateRunPreconditions(echo);
+    const result = await resolveRunDecision(echo);
 
-    expect(result).toBe(true);
+    expect(result.shouldRun).toBe(true);
     expect(mockLogger.info).toHaveBeenCalledWith(
       'next_wake_at reached: 2026-03-22T00:59:00.000Z'
     );
@@ -673,9 +728,9 @@ describe('Echo run preconditions', () => {
       'loadNextWakeAt'
     ).mockResolvedValue('2026-03-22T01:05:00.000Z');
 
-    const result = await validateRunPreconditions(echo);
+    const result = await resolveRunDecision(echo);
 
-    expect(result).toBe(false);
+    expect(result.shouldRun).toBe(false);
     expect(mockLogger.info).toHaveBeenCalledWith(
       `Skipping soft-limit run because next_wake_at is within ${SCHEDULING_CONFIG.SOFT_LIMIT_NEXT_WAKE_AT_WINDOW_MINUTES} minutes: 2026-03-22T01:05:00.000Z`
     );
@@ -706,9 +761,9 @@ describe('Echo run preconditions', () => {
       'loadNextWakeAt'
     ).mockResolvedValue('2026-03-22T01:15:00.000Z');
 
-    const result = await validateRunPreconditions(echo);
+    const result = await resolveRunDecision(echo);
 
-    expect(result).toBe(true);
+    expect(result.shouldRun).toBe(true);
     expect(mockLogger.info).toHaveBeenCalledWith(
       'Usage: 0  (Soft limit: 45000)'
     );
@@ -739,12 +794,97 @@ describe('Echo run preconditions', () => {
       'loadNextWakeAt'
     ).mockResolvedValue('not-a-date');
 
-    const result = await validateRunPreconditions(echo);
+    const result = await resolveRunDecision(echo);
 
-    expect(result).toBe(true);
+    expect(result.shouldRun).toBe(true);
     expect(mockLogger.warn).toHaveBeenCalledWith(
       'Stored next_wake_at is invalid and will be ignored: not-a-date'
     );
     expect(deleteFn).toHaveBeenCalledWith('next_wake_at');
+  });
+});
+
+describe('Echo run metrics', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('実行しない場合でも unread_check_ms を返す', async () => {
+    const env = createMockEnv();
+    const { storage } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+
+    vi.spyOn(
+      echo as unknown as {
+        resolveRunDecision(): Promise<{
+          shouldRun: boolean;
+          unreadCheckMs: number;
+        }>;
+      },
+      'resolveRunDecision'
+    ).mockResolvedValue({
+      shouldRun: false,
+      unreadCheckMs: 18,
+    });
+
+    const result = await echo.run();
+
+    expect(result).toEqual({
+      unreadCheckMs: 18,
+      thinkMs: 0,
+    });
+  });
+
+  it('alarm 終了時に実行メトリクスを構造化ログへ出す', async () => {
+    const env = createMockEnv();
+    const { storage, getFn } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+    getFn.mockResolvedValue('rin');
+
+    vi.spyOn(
+      echo as unknown as {
+        ensureInitialized(instanceId: 'rin' | 'marie'): Promise<void>;
+      },
+      'ensureInitialized'
+    ).mockResolvedValue(undefined);
+    vi.spyOn(
+      echo as unknown as { getState(): Promise<string> },
+      'getState'
+    ).mockResolvedValue('Idling');
+    vi.spyOn(
+      echo as unknown as {
+        run(): Promise<{
+          unreadCheckMs: number;
+          thinkMs: number;
+        }>;
+      },
+      'run'
+    ).mockResolvedValue({
+      unreadCheckMs: 14,
+      thinkMs: 0,
+    });
+    vi.spyOn(
+      echo as unknown as { setNextAlarm(nextAlarm?: Date): Promise<void> },
+      'setNextAlarm'
+    ).mockResolvedValue(undefined);
+
+    await echo.alarm();
+
+    expect(mockLogger.debug).toHaveBeenCalledWith(
+      'Echo alarm metrics',
+      expect.objectContaining({
+        unread_check_ms: 14,
+        think_ms: 0,
+      })
+    );
+    const debugCalls = vi.mocked(mockLogger.debug).mock.calls;
+    const metricsContext = debugCalls.find(
+      (call) => call[0] === 'Echo alarm metrics'
+    )?.[1] as
+      | {
+          alarm_total_ms: number;
+        }
+      | undefined;
+    expect(typeof metricsContext?.alarm_total_ms).toBe('number');
   });
 });

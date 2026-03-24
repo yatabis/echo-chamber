@@ -70,6 +70,16 @@ async function fetchUnreadMessageCounts(
   );
 }
 
+interface RunDecision {
+  shouldRun: boolean;
+  unreadCheckMs: number;
+}
+
+interface RunExecutionResult {
+  unreadCheckMs: number;
+  thinkMs: number;
+}
+
 export class Echo extends DurableObject<Env> {
   private readonly store: KVNamespace;
   private readonly storage: DurableObjectStorage;
@@ -223,39 +233,53 @@ export class Echo extends DurableObject<Env> {
   }
 
   async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-    await this.logger.debug(
-      `Alarm triggered with info: ${JSON.stringify(alarmInfo)}`
-    );
+    const alarmStartedAt = Date.now();
+    let runResult: RunExecutionResult = {
+      unreadCheckMs: 0,
+      thinkMs: 0,
+    };
 
-    // ストレージからIDを読み取り初期化
-    const storedId = await this.storage.get<string>('id');
-    if (storedId == null || !isValidInstanceId(storedId)) {
-      await this.logger.error(
-        'No valid instance ID in storage. Cannot run alarm.\nEcho going to sleep.'
+    try {
+      await this.logger.debug(
+        `Alarm triggered with info: ${JSON.stringify(alarmInfo)}`
       );
-      await this.sleep(true);
-      return;
-    }
 
-    await this.ensureInitialized(storedId);
+      // ストレージからIDを読み取り初期化
+      const storedId = await this.storage.get<string>('id');
+      if (storedId == null || !isValidInstanceId(storedId)) {
+        await this.logger.error(
+          'No valid instance ID in storage. Cannot run alarm.\nEcho going to sleep.'
+        );
+        await this.sleep(true);
+        return;
+      }
 
-    const now = new Date();
-    const state = await this.getState();
-    if (now.getHours() === 18 && state === 'Idling') {
-      await this.sleep();
-      const nextAlarm = new Date();
-      nextAlarm.setHours(22, 0, 0, 0);
-      await this.setNextAlarm(nextAlarm);
-      await this.logger.info(
-        `Echo is going to sleep and will wake at ${formatDatetime(nextAlarm)}.`
-      );
-      return;
+      await this.ensureInitialized(storedId);
+
+      const now = new Date();
+      const state = await this.getState();
+      if (now.getHours() === 18 && state === 'Idling') {
+        await this.sleep();
+        const nextAlarm = new Date();
+        nextAlarm.setHours(22, 0, 0, 0);
+        await this.setNextAlarm(nextAlarm);
+        await this.logger.info(
+          `Echo is going to sleep and will wake at ${formatDatetime(nextAlarm)}.`
+        );
+        return;
+      }
+      if (now.getHours() === 22 && state === 'Sleeping') {
+        await this.wake(true);
+      }
+      runResult = await this.run();
+      await this.setNextAlarm();
+    } finally {
+      await this.logger.debug('Echo alarm metrics', {
+        alarm_total_ms: Date.now() - alarmStartedAt,
+        unread_check_ms: runResult.unreadCheckMs,
+        think_ms: runResult.thinkMs,
+      });
     }
-    if (now.getHours() === 22 && state === 'Sleeping') {
-      await this.wake(true);
-    }
-    await this.run();
-    await this.setNextAlarm();
   }
 
   async getNextAlarm(): Promise<string | null> {
@@ -420,18 +444,26 @@ export class Echo extends DurableObject<Env> {
     }
   }
 
-  async run(): Promise<void> {
-    if (!(await this.validateRunPreconditions())) {
-      return;
+  async run(): Promise<RunExecutionResult> {
+    const runDecision = await this.resolveRunDecision();
+    if (!runDecision.shouldRun) {
+      return {
+        unreadCheckMs: runDecision.unreadCheckMs,
+        thinkMs: 0,
+      };
     }
 
     await this.setState('Running');
     const name = await this.getName();
     await this.logger.info(`${name}が思考を開始しました。`);
+    let thinkMs = 0;
+    let thinkStartedAt = 0;
 
     try {
+      thinkStartedAt = Date.now();
       const { context, nextWakeAt, usage } =
         await this.createThinkingEngine().think();
+      thinkMs = Date.now() - thinkStartedAt;
       if (context != null) {
         await this.saveContext(context);
       }
@@ -447,26 +479,45 @@ export class Echo extends DurableObject<Env> {
       );
       await this.logger.info(`${name}が思考を正常に完了しました。`);
     } catch (error) {
+      if (thinkStartedAt !== 0) {
+        thinkMs = Date.now() - thinkStartedAt;
+      }
       await this.logger.error(
         `${name}の思考中にエラーが発生しました: ${getErrorMessage(error)}`
       );
     } finally {
       await this.setState('Idling');
     }
+
+    return {
+      unreadCheckMs: runDecision.unreadCheckMs,
+      thinkMs,
+    };
   }
 
   /**
-   * 実行前の前提条件を検証
+   * 今回の alarm / run が実行されるべきかと、補助メトリクスを返す。
+   *
+   * @returns 実行可否と未読確認にかかった時間
    */
-  private async validateRunPreconditions(): Promise<boolean> {
+  private async resolveRunDecision(): Promise<RunDecision> {
     // Stateチェック
     if (!(await this.validateEchoState())) {
-      return false;
+      return {
+        shouldRun: false,
+        unreadCheckMs: 0,
+      };
     }
 
     // 未読メッセージがあれば実行
-    if (await this.validateChatMessage()) {
-      return true;
+    const unreadCheckStartedAt = Date.now();
+    const hasUnreadMessages = await this.validateChatMessage();
+    const unreadCheckMs = Date.now() - unreadCheckStartedAt;
+    if (hasUnreadMessages) {
+      return {
+        shouldRun: true,
+        unreadCheckMs,
+      };
     }
 
     const todayUsage = await this.getTodayUsage();
@@ -476,17 +527,31 @@ export class Echo extends DurableObject<Env> {
     if (
       !(await this.validateHardTokenLimit(totalTokens, hasReachedNextWakeAt))
     ) {
-      return false;
+      return {
+        shouldRun: false,
+        unreadCheckMs,
+      };
     }
 
     if (hasReachedNextWakeAt && nextWakeAt !== null) {
       await this.logger.info(
         `next_wake_at reached: ${nextWakeAt.toISOString()}`
       );
-      return true;
+      return {
+        shouldRun: true,
+        unreadCheckMs,
+      };
     }
 
-    return await this.validateSoftLimitRun(totalTokens, nextWakeAt);
+    const shouldRunForSoftLimit = await this.validateSoftLimitRun(
+      totalTokens,
+      nextWakeAt
+    );
+
+    return {
+      shouldRun: shouldRunForSoftLimit,
+      unreadCheckMs,
+    };
   }
 
   /**
