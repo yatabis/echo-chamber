@@ -14,6 +14,10 @@ import {
   updateNoteToolSpec,
 } from './note';
 import { finishThinkingToolSpec, thinkDeeplyToolSpec } from './thinking';
+import {
+  getZennArticleToolSpec,
+  listTrendingZennArticlesToolSpec,
+} from './zenn';
 
 export const canonicalToolSpecifications = [
   checkNotificationsToolSpec,
@@ -28,6 +32,8 @@ export const canonicalToolSpecifications = [
   searchNotesToolSpec,
   updateNoteToolSpec,
   deleteNoteToolSpec,
+  listTrendingZennArticlesToolSpec,
+  getZennArticleToolSpec,
   thinkDeeplyToolSpec,
   finishThinkingToolSpec,
 ] as const;

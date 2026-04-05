@@ -15,6 +15,7 @@ import {
   updateNoteTool,
 } from './note';
 import { thinkDeeplyTool } from './think';
+import { getZennArticleTool, listTrendingZennArticlesTool } from './zenn';
 
 export const canonicalRuntimeTools = [
   checkNotificationsTool,
@@ -29,6 +30,8 @@ export const canonicalRuntimeTools = [
   searchNotesTool,
   updateNoteTool,
   deleteNoteTool,
+  listTrendingZennArticlesTool,
+  getZennArticleTool,
   thinkDeeplyTool,
   finishThinkingTool,
 ] as const;

@@ -23,6 +23,10 @@ export const mockToolContext: ToolContext = {
     update: vi.fn().mockResolvedValue(null),
     delete: vi.fn().mockResolvedValue(false),
   },
+  zenn: {
+    listTrendingArticles: vi.fn().mockResolvedValue([]),
+    getArticleBySlug: vi.fn(),
+  },
   logger: {
     log: vi.fn().mockResolvedValue(undefined),
     debug: vi.fn().mockResolvedValue(undefined),

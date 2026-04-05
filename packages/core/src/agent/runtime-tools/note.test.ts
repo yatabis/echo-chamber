@@ -50,6 +50,10 @@ const mockToolContext: ToolContext = {
     update: updateNoteMock,
     delete: deleteNoteMock,
   },
+  zenn: {
+    listTrendingArticles: vi.fn().mockResolvedValue([]),
+    getArticleBySlug: vi.fn(),
+  },
   logger: {
     log: vi.fn().mockResolvedValue(undefined),
     debug: vi.fn(),

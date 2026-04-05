@@ -6,6 +6,8 @@ import type { Emotion, Note } from '@echo-chamber/core/echo/types';
 import { createDiscordChatPort } from '@echo-chamber/discord-adapter/chat-port';
 import { createDiscordNotificationPort } from '@echo-chamber/discord-adapter/notification-port';
 
+import { createZennPort } from '../zenn/create-zenn-port';
+
 import { createToolExecutionContext } from './tool-context';
 
 import type { Logger } from '../utils/logger';
@@ -18,6 +20,10 @@ vi.mock('@echo-chamber/discord-adapter/notification-port', () => ({
   createDiscordNotificationPort: vi.fn(),
 }));
 
+vi.mock('../zenn/create-zenn-port', () => ({
+  createZennPort: vi.fn(),
+}));
+
 const mockChatPort = {
   readMessages: vi.fn(),
   sendMessage: vi.fn(),
@@ -26,6 +32,11 @@ const mockChatPort = {
 
 const mockNotificationPort = {
   getNotificationSummary: vi.fn(),
+};
+
+const mockZennPort = {
+  listTrendingArticles: vi.fn(),
+  getArticleBySlug: vi.fn(),
 };
 
 function createMemorySystemMock(): {
@@ -78,6 +89,7 @@ describe('createToolExecutionContext', () => {
     vi.mocked(createDiscordNotificationPort).mockReturnValue(
       mockNotificationPort
     );
+    vi.mocked(createZennPort).mockReturnValue(mockZennPort);
   });
 
   it('chat 用 runtime bindings だけで Discord ports を構築する', async () => {
@@ -146,6 +158,8 @@ describe('createToolExecutionContext', () => {
     });
     expect(context.chat).toBe(mockChatPort);
     expect(context.notifications).toBe(mockNotificationPort);
+    expect(createZennPort).toHaveBeenCalledWith();
+    expect(context.zenn).toBe(mockZennPort);
 
     await context.memory.store('memory', emotion, 'episode');
     expect(storeMemory).toHaveBeenCalledWith('memory', emotion, 'episode');
