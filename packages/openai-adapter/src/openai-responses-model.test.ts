@@ -632,6 +632,75 @@ describe('formatLogOutput', () => {
     expect(formatLogOutput(output)).toBe('*delete_note: note-1*');
   });
 
+  it('list_trending_zenn_articles without articleType', () => {
+    const output: ResponseOutputItem[] = [
+      {
+        type: 'function_call',
+        call_id: 'call_list_zenn_articles',
+        name: 'list_trending_zenn_articles',
+        arguments: JSON.stringify({}),
+        status: 'completed',
+      },
+    ];
+
+    expect(formatLogOutput(output)).toBe('*list_trending_zenn_articles*');
+  });
+
+  it('list_trending_zenn_articles with articleType', () => {
+    const output: ResponseOutputItem[] = [
+      {
+        type: 'function_call',
+        call_id: 'call_list_idea_zenn_articles',
+        name: 'list_trending_zenn_articles',
+        arguments: JSON.stringify({
+          articleType: 'idea',
+        }),
+        status: 'completed',
+      },
+    ];
+
+    expect(formatLogOutput(output)).toBe(
+      '*list_trending_zenn_articles [idea]*'
+    );
+  });
+
+  it('get_zenn_article without maxCharacters', () => {
+    const output: ResponseOutputItem[] = [
+      {
+        type: 'function_call',
+        call_id: 'call_get_zenn_article',
+        name: 'get_zenn_article',
+        arguments: JSON.stringify({
+          slug: 'dummy-zenn-article',
+        }),
+        status: 'completed',
+      },
+    ];
+
+    expect(formatLogOutput(output)).toBe(
+      '*get_zenn_article: dummy-zenn-article*'
+    );
+  });
+
+  it('get_zenn_article with maxCharacters', () => {
+    const output: ResponseOutputItem[] = [
+      {
+        type: 'function_call',
+        call_id: 'call_get_zenn_article_truncated',
+        name: 'get_zenn_article',
+        arguments: JSON.stringify({
+          slug: 'dummy-zenn-article',
+          maxCharacters: 1200,
+        }),
+        status: 'completed',
+      },
+    ];
+
+    expect(formatLogOutput(output)).toBe(
+      '*get_zenn_article: dummy-zenn-article (maxCharacters: 1200)*'
+    );
+  });
+
   it('finish_thinking', () => {
     const output: ResponseOutputItem[] = [
       {

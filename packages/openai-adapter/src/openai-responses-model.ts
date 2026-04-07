@@ -261,6 +261,34 @@ function formatDeleteNoteCall(args: FunctionFormatterArgs): string {
 }
 
 /**
+ * `list_trending_zenn_articles` 呼び出しを thought log 向けに整形する。
+ *
+ * @param args function call の引数
+ * @returns thought log に流す短い説明文
+ */
+function formatListTrendingZennArticlesCall(
+  args: FunctionFormatterArgs
+): string {
+  const articleType = args.articleType as string | undefined;
+  const target =
+    articleType !== undefined && articleType !== '' ? ` [${articleType}]` : '';
+  return `*list_trending_zenn_articles${target}*`;
+}
+
+/**
+ * `get_zenn_article` 呼び出しを thought log 向けに整形する。
+ *
+ * @param args function call の引数
+ * @returns thought log に流す短い説明文
+ */
+function formatGetZennArticleCall(args: FunctionFormatterArgs): string {
+  const maxCharacters = args.maxCharacters as number | undefined;
+  const truncation =
+    maxCharacters !== undefined ? ` (maxCharacters: ${maxCharacters})` : '';
+  return `*get_zenn_article: ${args.slug as string}${truncation}*`;
+}
+
+/**
  * `finish_thinking` 呼び出しを thought log 向けに整形する。
  *
  * @param args function call の引数
@@ -298,6 +326,8 @@ const functionCallFormatters: Record<
   search_notes: formatSearchNotesCall,
   update_note: formatUpdateNoteCall,
   delete_note: formatDeleteNoteCall,
+  list_trending_zenn_articles: formatListTrendingZennArticlesCall,
+  get_zenn_article: formatGetZennArticleCall,
   finish_thinking: formatFinishThinkingCall,
 };
 
