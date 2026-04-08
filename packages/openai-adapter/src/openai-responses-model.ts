@@ -285,7 +285,9 @@ function formatGetZennArticleCall(args: FunctionFormatterArgs): string {
   const maxCharacters = args.maxCharacters as number | undefined;
   const truncation =
     maxCharacters !== undefined ? ` (maxCharacters: ${maxCharacters})` : '';
-  return `*get_zenn_article: ${args.slug as string}${truncation}*`;
+  const slug =
+    typeof args.slug === 'string' ? args.slug.trim() : (args.slug as string);
+  return `*get_zenn_article: ${slug}${truncation}*`;
 }
 
 /**

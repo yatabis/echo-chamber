@@ -701,6 +701,24 @@ describe('formatLogOutput', () => {
     );
   });
 
+  it('get_zenn_article は slug の前後空白を除去して表示する', () => {
+    const output: ResponseOutputItem[] = [
+      {
+        type: 'function_call',
+        call_id: 'call_get_zenn_article_trimmed_slug',
+        name: 'get_zenn_article',
+        arguments: JSON.stringify({
+          slug: '  dummy-zenn-article  ',
+        }),
+        status: 'completed',
+      },
+    ];
+
+    expect(formatLogOutput(output)).toBe(
+      '*get_zenn_article: dummy-zenn-article*'
+    );
+  });
+
   it('finish_thinking', () => {
     const output: ResponseOutputItem[] = [
       {
