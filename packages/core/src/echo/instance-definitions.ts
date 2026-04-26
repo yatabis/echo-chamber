@@ -1,3 +1,4 @@
+import systemPromptMarie from '../llm/prompts/marie';
 import systemPromptRin from '../llm/prompts/rin';
 
 import type { EchoInstanceId } from '../types/echo-config';
@@ -17,7 +18,7 @@ export const ECHO_INSTANCE_DEFINITIONS = {
   marie: {
     id: 'marie',
     name: 'マリー',
-    systemPrompt: '', // TODO: マリーのシステムプロンプト割り当てを確定する
+    systemPrompt: systemPromptMarie,
   },
 } satisfies Record<EchoInstanceId, EchoInstanceDefinition>;
 

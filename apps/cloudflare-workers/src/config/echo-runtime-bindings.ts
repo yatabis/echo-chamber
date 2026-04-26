@@ -32,15 +32,21 @@ const RUNTIME_BINDING_SOURCES: Record<EchoInstanceId, RuntimeBindingSource> = {
     getDiscordBotToken: (env) => env.DISCORD_BOT_TOKEN_RIN,
     chatChannels: [
       {
-        key: 'yatabis',
-        displayName: 'yatabis',
-        description: 'yatabisとのチャンネル',
+        key: 'dm_yatabis',
+        displayName: 'yatabis (DM)',
+        description: 'yatabisとのDMチャンネル',
         discordChannelId: '1371143541526499470',
       },
       {
+        key: 'echo',
+        displayName: 'Echoたちの部屋',
+        description: 'Echoだけが参加するプライベートチャンネル',
+        discordChannelId: '1487864758198730963',
+      },
+      {
         key: 'all',
-        displayName: 'all',
-        description: '全体チャンネル',
+        displayName: '全体チャンネル',
+        description: '全員が参加するパブリックチャンネル',
         discordChannelId: '1485185701468176524',
       },
     ],
@@ -54,19 +60,29 @@ const RUNTIME_BINDING_SOURCES: Record<EchoInstanceId, RuntimeBindingSource> = {
     getDiscordBotToken: (env) => env.DISCORD_BOT_TOKEN_MARIE,
     chatChannels: [
       {
-        key: 'yatabis',
-        displayName: 'yatabis',
-        description: 'yatabisとのチャンネル',
+        key: 'dm_yatabis',
+        displayName: 'yatabis (DM)',
+        description: 'yatabisとのDMチャンネル',
         discordChannelId: '1460280463443624020',
       },
       {
+        key: 'echo',
+        displayName: 'Echoたちの部屋',
+        description: 'Echoだけが参加するプライベートチャンネル',
+        discordChannelId: '1487864758198730963',
+      },
+      {
         key: 'all',
-        displayName: 'all',
-        description: '全体チャンネル',
+        displayName: '全体チャンネル',
+        description: '全員が参加するパブリックチャンネル',
         discordChannelId: '1485185701468176524',
       },
     ],
     thinkingChannelKvKey: 'thinking_channel_discord_marie',
+    embeddingConfig: {
+      provider: 'workersai',
+      model: '@cf/pfnet/plamo-embedding-1b',
+    },
   },
 };
 

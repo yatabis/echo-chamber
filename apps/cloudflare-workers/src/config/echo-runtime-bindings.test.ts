@@ -4,15 +4,21 @@ import { resolveEchoRuntimeBindings } from './echo-runtime-bindings';
 
 const RIN_CHAT_CHANNELS = [
   {
-    key: 'yatabis',
-    displayName: 'yatabis',
-    description: 'yatabisとのチャンネル',
+    key: 'dm_yatabis',
+    displayName: 'yatabis (DM)',
+    description: 'yatabisとのDMチャンネル',
     discordChannelId: '1371143541526499470',
   },
   {
+    key: 'echo',
+    displayName: 'Echoたちの部屋',
+    description: 'Echoだけが参加するプライベートチャンネル',
+    discordChannelId: '1487864758198730963',
+  },
+  {
     key: 'all',
-    displayName: 'all',
-    description: '全体チャンネル',
+    displayName: '全体チャンネル',
+    description: '全員が参加するパブリックチャンネル',
     discordChannelId: '1485185701468176524',
   },
 ] as const;
