@@ -20,6 +20,27 @@ const app = new Hono<{ Bindings: Env }>();
 type AppContext = Context<{ Bindings: Env }>;
 
 /**
+ * Dashboard summary 取得に失敗した instance の代替値を作る。
+ */
+function createUnknownDashboardInstanceSummary(
+  instanceId: DashboardInstanceSummary['id']
+): DashboardInstanceSummary {
+  return {
+    id: instanceId,
+    name: instanceId,
+    state: 'Unknown',
+    nextAlarm: null,
+    noteCount: 0,
+    memoryCount: 0,
+    todayUsageTokens: 0,
+    sevenDayUsageTokens: 0,
+    thirtyDayUsageTokens: 0,
+    latestNoteUpdatedAt: null,
+    latestMemoryUpdatedAt: null,
+  };
+}
+
+/**
  * Dashboard SPA のエントリ HTML を返す。
  *
  * `/dashboard` 直アクセス時と、`/dashboard/*` でアセットが見つからなかった時の
@@ -109,12 +130,7 @@ app.get('/instances', async (c) => {
             await summaryResponse.json<unknown>()
           );
         } catch {
-          return {
-            id: instanceId,
-            name: instanceId,
-            state: 'Unknown',
-            nextAlarm: null,
-          };
+          return createUnknownDashboardInstanceSummary(instanceId);
         }
       }
     )

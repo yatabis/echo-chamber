@@ -11,6 +11,10 @@ import type {
   DashboardInstanceSummary,
   EchoStatus,
 } from '@echo-chamber/contracts/dashboard/types';
+import {
+  buildUsageStackedSeries,
+  sumUsageBreakdown,
+} from '@echo-chamber/contracts/dashboard/utils';
 import { canonicalRuntimeTools } from '@echo-chamber/core/agent/runtime-tools/catalog';
 import { bindRuntimeTools } from '@echo-chamber/core/agent/runtime-tools/tool';
 import type { AgentSessionTool } from '@echo-chamber/core/agent/session';
@@ -69,6 +73,27 @@ async function fetchUnreadMessageCounts(
       unreadCount: await getUnreadMessageCount(token, channel.discordChannelId),
     }))
   );
+}
+
+function findLatestUpdatedAt(
+  rows: readonly { updatedAt: string }[]
+): string | null {
+  return rows.reduce<string | null>((latest, row) => {
+    if (latest === null) {
+      return row.updatedAt;
+    }
+
+    const latestTime = new Date(latest).getTime();
+    const rowTime = new Date(row.updatedAt).getTime();
+    if (Number.isNaN(rowTime)) {
+      return latest;
+    }
+    if (Number.isNaN(latestTime) || rowTime > latestTime) {
+      return row.updatedAt;
+    }
+
+    return latest;
+  }, null);
 }
 
 interface RunDecision {
@@ -369,12 +394,33 @@ export class Echo extends DurableObject<Env> {
    */
   async getSummary(): Promise<DashboardInstanceSummary> {
     const definition = this.getInstanceDefinitionOrThrow();
+    const notes = await this.getNotes();
+    const memories = this.getMemorySystemOrThrow()
+      .getAllMemories()
+      .map((row) => ({
+        updatedAt: row.updated_at,
+      }));
+    const usage = await this.getAllUsage();
+    const todayUsageTokens = (await this.getTodayUsage())?.total_tokens ?? 0;
+    const sevenDayUsageTokens = sumUsageBreakdown(
+      buildUsageStackedSeries(usage, 7)
+    ).totalTokens;
+    const thirtyDayUsageTokens = sumUsageBreakdown(
+      buildUsageStackedSeries(usage, 30)
+    ).totalTokens;
 
     return parseDashboardInstanceSummary({
       id: definition.id,
       name: definition.name,
       state: await this.getState(),
       nextAlarm: await this.getNextAlarm(),
+      noteCount: notes.length,
+      memoryCount: memories.length,
+      todayUsageTokens,
+      sevenDayUsageTokens,
+      thirtyDayUsageTokens,
+      latestNoteUpdatedAt: findLatestUpdatedAt(notes),
+      latestMemoryUpdatedAt: findLatestUpdatedAt(memories),
     });
   }
 

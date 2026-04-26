@@ -92,6 +92,13 @@ export const dashboardInstanceSummarySchema = z
     name: z.string(),
     state: dashboardSummaryStateSchema,
     nextAlarm: z.string().nullable(),
+    noteCount: z.number().int().nonnegative(),
+    memoryCount: z.number().int().nonnegative(),
+    todayUsageTokens: finiteNumber,
+    sevenDayUsageTokens: finiteNumber,
+    thirtyDayUsageTokens: finiteNumber,
+    latestNoteUpdatedAt: z.string().nullable(),
+    latestMemoryUpdatedAt: z.string().nullable(),
   })
   .strict();
 
