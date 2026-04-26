@@ -15,23 +15,24 @@
     "strict": true,
     "skipLibCheck": true,
     "noUncheckedIndexedAccess": true,
-    "baseUrl": ".",
     "paths": {
-      "@echo-chamber/core": ["packages/core/src/index.ts"],
-      "@echo-chamber/core/*": ["packages/core/src/*"],
-      "@echo-chamber/contracts": ["packages/contracts/src/index.ts"],
-      "@echo-chamber/contracts/*": ["packages/contracts/src/*"],
-      "@echo-chamber/openai-adapter": ["packages/openai-adapter/src/index.ts"],
-      "@echo-chamber/openai-adapter/*": ["packages/openai-adapter/src/*"],
-      "@echo-chamber/discord-adapter": [
-        "packages/discord-adapter/src/index.ts"
+      "@echo-chamber/core": ["./packages/core/src/index.ts"],
+      "@echo-chamber/core/*": ["./packages/core/src/*"],
+      "@echo-chamber/contracts": ["./packages/contracts/src/index.ts"],
+      "@echo-chamber/contracts/*": ["./packages/contracts/src/*"],
+      "@echo-chamber/openai-adapter": [
+        "./packages/openai-adapter/src/index.ts"
       ],
-      "@echo-chamber/discord-adapter/*": ["packages/discord-adapter/src/*"],
+      "@echo-chamber/openai-adapter/*": ["./packages/openai-adapter/src/*"],
+      "@echo-chamber/discord-adapter": [
+        "./packages/discord-adapter/src/index.ts"
+      ],
+      "@echo-chamber/discord-adapter/*": ["./packages/discord-adapter/src/*"],
       "@echo-chamber/cloudflare-runtime": [
-        "packages/cloudflare-runtime/src/index.ts"
+        "./packages/cloudflare-runtime/src/index.ts"
       ],
       "@echo-chamber/cloudflare-runtime/*": [
-        "packages/cloudflare-runtime/src/*"
+        "./packages/cloudflare-runtime/src/*"
       ]
     }
   },
