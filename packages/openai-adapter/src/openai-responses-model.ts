@@ -51,7 +51,7 @@ export class OpenAIResponsesModel implements ModelPort {
     this.client = new OpenAI({
       apiKey: options.apiKey,
     });
-    this.model = options.model ?? 'gpt-5.4';
+    this.model = options.model ?? 'gpt-5.5';
     this.logger = options.logger;
     this.thoughtLog = options.thoughtLog;
   }

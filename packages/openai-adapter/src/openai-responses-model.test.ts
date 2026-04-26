@@ -116,6 +116,7 @@ describe('OpenAIResponsesModel', () => {
             output: '{"success":true}',
           },
         ],
+        model: 'gpt-5.5',
         parallel_tool_calls: true,
         previous_response_id: 'response_prev',
         reasoning: {
