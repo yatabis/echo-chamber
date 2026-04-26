@@ -4,6 +4,7 @@ import {
   addUsage,
   convertUsage,
   calculateDynamicTokenLimit,
+  findNextTokenLimitRecoveryTime,
   getTodayUsageKey,
 } from './usage';
 
@@ -507,5 +508,103 @@ describe('calculateDynamicTokenLimit', () => {
     // バッファ適用: 800,000 * 2.0 = 1,600,000
     // 上限適用: min(1,600,000, 1,000,000) = 1,000,000
     expect(result).toBe(1_000_000);
+  });
+});
+
+describe('findNextTokenLimitRecoveryTime', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('同一 usage 日の中で hard limit を再び下回る最短時刻を返す', () => {
+    vi.setSystemTime(new Date('2025-01-01T10:00:30+09:00'));
+
+    const result = findNextTokenLimitRecoveryTime(112_500, 500_000, 1.5);
+
+    expect(result.toISOString()).toBe('2025-01-01T01:01:00.000Z');
+  });
+
+  it('すでに回復条件を満たしている場合でも現在時刻ではなく次の分を返す', () => {
+    vi.setSystemTime(new Date('2025-01-01T12:34:56+09:00'));
+
+    const result = findNextTokenLimitRecoveryTime(1, 500_000, 1.5);
+
+    expect(result.toISOString()).toBe('2025-01-01T03:35:00.000Z');
+  });
+
+  it('同一 usage 日で回復しない場合は次の usage reset へフォールバックする', () => {
+    vi.setSystemTime(new Date('2025-01-01T23:30:00+09:00'));
+
+    const result = findNextTokenLimitRecoveryTime(500_000, 500_000, 1.5);
+
+    expect(result.toISOString()).toBe('2025-01-01T22:00:00.000Z');
+  });
+
+  it('次の分の limit と totalTokens が同値なら回復扱いせず、その次の分を返す', () => {
+    vi.setSystemTime(new Date('2025-01-01T10:00:00+09:00'));
+
+    const result = findNextTokenLimitRecoveryTime(113_125, 500_000, 1.5);
+
+    expect(result.toISOString()).toBe('2025-01-01T01:02:00.000Z');
+  });
+
+  it('03:00 ちょうどに回復できる場合は 03:00 を返す', () => {
+    vi.setSystemTime(new Date('2025-01-02T02:59:30+09:00'));
+
+    const result = findNextTokenLimitRecoveryTime(499_999, 500_000, 1.5);
+
+    expect(result.toISOString()).toBe('2025-01-01T18:00:00.000Z');
+  });
+
+  it('03:00 を超えないと回復できない場合は次の usage reset を返す', () => {
+    vi.setSystemTime(new Date('2025-01-02T02:59:30+09:00'));
+
+    const result = findNextTokenLimitRecoveryTime(500_000, 500_000, 1.5);
+
+    expect(result.toISOString()).toBe('2025-01-01T22:00:00.000Z');
+  });
+
+  it('必要経過分が token limit window を超える場合は次の usage reset を返す', () => {
+    vi.setSystemTime(new Date('2025-01-01T10:00:00+09:00'));
+
+    const result = findNextTokenLimitRecoveryTime(250_000, 500_000, 0.5);
+
+    expect(result.toISOString()).toBe('2025-01-01T22:00:00.000Z');
+  });
+
+  it('token limit window 対象外時間なら次の usage reset を返す', () => {
+    vi.setSystemTime(new Date('2025-01-02T03:01:00+09:00'));
+
+    const result = findNextTokenLimitRecoveryTime(1, 500_000, 1.5);
+
+    expect(result.toISOString()).toBe('2025-01-01T22:00:00.000Z');
+  });
+
+  it('06:59 台は次の分が usage reset そのものなので次の usage reset を返す', () => {
+    vi.setSystemTime(new Date('2025-01-02T06:59:30+09:00'));
+
+    const result = findNextTokenLimitRecoveryTime(1, 500_000, 1.5);
+
+    expect(result.toISOString()).toBe('2025-01-01T22:00:00.000Z');
+  });
+
+  it('tokenLimit が 0 以下なら次の usage reset を返す', () => {
+    vi.setSystemTime(new Date('2025-01-01T10:00:00+09:00'));
+
+    const result = findNextTokenLimitRecoveryTime(1, 0, 1.5);
+
+    expect(result.toISOString()).toBe('2025-01-01T22:00:00.000Z');
+  });
+
+  it('bufferFactor が 0 以下なら次の usage reset を返す', () => {
+    vi.setSystemTime(new Date('2025-01-01T10:00:00+09:00'));
+
+    const result = findNextTokenLimitRecoveryTime(1, 500_000, 0);
+
+    expect(result.toISOString()).toBe('2025-01-01T22:00:00.000Z');
   });
 });

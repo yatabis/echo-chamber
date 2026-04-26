@@ -34,6 +34,7 @@ import {
   addUsage,
   calculateDynamicTokenLimit,
   convertUsage,
+  findNextTokenLimitRecoveryTime,
   getTodayUsageKey,
 } from '@echo-chamber/core/echo/usage';
 import type { ContextSnapshot } from '@echo-chamber/core/ports/context';
@@ -525,7 +526,11 @@ export class Echo extends DurableObject<Env> {
     const { nextWakeAt, hasReachedNextWakeAt } =
       await this.resolveNextWakeAtStatus();
     if (
-      !(await this.validateHardTokenLimit(totalTokens, hasReachedNextWakeAt))
+      !(await this.validateHardTokenLimit(
+        totalTokens,
+        nextWakeAt,
+        hasReachedNextWakeAt
+      ))
     ) {
       return {
         shouldRun: false,
@@ -615,11 +620,13 @@ export class Echo extends DurableObject<Env> {
    * hard limit を超えた場合は next_wake_at に到達していても起動しない。
    *
    * @param totalTokens 今日すでに消費した総トークン数
-   * @param shouldWarnOnHardLimit hard limit 到達時に warn を出すべきなら `true`
+   * @param nextWakeAt 正規化済みの next_wake_at。未設定なら `null`
+   * @param shouldWarnOnHardLimit hard limit 到達時に warn と fallback を行うべきなら `true`
    * @returns hard limit 未満なら `true`
    */
   private async validateHardTokenLimit(
     totalTokens: number,
+    nextWakeAt: Date | null,
     shouldWarnOnHardLimit: boolean
   ): Promise<boolean> {
     const hardLimit = calculateDynamicTokenLimit(
@@ -630,9 +637,18 @@ export class Echo extends DurableObject<Env> {
       return true;
     }
 
-    if (shouldWarnOnHardLimit) {
+    if (shouldWarnOnHardLimit && nextWakeAt !== null) {
+      const fallbackNextWakeAt = findNextTokenLimitRecoveryTime(
+        totalTokens,
+        TOKEN_LIMITS.DAILY_HARD_LIMIT,
+        TOKEN_LIMITS.HARD_LIMIT_BUFFER_FACTOR
+      );
+      await this.saveNextWakeAt(fallbackNextWakeAt.toISOString());
       await this.logger.warn(
         `Usage hard limit reached: ${totalTokens}  (Hard limit: ${Math.floor(hardLimit)})`
+      );
+      await this.logger.info(
+        `Deferring next_wake_at due to hard limit: ${nextWakeAt.toISOString()} -> ${fallbackNextWakeAt.toISOString()}`
       );
     }
     return false;

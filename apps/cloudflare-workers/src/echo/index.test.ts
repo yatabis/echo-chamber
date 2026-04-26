@@ -598,7 +598,7 @@ describe('Echo run preconditions', () => {
     vi.setSystemTime(new Date('2026-03-22T01:00:00.000Z'));
 
     const env = createMockEnv();
-    const { storage } = createMockStorage();
+    const { storage, putFn } = createMockStorage();
     const echo = new Echo(createMockState(storage), env);
 
     vi.spyOn(
@@ -628,8 +628,15 @@ describe('Echo run preconditions', () => {
 
     expect(result.shouldRun).toBe(false);
     expect(loadNextWakeAt).toHaveBeenCalled();
+    expect(putFn).toHaveBeenCalledWith(
+      'next_wake_at',
+      '2026-03-22T01:01:00.000Z'
+    );
     expect(mockLogger.warn).toHaveBeenCalledWith(
       `Usage hard limit reached: ${hardLimit}  (Hard limit: ${hardLimit})`
+    );
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      'Deferring next_wake_at due to hard limit: 2026-03-22T00:59:00.000Z -> 2026-03-22T01:01:00.000Z'
     );
   });
 
@@ -667,6 +674,43 @@ describe('Echo run preconditions', () => {
     expect(result.shouldRun).toBe(false);
     expect(mockLogger.warn).not.toHaveBeenCalledWith(
       `Usage hard limit reached: ${hardLimit}  (Hard limit: ${hardLimit})`
+    );
+  });
+
+  it('hard limit が当日中に回復しない場合は次の usage reset へ next_wake_at をフォールバックする', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-22T14:30:00.000Z'));
+
+    const env = createMockEnv();
+    const { storage, putFn } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+
+    vi.spyOn(
+      echo as unknown as { validateEchoState(): Promise<boolean> },
+      'validateEchoState'
+    ).mockResolvedValue(true);
+    vi.spyOn(
+      echo as unknown as { validateChatMessage(): Promise<boolean> },
+      'validateChatMessage'
+    ).mockResolvedValue(false);
+    vi.spyOn(
+      echo as unknown as { getTodayUsage(): Promise<Usage | null> },
+      'getTodayUsage'
+    ).mockResolvedValue(createUsage(TOKEN_LIMITS.DAILY_HARD_LIMIT));
+    vi.spyOn(
+      echo as unknown as { loadNextWakeAt(): Promise<string | null> },
+      'loadNextWakeAt'
+    ).mockResolvedValue('2026-03-22T14:29:00.000Z');
+
+    const result = await resolveRunDecision(echo);
+
+    expect(result.shouldRun).toBe(false);
+    expect(putFn).toHaveBeenCalledWith(
+      'next_wake_at',
+      '2026-03-22T22:00:00.000Z'
+    );
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      'Deferring next_wake_at due to hard limit: 2026-03-22T14:29:00.000Z -> 2026-03-22T22:00:00.000Z'
     );
   });
 
