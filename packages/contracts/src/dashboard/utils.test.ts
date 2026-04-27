@@ -74,6 +74,41 @@ describe('buildUsageStackedSeries', () => {
     });
   });
 
+  it('host timezone が UTC でも Asia/Tokyo の usage 日付キーを生成する', () => {
+    const previousTimezone = process.env.TZ;
+    process.env.TZ = 'UTC';
+
+    try {
+      const usageRecord: UsageRecord = {
+        '2026-02-22': {
+          cached_input_tokens: 10,
+          uncached_input_tokens: 20,
+          total_input_tokens: 30,
+          output_tokens: 7,
+          reasoning_tokens: 2,
+          total_tokens: 37,
+          total_cost: 0.001,
+        },
+      };
+
+      const series = buildUsageStackedSeries(
+        usageRecord,
+        7,
+        new Date('2026-02-22T12:00:00+09:00')
+      );
+
+      expect(series[0]?.dateKey).toBe('2026-02-16');
+      expect(series[6]?.dateKey).toBe('2026-02-22');
+      expect(series[6]?.totalTokens).toBe(37);
+    } finally {
+      if (previousTimezone === undefined) {
+        delete process.env.TZ;
+      } else {
+        process.env.TZ = previousTimezone;
+      }
+    }
+  });
+
   it('reasoning_tokens が output_tokens を超えるとエラーにする', () => {
     expect(() => {
       buildUsageStackedSeries(

@@ -11,6 +11,8 @@ import type {
 } from './types';
 
 const USAGE_DAY_BOUNDARY_OFFSET_HOURS = 7;
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
 
 /**
  * Dashboard 用の usage 期間キー配列を生成する。
@@ -27,17 +29,13 @@ function buildUsageDateKeys(
   referenceDate: Date
 ): string[] {
   const shiftedReferenceDate = new Date(
-    referenceDate.getTime() - USAGE_DAY_BOUNDARY_OFFSET_HOURS * 60 * 60 * 1000
-  );
-  const baseDate = new Date(
-    shiftedReferenceDate.getFullYear(),
-    shiftedReferenceDate.getMonth(),
-    shiftedReferenceDate.getDate()
+    referenceDate.getTime() - USAGE_DAY_BOUNDARY_OFFSET_HOURS * HOUR_MS
   );
 
   return Array.from({ length: days }).map((_, index) => {
-    const date = new Date(baseDate);
-    date.setDate(baseDate.getDate() - (days - 1 - index));
+    const date = new Date(
+      shiftedReferenceDate.getTime() - (days - 1 - index) * DAY_MS
+    );
     return formatDate(date);
   });
 }
