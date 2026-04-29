@@ -42,12 +42,14 @@ import {
   getTodayUsageKey,
 } from '@echo-chamber/core/echo/usage';
 import type { ContextSnapshot } from '@echo-chamber/core/ports/context';
+import type { ModelPort } from '@echo-chamber/core/ports/model';
 import type { EchoInstanceId } from '@echo-chamber/core/types/echo-config';
 import { isValidInstanceId } from '@echo-chamber/core/types/echo-config';
 import { formatDatetime } from '@echo-chamber/core/utils/datetime';
 import { getErrorMessage } from '@echo-chamber/core/utils/error';
 import { DiscordThoughtLog } from '@echo-chamber/discord-adapter/discord-thought-log';
 import { getUnreadMessageCount } from '@echo-chamber/discord-adapter/notification-utils';
+import { OpenAIChatCompletionsModel } from '@echo-chamber/openai-adapter/openai-chat-completions-model';
 import { OpenAIResponsesModel } from '@echo-chamber/openai-adapter/openai-responses-model';
 
 import {
@@ -55,6 +57,7 @@ import {
   type EchoChatChannelBinding,
   type EchoRuntimeBindings,
 } from '../config/echo-runtime-bindings';
+import { resolveMainLLMConfig } from '../config/main-llm-config';
 import { createEmbeddingService } from '../embedding/create-embedding-service';
 import { createRerankingService } from '../reranking/create-reranking-service';
 import { createLogger } from '../utils/logger';
@@ -893,13 +896,33 @@ export class Echo extends DurableObject<Env> {
 
   /**
    * @param thoughtLog 実行ごとの thought log adapter
-   * @returns OpenAI Responses API 用 model adapter
+   * @returns メイン LLM 用の OpenAI-compatible model adapter
    */
-  private createOpenAIClient(
-    thoughtLog: DiscordThoughtLog
-  ): OpenAIResponsesModel {
+  private createMainLLMClient(thoughtLog: DiscordThoughtLog): ModelPort {
+    const config = resolveMainLLMConfig(this._env);
+
+    if (config.api === 'chat_completions') {
+      if (config.model === undefined) {
+        throw new Error('Chat Completions model is not configured');
+      }
+
+      return new OpenAIChatCompletionsModel({
+        apiKey: config.apiKey,
+        model: config.model,
+        baseURL: config.baseURL,
+        logger: this.logger,
+        thoughtLog,
+        maxTokens: config.maxTokens,
+        temperature: config.temperature,
+        topP: config.topP,
+        presencePenalty: config.presencePenalty,
+        extraBody: config.extraBody,
+      });
+    }
+
     return new OpenAIResponsesModel({
-      apiKey: this._env.OPENAI_API_KEY,
+      apiKey: config.apiKey,
+      model: config.model,
       logger: this.logger,
       thoughtLog,
     });
@@ -914,7 +937,7 @@ export class Echo extends DurableObject<Env> {
     const thoughtLog = this.createThoughtLog();
 
     return new AgentThinkingEngine({
-      model: this.createOpenAIClient(thoughtLog),
+      model: this.createMainLLMClient(thoughtLog),
       thoughtLog,
       logger: this.logger,
       context: {

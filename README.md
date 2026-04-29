@@ -64,6 +64,24 @@ pnpm dev
 
 ローカル開発時は、`apps/cloudflare-workers/.dev.vars` に上記キーを設定します。
 
+### メイン LLM の切り替え
+
+通常は `OPENAI_API_KEY` を使い、OpenAI Responses API のデフォルトモデルで動作します。
+LM Studio の OpenAI 互換サーバーを使う場合は、Chat Completions API 経由で接続します。
+ローカルの `apps/cloudflare-workers/.dev.vars` に以下を追加します。
+
+```dotenv
+MAIN_LLM_PROVIDER=lmstudio
+MAIN_LLM_MODEL=qwen3.6-27b
+MAIN_LLM_BASE_URL=http://localhost:1234/v1
+MAIN_LLM_API_KEY=lm-studio
+```
+
+`MAIN_LLM_MODEL` は LM Studio でロードしたモデルの identifier に合わせてください。
+`MAIN_LLM_BASE_URL` と `MAIN_LLM_API_KEY` も必須です。LM Studio 側で認証を無効にしている場合でも、OpenAI client 用に任意の API key 文字列を設定してください。
+Chat Completions API 利用時は、prompt template が user message を必須とするモデル向けに `developer` message を `user` role として渡します。
+LM Studio には `max_tokens: 32768`、`temperature: 0.7`、`top_p: 0.8`、`presence_penalty: 1.5`、`top_k: 20`、`chat_template_kwargs: { enable_thinking: false }` を固定で指定します。
+
 ### Secret 設定例
 
 ```bash

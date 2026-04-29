@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./openai-chat-completions-model": "./src/openai-chat-completions-model.ts",
     "./openai-responses-model": "./src/openai-responses-model.ts"
   },
   "scripts": {
