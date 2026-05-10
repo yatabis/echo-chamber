@@ -1,7 +1,10 @@
 import type {
   dashboardInstanceSummarySchema,
   dashboardInstancesResponseSchema,
+  dashboardMainLlmConfigSchema,
+  dashboardRuntimeConfigSchema,
   dashboardSummaryStateSchema,
+  dashboardTokenLimitConfigSchema,
   echoMemorySchema,
   echoStateSchema,
   echoStatusSchema,
@@ -19,6 +22,15 @@ export type TokenUsage = z.infer<typeof tokenUsageSchema>;
 export type UsageModelBreakdown = z.infer<typeof usageModelBreakdownSchema>;
 export type Usage = z.infer<typeof usageSchema>;
 export type UsageRecord = z.infer<typeof usageRecordSchema>;
+export type DashboardMainLlmConfig = z.infer<
+  typeof dashboardMainLlmConfigSchema
+>;
+export type DashboardTokenLimitConfig = z.infer<
+  typeof dashboardTokenLimitConfigSchema
+>;
+export type DashboardRuntimeConfig = z.infer<
+  typeof dashboardRuntimeConfigSchema
+>;
 export type Note = z.infer<typeof noteSchema>;
 export type EchoMemory = z.infer<typeof echoMemorySchema>;
 export type EchoStatus = z.infer<typeof echoStatusSchema>;
@@ -41,6 +53,7 @@ export interface DashboardUsageStackedPoint {
   totalOutputTokens: number;
   totalTokens: number;
   estimatedCostUsd: number | null;
+  estimatedCostIsPartial: boolean;
 }
 
 export interface DashboardUsageBreakdownTotals {
@@ -52,6 +65,7 @@ export interface DashboardUsageBreakdownTotals {
   totalOutputTokens: number;
   totalTokens: number;
   estimatedCostUsd: number | null;
+  estimatedCostIsPartial: boolean;
 }
 
 export interface DashboardUsageRatioMetrics {

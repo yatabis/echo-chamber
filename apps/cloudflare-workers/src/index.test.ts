@@ -11,6 +11,42 @@ import type {
 
 import worker from './index';
 
+const rinRuntime = {
+  mainLlm: {
+    provider: 'openai',
+    model: 'gpt-5.5',
+  },
+  tokenLimits: {
+    dailyHardLimit: 500_000,
+    dailySoftLimit: 300_000,
+    hardLimitBufferFactor: 1.5,
+  },
+} as const;
+
+const marieRuntime = {
+  mainLlm: {
+    provider: 'openai',
+    model: 'gpt-5.4-mini',
+  },
+  tokenLimits: {
+    dailyHardLimit: 2_500_000,
+    dailySoftLimit: 1_500_000,
+    hardLimitBufferFactor: 1.5,
+  },
+} as const;
+
+const unknownRuntime = {
+  mainLlm: {
+    provider: 'unknown',
+    model: 'unknown',
+  },
+  tokenLimits: {
+    dailyHardLimit: 0,
+    dailySoftLimit: 0,
+    hardLimitBufferFactor: 0,
+  },
+} as const;
+
 interface MockInstanceBehavior {
   summaryStatus: number;
   summary: DashboardInstanceSummary;
@@ -41,6 +77,7 @@ function createMockEnv(options: MockEnvOptions = {}): MockEnvResult {
         todayUsageTokens: 1200,
         sevenDayUsageTokens: 4400,
         thirtyDayUsageTokens: 12000,
+        runtime: rinRuntime,
         latestNoteUpdatedAt: '2026-02-22T11:00:00.000Z',
         latestMemoryUpdatedAt: '2026-02-22T10:00:00.000Z',
       },
@@ -49,6 +86,7 @@ function createMockEnv(options: MockEnvOptions = {}): MockEnvResult {
         name: 'リン',
         state: 'Idling',
         nextAlarm: '2026-02-22T12:00:00.000Z',
+        runtime: rinRuntime,
         memories: [],
         notes: [],
         usage: {},
@@ -66,6 +104,7 @@ function createMockEnv(options: MockEnvOptions = {}): MockEnvResult {
         todayUsageTokens: 0,
         sevenDayUsageTokens: 600,
         thirtyDayUsageTokens: 1600,
+        runtime: marieRuntime,
         latestNoteUpdatedAt: '2026-02-21T11:00:00.000Z',
         latestMemoryUpdatedAt: '2026-02-21T10:00:00.000Z',
       },
@@ -74,6 +113,7 @@ function createMockEnv(options: MockEnvOptions = {}): MockEnvResult {
         name: 'マリー',
         state: 'Sleeping',
         nextAlarm: null,
+        runtime: marieRuntime,
         memories: [],
         notes: [],
         usage: {},
@@ -223,6 +263,7 @@ describe('worker routes', () => {
       todayUsageTokens: 1200,
       sevenDayUsageTokens: 4400,
       thirtyDayUsageTokens: 12000,
+      runtime: rinRuntime,
       latestNoteUpdatedAt: '2026-02-22T11:00:00.000Z',
       latestMemoryUpdatedAt: '2026-02-22T10:00:00.000Z',
     });
@@ -236,6 +277,7 @@ describe('worker routes', () => {
       todayUsageTokens: 0,
       sevenDayUsageTokens: 0,
       thirtyDayUsageTokens: 0,
+      runtime: unknownRuntime,
       latestNoteUpdatedAt: null,
       latestMemoryUpdatedAt: null,
     });

@@ -21,6 +21,17 @@ describe('dashboard contract schemas', () => {
           todayUsageTokens: 1200,
           sevenDayUsageTokens: 5400,
           thirtyDayUsageTokens: 22000,
+          runtime: {
+            mainLlm: {
+              provider: 'openai',
+              model: 'gpt-5.5',
+            },
+            tokenLimits: {
+              dailyHardLimit: 500_000,
+              dailySoftLimit: 300_000,
+              hardLimitBufferFactor: 1.5,
+            },
+          },
           latestNoteUpdatedAt: '2026-03-19T11:00:00.000Z',
           latestMemoryUpdatedAt: '2026-03-19T10:00:00.000Z',
         },
@@ -34,6 +45,17 @@ describe('dashboard contract schemas', () => {
           todayUsageTokens: 0,
           sevenDayUsageTokens: 0,
           thirtyDayUsageTokens: 0,
+          runtime: {
+            mainLlm: {
+              provider: 'unknown',
+              model: 'unknown',
+            },
+            tokenLimits: {
+              dailyHardLimit: 0,
+              dailySoftLimit: 0,
+              hardLimitBufferFactor: 0,
+            },
+          },
           latestNoteUpdatedAt: null,
           latestMemoryUpdatedAt: null,
         },
@@ -58,6 +80,17 @@ describe('dashboard contract schemas', () => {
             todayUsageTokens: 0,
             sevenDayUsageTokens: 0,
             thirtyDayUsageTokens: 0,
+            runtime: {
+              mainLlm: {
+                provider: 'openai',
+                model: 'gpt-5.5',
+              },
+              tokenLimits: {
+                dailyHardLimit: 500_000,
+                dailySoftLimit: 300_000,
+                hardLimitBufferFactor: 1.5,
+              },
+            },
             latestNoteUpdatedAt: null,
             latestMemoryUpdatedAt: null,
           },
@@ -72,6 +105,17 @@ describe('dashboard contract schemas', () => {
       name: 'リン',
       state: 'Idling',
       nextAlarm: null,
+      runtime: {
+        mainLlm: {
+          provider: 'openai',
+          model: 'gpt-5.5',
+        },
+        tokenLimits: {
+          dailyHardLimit: 500_000,
+          dailySoftLimit: 300_000,
+          hardLimitBufferFactor: 1.5,
+        },
+      },
       memories: [
         {
           content: 'remember this',
@@ -130,6 +174,17 @@ describe('dashboard contract schemas', () => {
         name: 'リン',
         state: 'Idling',
         nextAlarm: null,
+        runtime: {
+          mainLlm: {
+            provider: 'openai',
+            model: 'gpt-5.5',
+          },
+          tokenLimits: {
+            dailyHardLimit: 500_000,
+            dailySoftLimit: 300_000,
+            hardLimitBufferFactor: 1.5,
+          },
+        },
         memories: [],
         notes: [],
         usage: {

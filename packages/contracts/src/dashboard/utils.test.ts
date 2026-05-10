@@ -73,6 +73,7 @@ describe('buildUsageStackedSeries', () => {
       totalOutputTokens: 0,
       totalTokens: 0,
       estimatedCostUsd: 0,
+      estimatedCostIsPartial: false,
     });
     expect(series[4]).toMatchObject({
       cachedInputTokens: 10,
@@ -83,6 +84,7 @@ describe('buildUsageStackedSeries', () => {
       totalOutputTokens: 7,
       totalTokens: 37,
       estimatedCostUsd: (10 * 0.125 + 20 * 1.25 + 7 * 10) / 1_000_000,
+      estimatedCostIsPartial: false,
     });
     expect(series[6]).toMatchObject({
       cachedInputTokens: 5,
@@ -93,6 +95,7 @@ describe('buildUsageStackedSeries', () => {
       totalOutputTokens: 4,
       totalTokens: 24,
       estimatedCostUsd: (5 * 0.025 + 15 * 0.25 + 4 * 2) / 1_000_000,
+      estimatedCostIsPartial: false,
     });
   });
 
@@ -267,10 +270,11 @@ describe('sumUsageBreakdown', () => {
       estimatedCostUsd:
         (10 * 0.125 + 10 * 1.25 + 5 * 10) / 1_000_000 +
         (2 * 0.025 + 3 * 0.25 + 4 * 2) / 1_000_000,
+      estimatedCostIsPartial: false,
     });
   });
 
-  it('未対応 provider が含まれると推定コストを null にする', () => {
+  it('未対応 provider だけの場合は推定コストを null にして partial 扱いにする', () => {
     const series = buildUsageStackedSeries(
       {
         '2026-02-22': {
@@ -299,7 +303,55 @@ describe('sumUsageBreakdown', () => {
     );
 
     expect(series[6]?.estimatedCostUsd).toBeNull();
+    expect(series[6]?.estimatedCostIsPartial).toBe(true);
     expect(sumUsageBreakdown(series).estimatedCostUsd).toBeNull();
+    expect(sumUsageBreakdown(series).estimatedCostIsPartial).toBe(true);
+  });
+
+  it('未対応 provider が混ざっても計算できる分の推定コストを返す', () => {
+    const knownCostUsd = (5 * 0.125 + 15 * 1.25 + 4 * 10) / 1_000_000;
+    const series = buildUsageStackedSeries(
+      {
+        '2026-02-22': {
+          cached_input_tokens: 15,
+          uncached_input_tokens: 25,
+          total_input_tokens: 40,
+          output_tokens: 9,
+          reasoning_tokens: 1,
+          total_tokens: 49,
+          by_model: [
+            {
+              provider: 'openai',
+              model: 'gpt-5',
+              cached_input_tokens: 5,
+              uncached_input_tokens: 15,
+              total_input_tokens: 20,
+              output_tokens: 4,
+              reasoning_tokens: 1,
+              total_tokens: 24,
+            },
+            {
+              provider: 'lmstudio',
+              model: 'local-model',
+              cached_input_tokens: 10,
+              uncached_input_tokens: 10,
+              total_input_tokens: 20,
+              output_tokens: 5,
+              reasoning_tokens: 0,
+              total_tokens: 25,
+            },
+          ],
+        },
+      },
+      7,
+      new Date('2026-02-22T12:00:00+09:00')
+    );
+    const totals = sumUsageBreakdown(series);
+
+    expect(series[6]?.estimatedCostUsd).toBe(knownCostUsd);
+    expect(series[6]?.estimatedCostIsPartial).toBe(true);
+    expect(totals.estimatedCostUsd).toBe(knownCostUsd);
+    expect(totals.estimatedCostIsPartial).toBe(true);
   });
 });
 
@@ -314,6 +366,7 @@ describe('buildUsageRatioMetrics', () => {
       totalOutputTokens: 40,
       totalTokens: 140,
       estimatedCostUsd: 0.01,
+      estimatedCostIsPartial: false,
     });
 
     expect(ratios.cacheRateInInput).toBeCloseTo(0.25, 10);
@@ -332,6 +385,7 @@ describe('buildUsageRatioMetrics', () => {
       totalOutputTokens: 0,
       totalTokens: 0,
       estimatedCostUsd: 0,
+      estimatedCostIsPartial: false,
     });
 
     expect(ratios).toEqual({

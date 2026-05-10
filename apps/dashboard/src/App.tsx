@@ -15,6 +15,7 @@ import {
 import type {
   DashboardInstanceSummary,
   DashboardInstancesResponse,
+  DashboardRuntimeConfig,
   DashboardSummaryState,
   DashboardUsageBreakdownTotals,
   DashboardUsageDays,
@@ -122,8 +123,26 @@ function formatPercent(value: number): string {
 /**
  * 推定 USD コストを dashboard 表示用に整形する。
  */
-function formatEstimatedCost(value: number | null): string {
-  return value === null ? 'Unknown' : `$${value.toFixed(4)}`;
+function formatEstimatedCost(value: number | null, isPartial = false): string {
+  if (value === null) {
+    return 'Unknown';
+  }
+
+  return isPartial ? `$${value.toFixed(4)}+` : `$${value.toFixed(4)}`;
+}
+
+/**
+ * provider/model を dashboard 上の短い runtime 表示へ整形する。
+ */
+function formatMainLlmLabel(runtime: DashboardRuntimeConfig): string {
+  return `${runtime.mainLlm.provider}/${runtime.mainLlm.model}`;
+}
+
+/**
+ * 日次 token limit を dashboard 表示用に整形する。
+ */
+function formatDailyTokenLimit(runtime: DashboardRuntimeConfig): string {
+  return `${formatNumber(runtime.tokenLimits.dailySoftLimit)} / ${formatNumber(runtime.tokenLimits.dailyHardLimit)}`;
 }
 
 /**
@@ -299,6 +318,7 @@ function findPeakUsagePoint(
       normalOutputTokens: 0,
       reasoningOutputTokens: 0,
       estimatedCostUsd: 0,
+      estimatedCostIsPartial: false,
       totalInputTokens: 0,
       totalOutputTokens: 0,
       totalTokens: 0,
@@ -323,6 +343,17 @@ function createUnknownInstanceSummary(
     todayUsageTokens: 0,
     sevenDayUsageTokens: 0,
     thirtyDayUsageTokens: 0,
+    runtime: {
+      mainLlm: {
+        provider: 'unknown',
+        model: 'unknown',
+      },
+      tokenLimits: {
+        dailyHardLimit: 0,
+        dailySoftLimit: 0,
+        hardLimitBufferFactor: 0,
+      },
+    },
     latestNoteUpdatedAt: null,
     latestMemoryUpdatedAt: null,
   };
@@ -389,7 +420,12 @@ function UsageTooltip(props: {
       </p>
       <p className="usage-tooltip-row usage-tooltip-total">
         <span>Estimated cost</span>
-        <strong>{formatEstimatedCost(point.estimatedCostUsd)}</strong>
+        <strong>
+          {formatEstimatedCost(
+            point.estimatedCostUsd,
+            point.estimatedCostIsPartial
+          )}
+        </strong>
       </p>
     </div>
   );
@@ -414,7 +450,10 @@ function UsageStackedChart(props: {
         <h2>Usage ({days} days)</h2>
         <p>
           total {formatNumber(totals.totalTokens)} tokens / estimated cost{' '}
-          {formatEstimatedCost(totals.estimatedCostUsd)}
+          {formatEstimatedCost(
+            totals.estimatedCostUsd,
+            totals.estimatedCostIsPartial
+          )}
         </p>
       </div>
 
@@ -517,8 +556,12 @@ function UsageMetricsPanel(props: {
       <article className="card usage-metric-card">
         <h3>Estimated cost</h3>
         <p className="usage-metric-emphasis">
-          {formatEstimatedCost(totals.estimatedCostUsd)}
+          {formatEstimatedCost(
+            totals.estimatedCostUsd,
+            totals.estimatedCostIsPartial
+          )}
         </p>
+        {totals.estimatedCostIsPartial ? <p>Partial estimate</p> : null}
       </article>
 
       <article className="card usage-metric-card">
@@ -858,6 +901,14 @@ function InstanceStatusCard(props: {
           <strong>{formatNumber(instance.todayUsageTokens)} tokens</strong>
         </p>
         <p>
+          <span>Main LLM</span>
+          <strong>{formatMainLlmLabel(instance.runtime)}</strong>
+        </p>
+        <p>
+          <span>Daily limit</span>
+          <strong>{formatDailyTokenLimit(instance.runtime)}</strong>
+        </p>
+        <p>
           <span>Knowledge</span>
           <strong>
             {formatNumber(instance.noteCount)} /{' '}
@@ -1122,6 +1173,14 @@ function InstanceSnapshot(props: {
         <div className="summary-metric">
           <span>Next alarm</span>
           <strong>{formatRelativeDateTime(status.nextAlarm)}</strong>
+        </div>
+        <div className="summary-metric">
+          <span>Main LLM</span>
+          <strong>{formatMainLlmLabel(status.runtime)}</strong>
+        </div>
+        <div className="summary-metric">
+          <span>Daily limit</span>
+          <strong>{formatDailyTokenLimit(status.runtime)}</strong>
         </div>
         <div className="summary-metric">
           <span>Latest activity</span>

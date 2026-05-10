@@ -35,6 +35,17 @@ function createUnknownDashboardInstanceSummary(
     todayUsageTokens: 0,
     sevenDayUsageTokens: 0,
     thirtyDayUsageTokens: 0,
+    runtime: {
+      mainLlm: {
+        provider: 'unknown',
+        model: 'unknown',
+      },
+      tokenLimits: {
+        dailyHardLimit: 0,
+        dailySoftLimit: 0,
+        hardLimitBufferFactor: 0,
+      },
+    },
     latestNoteUpdatedAt: null,
     latestMemoryUpdatedAt: null,
   };

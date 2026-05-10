@@ -26,6 +26,14 @@ interface ModelPricing {
   outputPerMillionUsd: number;
 }
 
+/**
+ * usage 内訳から計算した推定コスト。
+ */
+interface UsageCostEstimate {
+  costUsd: number | null;
+  isPartial: boolean;
+}
+
 const OPENAI_MODEL_PRICING: Record<string, ModelPricing> = {
   'gpt-5.5': {
     inputPerMillionUsd: 5,
@@ -289,20 +297,32 @@ function estimateBreakdownCostUsd(
 /**
  * model/provider 別内訳から、現在の価格表に基づく推定 USD コストを返す。
  *
- * 未対応 provider/model が含まれる場合、全体の推定値は `null` にする。
+ * 未対応 provider/model が含まれる場合でも、計算できる内訳は合算し、
+ * 不明な内訳が混ざったことを `isPartial` で返す。
  *
  * @param usage 日次 usage
- * @returns 推定 USD コスト。不明な内訳がある場合は `null`
+ * @returns 推定 USD コストと部分推定かどうか
  */
-export function estimateUsageCostUsd(usage: Usage): number | null {
-  return usage.by_model.reduce<number | null>((total, breakdown) => {
+export function estimateUsageCostUsd(usage: Usage): UsageCostEstimate {
+  let knownCostUsd = 0;
+  let hasKnownCost = false;
+  let isPartial = false;
+
+  for (const breakdown of usage.by_model) {
     const cost = estimateBreakdownCostUsd(breakdown);
-    if (total === null || cost === null) {
-      return null;
+    if (cost === null) {
+      isPartial = true;
+      continue;
     }
 
-    return total + cost;
-  }, 0);
+    hasKnownCost = true;
+    knownCostUsd += cost;
+  }
+
+  return {
+    costUsd: hasKnownCost ? knownCostUsd : null,
+    isPartial,
+  };
 }
 
 /**
@@ -334,10 +354,12 @@ export function buildUsageStackedSeries(
         totalOutputTokens: 0,
         totalTokens: 0,
         estimatedCostUsd: 0,
+        estimatedCostIsPartial: false,
       };
     }
 
     assertValidUsage(dateKey, usage);
+    const costEstimate = estimateUsageCostUsd(usage);
 
     return {
       dateKey,
@@ -348,7 +370,8 @@ export function buildUsageStackedSeries(
       totalInputTokens: usage.total_input_tokens,
       totalOutputTokens: usage.output_tokens,
       totalTokens: usage.total_tokens,
-      estimatedCostUsd: estimateUsageCostUsd(usage),
+      estimatedCostUsd: costEstimate.costUsd,
+      estimatedCostIsPartial: costEstimate.isPartial,
     };
   });
 }
@@ -362,35 +385,41 @@ export function buildUsageStackedSeries(
 export function sumUsageBreakdown(
   series: DashboardUsageStackedPoint[]
 ): DashboardUsageBreakdownTotals {
-  return series.reduce<DashboardUsageBreakdownTotals>(
-    (total, point) => {
-      return {
-        cachedInputTokens: total.cachedInputTokens + point.cachedInputTokens,
-        uncachedInputTokens:
-          total.uncachedInputTokens + point.uncachedInputTokens,
-        normalOutputTokens: total.normalOutputTokens + point.normalOutputTokens,
-        reasoningOutputTokens:
-          total.reasoningOutputTokens + point.reasoningOutputTokens,
-        totalInputTokens: total.totalInputTokens + point.totalInputTokens,
-        totalOutputTokens: total.totalOutputTokens + point.totalOutputTokens,
-        totalTokens: total.totalTokens + point.totalTokens,
-        estimatedCostUsd:
-          total.estimatedCostUsd === null || point.estimatedCostUsd === null
-            ? null
-            : total.estimatedCostUsd + point.estimatedCostUsd,
-      };
-    },
-    {
-      cachedInputTokens: 0,
-      uncachedInputTokens: 0,
-      normalOutputTokens: 0,
-      reasoningOutputTokens: 0,
-      totalInputTokens: 0,
-      totalOutputTokens: 0,
-      totalTokens: 0,
-      estimatedCostUsd: 0,
+  let estimatedCostUsd = 0;
+  let hasKnownCost = false;
+  const totals: DashboardUsageBreakdownTotals = {
+    cachedInputTokens: 0,
+    uncachedInputTokens: 0,
+    normalOutputTokens: 0,
+    reasoningOutputTokens: 0,
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    totalTokens: 0,
+    estimatedCostUsd: null,
+    estimatedCostIsPartial: false,
+  };
+
+  for (const point of series) {
+    totals.cachedInputTokens += point.cachedInputTokens;
+    totals.uncachedInputTokens += point.uncachedInputTokens;
+    totals.normalOutputTokens += point.normalOutputTokens;
+    totals.reasoningOutputTokens += point.reasoningOutputTokens;
+    totals.totalInputTokens += point.totalInputTokens;
+    totals.totalOutputTokens += point.totalOutputTokens;
+    totals.totalTokens += point.totalTokens;
+    totals.estimatedCostIsPartial ||= point.estimatedCostIsPartial;
+
+    if (point.estimatedCostUsd !== null) {
+      estimatedCostUsd += point.estimatedCostUsd;
+      hasKnownCost ||= point.totalTokens > 0 || point.estimatedCostUsd > 0;
     }
-  );
+  }
+
+  return {
+    ...totals,
+    estimatedCostUsd:
+      totals.totalTokens === 0 || hasKnownCost ? estimatedCostUsd : null,
+  };
 }
 
 /**

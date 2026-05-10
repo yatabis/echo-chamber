@@ -9,6 +9,7 @@ import {
 } from '@echo-chamber/contracts/dashboard/schemas';
 import type {
   DashboardInstanceSummary,
+  DashboardRuntimeConfig,
   EchoStatus,
 } from '@echo-chamber/contracts/dashboard/types';
 import {
@@ -388,6 +389,7 @@ export class Echo extends DurableObject<Env> {
       name: definition.name,
       state,
       nextAlarm,
+      runtime: this.getDashboardRuntimeConfig(),
       memories,
       notes,
       usage,
@@ -421,6 +423,7 @@ export class Echo extends DurableObject<Env> {
       name: definition.name,
       state: await this.getState(),
       nextAlarm: await this.getNextAlarm(),
+      runtime: this.getDashboardRuntimeConfig(),
       noteCount: notes.length,
       memoryCount: memories.length,
       todayUsageTokens,
@@ -858,6 +861,29 @@ export class Echo extends DurableObject<Env> {
     return {
       provider: config.provider,
       model: config.model ?? 'unknown',
+    };
+  }
+
+  /**
+   * Dashboard に表示する実効 runtime 設定を返す。
+   *
+   * API key は secret なので含めず、provider/model と token limit だけを公開する。
+   *
+   * @returns Dashboard DTO に載せる runtime 設定
+   */
+  private getDashboardRuntimeConfig(): DashboardRuntimeConfig {
+    const mainLlm = resolveMainLLMConfig(
+      this._env,
+      this.getInstanceDefinitionOrThrow()
+    );
+    const tokenLimits = this.getTokenLimitConfig();
+
+    return {
+      mainLlm: {
+        provider: mainLlm.provider,
+        model: mainLlm.model ?? 'unknown',
+      },
+      tokenLimits,
     };
   }
 

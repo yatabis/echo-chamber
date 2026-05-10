@@ -60,6 +60,37 @@ export const usageSchema = tokenUsageSchema
 export const usageRecordSchema = z.record(z.string(), usageSchema);
 
 /**
+ * Dashboard に表示するメイン LLM 設定。
+ */
+export const dashboardMainLlmConfigSchema = z
+  .object({
+    provider: z.string(),
+    model: z.string(),
+  })
+  .strict();
+
+/**
+ * Dashboard に表示する token limit 設定。
+ */
+export const dashboardTokenLimitConfigSchema = z
+  .object({
+    dailyHardLimit: finiteNumber,
+    dailySoftLimit: finiteNumber,
+    hardLimitBufferFactor: finiteNumber,
+  })
+  .strict();
+
+/**
+ * Dashboard に表示する runtime 設定。
+ */
+export const dashboardRuntimeConfigSchema = z
+  .object({
+    mainLlm: dashboardMainLlmConfigSchema,
+    tokenLimits: dashboardTokenLimitConfigSchema,
+  })
+  .strict();
+
+/**
  * Dashboard に返す note payload。
  */
 export const noteSchema = z
@@ -95,6 +126,7 @@ export const echoStatusSchema = z
     name: z.string(),
     state: echoStateSchema,
     nextAlarm: z.string().nullable(),
+    runtime: dashboardRuntimeConfigSchema,
     memories: z.array(echoMemorySchema),
     notes: z.array(noteSchema),
     usage: usageRecordSchema,
@@ -115,6 +147,7 @@ export const dashboardInstanceSummarySchema = z
     todayUsageTokens: finiteNumber,
     sevenDayUsageTokens: finiteNumber,
     thirtyDayUsageTokens: finiteNumber,
+    runtime: dashboardRuntimeConfigSchema,
     latestNoteUpdatedAt: z.string().nullable(),
     latestMemoryUpdatedAt: z.string().nullable(),
   })
