@@ -23,6 +23,10 @@ const MAIN_LLM_ENV_KEYS = {
   apiKey: 'API_KEY',
 } as const satisfies Record<MainLLMConfigKey, string>;
 
+interface ResolveMainLLMValueOptions {
+  skipDefinition?: boolean;
+}
+
 export interface MainLLMConfig {
   provider: MainLLMProvider;
   api: MainLLMApi;
@@ -100,12 +104,14 @@ function resolveMainLLMDefinitionValue(
  * @param env Worker 環境変数
  * @param definition Echo instance 定義
  * @param key 解決対象の設定キー
+ * @param options definition fallback の扱い
  * @returns 解決した設定値。未設定なら `undefined`
  */
 function resolveMainLLMValue(
   env: MainLLMEnv,
   definition: EchoInstanceDefinition,
-  key: MainLLMConfigKey
+  key: MainLLMConfigKey,
+  options: ResolveMainLLMValueOptions = {}
 ): string | undefined {
   const envKey = MAIN_LLM_ENV_KEYS[key];
   const instanceEnvValue = normalizeOptionalEnv(
@@ -115,9 +121,11 @@ function resolveMainLLMValue(
     return instanceEnvValue;
   }
 
-  const definitionValue = resolveMainLLMDefinitionValue(definition, key);
-  if (definitionValue !== undefined) {
-    return definitionValue;
+  if (options.skipDefinition !== true) {
+    const definitionValue = resolveMainLLMDefinitionValue(definition, key);
+    if (definitionValue !== undefined) {
+      return definitionValue;
+    }
   }
 
   const globalEnvValue = normalizeOptionalEnv(
@@ -152,6 +160,23 @@ function resolveProvider(provider: string | undefined): MainLLMProvider {
 }
 
 /**
+ * provider 固有の model/baseURL を instance 定義から流用できるかを返す。
+ *
+ * @param definition Echo instance 定義
+ * @param provider 解決済み provider
+ * @returns definition の provider と一致する場合は `true`
+ */
+function canUseDefinitionProviderDetails(
+  definition: EchoInstanceDefinition,
+  provider: MainLLMProvider
+): boolean {
+  return (
+    definition.mainLlm.provider === undefined ||
+    definition.mainLlm.provider === provider
+  );
+}
+
+/**
  * Worker 環境変数と instance 定義からメイン LLM の接続設定を解決する。
  *
  * provider/model/baseURL は instance 固有 env、instance 定義、global env の順に解決する。
@@ -169,8 +194,16 @@ export function resolveMainLLMConfig(
   const provider = resolveProvider(
     resolveMainLLMValue(env, definition, 'provider')
   );
-  const model = resolveMainLLMValue(env, definition, 'model');
-  const baseURL = resolveMainLLMValue(env, definition, 'baseURL');
+  const skipDefinitionProviderDetails = !canUseDefinitionProviderDetails(
+    definition,
+    provider
+  );
+  const model = resolveMainLLMValue(env, definition, 'model', {
+    skipDefinition: skipDefinitionProviderDetails,
+  });
+  const baseURL = resolveMainLLMValue(env, definition, 'baseURL', {
+    skipDefinition: skipDefinitionProviderDetails,
+  });
   const providerApiKey = resolveMainLLMValue(env, definition, 'apiKey');
 
   if (provider === 'openai') {

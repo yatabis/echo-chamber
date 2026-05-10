@@ -139,6 +139,40 @@ describe('resolveMainLLMConfig', () => {
     });
   });
 
+  it('provider を LM Studio に切り替えた場合は OpenAI definition model を流用しない', () => {
+    expect(() =>
+      resolveMainLLMConfig(
+        createEnv({
+          RIN_MAIN_LLM_PROVIDER: 'lmstudio',
+          RIN_MAIN_LLM_BASE_URL: 'http://localhost:1234/v1',
+          RIN_MAIN_LLM_API_KEY: 'local-key',
+        } as Partial<Env>),
+        getEchoInstanceDefinition('rin')
+      )
+    ).toThrow(
+      'MAIN_LLM_MODEL is required when MAIN_LLM_PROVIDER is "lmstudio".'
+    );
+  });
+
+  it('provider を LM Studio に切り替えた場合は global model fallback を使える', () => {
+    expect(
+      resolveMainLLMConfig(
+        createEnv({
+          RIN_MAIN_LLM_PROVIDER: 'lmstudio',
+          RIN_MAIN_LLM_BASE_URL: 'http://localhost:1234/v1',
+          RIN_MAIN_LLM_API_KEY: 'local-key',
+          MAIN_LLM_MODEL: 'local-global-model',
+        } as Partial<Env>),
+        getEchoInstanceDefinition('rin')
+      )
+    ).toMatchObject({
+      provider: 'lmstudio',
+      model: 'local-global-model',
+      baseURL: 'http://localhost:1234/v1',
+      apiKey: 'local-key',
+    });
+  });
+
   it('LM Studio 指定でモデルが無い場合はエラーにする', () => {
     expect(() =>
       resolveMainLLMConfig(
