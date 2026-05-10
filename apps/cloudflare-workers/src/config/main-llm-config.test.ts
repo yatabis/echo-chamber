@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  getEchoInstanceDefinition,
+  type EchoInstanceDefinition,
+} from '@echo-chamber/core/echo/instance-definitions';
+
+import {
+  DEFAULT_OPENAI_RESPONSES_MODEL,
   MAX_TOKENS,
   PRESENCE_PENALTY,
   TEMPERATURE,
@@ -16,25 +22,37 @@ function createEnv(overrides: Partial<Env> = {}): Env {
   } as Env;
 }
 
+function createDefinition(
+  overrides: Partial<EchoInstanceDefinition> = {}
+): EchoInstanceDefinition {
+  return {
+    ...getEchoInstanceDefinition('rin'),
+    ...overrides,
+  };
+}
+
 describe('resolveMainLLMConfig', () => {
-  it('未指定時は OpenAI 設定を返す', () => {
-    expect(resolveMainLLMConfig(createEnv())).toEqual({
+  it('instance definition の OpenAI 設定を返す', () => {
+    expect(
+      resolveMainLLMConfig(createEnv(), getEchoInstanceDefinition('rin'))
+    ).toEqual({
       provider: 'openai',
       api: 'responses',
       apiKey: 'openai-key',
-      model: undefined,
+      model: DEFAULT_OPENAI_RESPONSES_MODEL,
       baseURL: undefined,
     });
   });
 
-  it('OpenAI のモデルと API key を環境変数で上書きできる', () => {
+  it('OpenAI のモデルと API key を instance 環境変数で上書きできる', () => {
     expect(
       resolveMainLLMConfig(
         createEnv({
-          MAIN_LLM_PROVIDER: 'openai',
-          MAIN_LLM_API_KEY: 'main-Key',
-          MAIN_LLM_MODEL: 'GPT-5.4',
-        })
+          RIN_MAIN_LLM_PROVIDER: 'openai',
+          RIN_MAIN_LLM_API_KEY: 'main-Key',
+          RIN_MAIN_LLM_MODEL: 'GPT-5.4',
+        } as Partial<Env>),
+        getEchoInstanceDefinition('rin')
       )
     ).toEqual({
       provider: 'openai',
@@ -45,14 +63,35 @@ describe('resolveMainLLMConfig', () => {
     });
   });
 
+  it('definition が空の項目は global 環境変数で補完できる', () => {
+    expect(
+      resolveMainLLMConfig(
+        createEnv({
+          MAIN_LLM_PROVIDER: 'openai',
+          MAIN_LLM_MODEL: 'GPT-5.2',
+        }),
+        createDefinition({
+          mainLlm: {},
+        })
+      )
+    ).toMatchObject({
+      provider: 'openai',
+      model: 'GPT-5.2',
+    });
+  });
+
   it('LM Studio は Chat Completions API 用の固定パラメータを返す', () => {
     expect(
       resolveMainLLMConfig(
         createEnv({
-          MAIN_LLM_PROVIDER: 'lmstudio',
-          MAIN_LLM_MODEL: 'openai/gpt-oss-20b',
-          MAIN_LLM_API_KEY: 'sk-lm-AbC123',
-          MAIN_LLM_BASE_URL: 'http://localhost:1234/V1',
+          RIN_MAIN_LLM_API_KEY: 'sk-lm-AbC123',
+        } as Partial<Env>),
+        createDefinition({
+          mainLlm: {
+            provider: 'lmstudio',
+            model: 'openai/gpt-oss-20b',
+            baseURL: 'http://localhost:1234/V1',
+          },
         })
       )
     ).toEqual({
@@ -72,15 +111,16 @@ describe('resolveMainLLMConfig', () => {
     });
   });
 
-  it('LM Studio の baseURL と API key を環境変数で上書きできる', () => {
+  it('LM Studio の baseURL と API key を instance 環境変数で上書きできる', () => {
     expect(
       resolveMainLLMConfig(
         createEnv({
-          MAIN_LLM_PROVIDER: 'lm-studio',
-          MAIN_LLM_API_KEY: 'local-key',
-          MAIN_LLM_MODEL: 'local-model',
-          MAIN_LLM_BASE_URL: 'http://127.0.0.1:4321/v1',
-        })
+          MARIE_MAIN_LLM_PROVIDER: 'lm-studio',
+          MARIE_MAIN_LLM_API_KEY: 'local-key',
+          MARIE_MAIN_LLM_MODEL: 'local-model',
+          MARIE_MAIN_LLM_BASE_URL: 'http://127.0.0.1:4321/v1',
+        } as Partial<Env>),
+        getEchoInstanceDefinition('marie')
       )
     ).toEqual({
       provider: 'lmstudio',
@@ -104,7 +144,8 @@ describe('resolveMainLLMConfig', () => {
       resolveMainLLMConfig(
         createEnv({
           MAIN_LLM_PROVIDER: 'lmstudio',
-        })
+        }),
+        createDefinition({ mainLlm: {} })
       )
     ).toThrow(
       'MAIN_LLM_MODEL is required when MAIN_LLM_PROVIDER is "lmstudio".'
@@ -115,10 +156,11 @@ describe('resolveMainLLMConfig', () => {
     expect(() =>
       resolveMainLLMConfig(
         createEnv({
-          MAIN_LLM_PROVIDER: 'lmstudio',
-          MAIN_LLM_MODEL: 'local-model',
-          MAIN_LLM_BASE_URL: 'http://localhost:1234/v1',
-        })
+          RIN_MAIN_LLM_PROVIDER: 'lmstudio',
+          RIN_MAIN_LLM_MODEL: 'local-model',
+          RIN_MAIN_LLM_BASE_URL: 'http://localhost:1234/v1',
+        } as Partial<Env>),
+        getEchoInstanceDefinition('rin')
       )
     ).toThrow(
       'MAIN_LLM_API_KEY is required when MAIN_LLM_PROVIDER is "lmstudio".'
@@ -129,10 +171,11 @@ describe('resolveMainLLMConfig', () => {
     expect(() =>
       resolveMainLLMConfig(
         createEnv({
-          MAIN_LLM_PROVIDER: 'lmstudio',
-          MAIN_LLM_MODEL: 'local-model',
-          MAIN_LLM_API_KEY: 'local-key',
-        })
+          RIN_MAIN_LLM_PROVIDER: 'lmstudio',
+          RIN_MAIN_LLM_MODEL: 'local-model',
+          RIN_MAIN_LLM_API_KEY: 'local-key',
+        } as Partial<Env>),
+        getEchoInstanceDefinition('rin')
       )
     ).toThrow(
       'MAIN_LLM_BASE_URL is required when MAIN_LLM_PROVIDER is "lmstudio".'
@@ -143,8 +186,9 @@ describe('resolveMainLLMConfig', () => {
     expect(() =>
       resolveMainLLMConfig(
         createEnv({
-          MAIN_LLM_PROVIDER: 'anthropic',
-        })
+          RIN_MAIN_LLM_PROVIDER: 'anthropic',
+        } as Partial<Env>),
+        getEchoInstanceDefinition('rin')
       )
     ).toThrow(
       'Unsupported MAIN_LLM_PROVIDER: anthropic. Use "openai" or "lmstudio".'

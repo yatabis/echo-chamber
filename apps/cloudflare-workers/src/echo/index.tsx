@@ -22,7 +22,6 @@ import { ThinkingEngine as AgentThinkingEngine } from '@echo-chamber/core/agent/
 import {
   ALARM_CONFIG,
   SCHEDULING_CONFIG,
-  TOKEN_LIMITS,
 } from '@echo-chamber/core/echo/constants';
 import {
   getEchoInstanceDefinition,
@@ -59,6 +58,10 @@ import {
   type EchoRuntimeBindings,
 } from '../config/echo-runtime-bindings';
 import { resolveMainLLMConfig } from '../config/main-llm-config';
+import {
+  resolveTokenLimitConfig,
+  type TokenLimitConfig,
+} from '../config/token-limit-config';
 import { createEmbeddingService } from '../embedding/create-embedding-service';
 import { createRerankingService } from '../reranking/create-reranking-service';
 import { createLogger } from '../utils/logger';
@@ -66,8 +69,6 @@ import { createLogger } from '../utils/logger';
 import { createToolExecutionContext } from './tool-context';
 
 import type { Logger } from '../utils/logger';
-
-const DEFAULT_OPENAI_RESPONSES_MODEL = 'gpt-5.5';
 
 async function fetchUnreadMessageCounts(
   token: string,
@@ -648,7 +649,8 @@ export class Echo extends DurableObject<Env> {
     nextWakeAt: Date | null
   ): Promise<boolean> {
     // soft limit 未満なら通常起動。ただし直近の next_wake_at があるときは待機する。
-    const softLimit = calculateDynamicTokenLimit(TOKEN_LIMITS.DAILY_SOFT_LIMIT);
+    const tokenLimits = this.getTokenLimitConfig();
+    const softLimit = calculateDynamicTokenLimit(tokenLimits.dailySoftLimit);
     if (totalTokens >= softLimit) {
       return false;
     }
@@ -683,9 +685,10 @@ export class Echo extends DurableObject<Env> {
     nextWakeAt: Date | null,
     shouldWarnOnHardLimit: boolean
   ): Promise<boolean> {
+    const tokenLimits = this.getTokenLimitConfig();
     const hardLimit = calculateDynamicTokenLimit(
-      TOKEN_LIMITS.DAILY_HARD_LIMIT,
-      TOKEN_LIMITS.HARD_LIMIT_BUFFER_FACTOR
+      tokenLimits.dailyHardLimit,
+      tokenLimits.hardLimitBufferFactor
     );
     if (totalTokens < hardLimit) {
       return true;
@@ -694,8 +697,8 @@ export class Echo extends DurableObject<Env> {
     if (shouldWarnOnHardLimit && nextWakeAt !== null) {
       const fallbackNextWakeAt = findNextTokenLimitRecoveryTime(
         totalTokens,
-        TOKEN_LIMITS.DAILY_HARD_LIMIT,
-        TOKEN_LIMITS.HARD_LIMIT_BUFFER_FACTOR
+        tokenLimits.dailyHardLimit,
+        tokenLimits.hardLimitBufferFactor
       );
       await this.saveNextWakeAt(fallbackNextWakeAt.toISOString());
       await this.logger.warn(
@@ -847,12 +850,27 @@ export class Echo extends DurableObject<Env> {
    * usage 内訳へ保存するメイン LLM の provider / model 名を返す。
    */
   private getMainLLMUsageIdentity(): { provider: string; model: string } {
-    const config = resolveMainLLMConfig(this._env);
+    const config = resolveMainLLMConfig(
+      this._env,
+      this.getInstanceDefinitionOrThrow()
+    );
 
     return {
       provider: config.provider,
-      model: config.model ?? DEFAULT_OPENAI_RESPONSES_MODEL,
+      model: config.model ?? 'unknown',
     };
+  }
+
+  /**
+   * 現在の instance に対応する token limit 設定を返す。
+   *
+   * @returns 実行判定で使う token limit 設定
+   */
+  private getTokenLimitConfig(): TokenLimitConfig {
+    return resolveTokenLimitConfig(
+      this._env,
+      this.getInstanceDefinitionOrThrow()
+    );
   }
 
   /**
@@ -916,7 +934,10 @@ export class Echo extends DurableObject<Env> {
    * @returns メイン LLM 用の OpenAI-compatible model adapter
    */
   private createMainLLMClient(thoughtLog: DiscordThoughtLog): ModelPort {
-    const config = resolveMainLLMConfig(this._env);
+    const config = resolveMainLLMConfig(
+      this._env,
+      this.getInstanceDefinitionOrThrow()
+    );
 
     if (config.api === 'chat_completions') {
       if (config.model === undefined) {

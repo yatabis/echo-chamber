@@ -38,6 +38,15 @@ const {
     id: 'rin',
     name: 'リン',
     systemPrompt: '<persona>Rin</persona>',
+    mainLlm: {
+      provider: 'openai' as const,
+      model: 'gpt-5.5',
+    },
+    tokenLimits: {
+      dailyHardLimit: 500_000,
+      dailySoftLimit: 300_000,
+      hardLimitBufferFactor: 1.5,
+    },
   },
   mockLogger: {
     debug: vi.fn(async (_message?: unknown, _context?: unknown) =>
@@ -210,10 +219,22 @@ async function ensureInitialized(
   ).ensureInitialized(id);
 }
 
+function setInitializedDefinition(
+  echo: Echo,
+  id: 'rin' | 'marie' = 'rin'
+): void {
+  (
+    echo as unknown as {
+      instanceDefinition: ReturnType<typeof getEchoInstanceDefinition> | null;
+    }
+  ).instanceDefinition = getEchoInstanceDefinition(id);
+}
+
 async function resolveRunDecision(echo: Echo): Promise<{
   shouldRun: boolean;
   unreadCheckMs: number;
 }> {
+  setInitializedDefinition(echo);
   return await (
     echo as unknown as {
       resolveRunDecision(): Promise<{
@@ -333,6 +354,7 @@ describe('Echo context storage', () => {
     const env = createMockEnv();
     const { storage, putFn } = createMockStorage();
     const echo = new Echo(createMockState(storage), env);
+    setInitializedDefinition(echo);
     const context: ContextSnapshot = {
       content: 'Summarized the session for the next cycle.',
       createdAt: '2025-01-25T15:00:00.000Z',
@@ -438,6 +460,7 @@ describe('Echo next_wake_at storage', () => {
     const env = createMockEnv();
     const { storage, putFn } = createMockStorage();
     const echo = new Echo(createMockState(storage), env);
+    setInitializedDefinition(echo);
     const nextWakeAt = '2026-03-23T00:00:00.000Z';
     const think = vi.fn().mockResolvedValue({
       context: null,
@@ -506,6 +529,7 @@ describe('Echo next_wake_at storage', () => {
     const env = createMockEnv();
     const { storage, deleteFn } = createMockStorage();
     const echo = new Echo(createMockState(storage), env);
+    setInitializedDefinition(echo);
     const think = vi.fn().mockResolvedValue({
       context: null,
       nextWakeAt: null,

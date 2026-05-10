@@ -64,21 +64,27 @@ pnpm dev
 
 ローカル開発時は、`apps/cloudflare-workers/.dev.vars` に上記キーを設定します。
 
-### メイン LLM の切り替え
+### インスタンスごとの LLM / token limit 設定
 
-通常は `OPENAI_API_KEY` を使い、OpenAI Responses API のデフォルトモデルで動作します。
-LM Studio の OpenAI 互換サーバーを使う場合は、Chat Completions API 経由で接続します。
-ローカルの `apps/cloudflare-workers/.dev.vars` に以下を追加します。
+通常の LLM / token limit は `packages/core/src/echo/instance-definitions.ts` の各 instance 定義で管理します。
+API key などの secret と、一時的な上書きだけを環境変数で指定します。
+
+LM Studio の OpenAI 互換サーバーを一時的に使う場合は、対象 instance の prefix を付けてローカルの `apps/cloudflare-workers/.dev.vars` に追加します。
 
 ```dotenv
-MAIN_LLM_PROVIDER=lmstudio
-MAIN_LLM_MODEL=qwen3.6-27b
-MAIN_LLM_BASE_URL=http://localhost:1234/v1
-MAIN_LLM_API_KEY=lm-studio
+MARIE_MAIN_LLM_PROVIDER=lmstudio
+MARIE_MAIN_LLM_MODEL=qwen3.6-27b
+MARIE_MAIN_LLM_BASE_URL=http://localhost:1234/v1
+MARIE_MAIN_LLM_API_KEY=lm-studio
+
+MARIE_DAILY_HARD_TOKEN_LIMIT=250000
+MARIE_DAILY_SOFT_TOKEN_LIMIT=150000
+MARIE_HARD_TOKEN_LIMIT_BUFFER_FACTOR=1.5
 ```
 
-`MAIN_LLM_MODEL` は LM Studio でロードしたモデルの identifier に合わせてください。
-`MAIN_LLM_BASE_URL` と `MAIN_LLM_API_KEY` も必須です。LM Studio 側で認証を無効にしている場合でも、OpenAI client 用に任意の API key 文字列を設定してください。
+prefix は `RIN_` / `MARIE_` を使います。prefix なしの `MAIN_LLM_*` や `DAILY_*_TOKEN_LIMIT` は、instance 定義に該当項目が無い場合の global fallback です。
+`*_MAIN_LLM_MODEL` は LM Studio でロードしたモデルの identifier に合わせてください。
+LM Studio では `*_MAIN_LLM_BASE_URL` と `*_MAIN_LLM_API_KEY` も必須です。LM Studio 側で認証を無効にしている場合でも、OpenAI client 用に任意の API key 文字列を設定してください。
 Chat Completions API 利用時は、prompt template が user message を必須とするモデル向けに `developer` message を `user` role として渡します。
 LM Studio には `max_tokens: 32768`、`temperature: 0.7`、`top_p: 0.8`、`presence_penalty: 1.5`、`top_k: 20`、`chat_template_kwargs: { enable_thinking: false }` を固定で指定します。
 

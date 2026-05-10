@@ -7,6 +7,31 @@ import {
   getEchoInstanceDefinition,
 } from './instance-definitions';
 
+const expectedInstanceRuntimeSettings = {
+  rin: {
+    mainLlm: {
+      provider: 'openai',
+      model: 'gpt-5.5',
+    },
+    tokenLimits: {
+      dailyHardLimit: 500_000,
+      dailySoftLimit: 300_000,
+      hardLimitBufferFactor: 1.5,
+    },
+  },
+  marie: {
+    mainLlm: {
+      provider: 'openai',
+      model: 'gpt-5.4-mini',
+    },
+    tokenLimits: {
+      dailyHardLimit: 2_500_000,
+      dailySoftLimit: 1_500_000,
+      hardLimitBufferFactor: 1.5,
+    },
+  },
+} as const;
+
 describe('echo instance definitions', () => {
   it('全 instance id を definition catalogue がカバーしている', () => {
     expect(Object.keys(ECHO_INSTANCE_DEFINITIONS).sort()).toEqual(
@@ -17,9 +42,24 @@ describe('echo instance definitions', () => {
   it.each(ECHO_INSTANCE_IDS)(
     '%s の definition を id 一致で取得できる',
     (instanceId) => {
-      expect(getEchoInstanceDefinition(instanceId)).toMatchObject({
-        id: instanceId,
-      });
+      const definition = getEchoInstanceDefinition(instanceId);
+
+      expect(definition.id).toBe(instanceId);
+      expect(definition.tokenLimits.dailyHardLimit).toBeGreaterThan(0);
+      expect(definition.tokenLimits.dailySoftLimit).toBeGreaterThan(0);
+      expect(definition.tokenLimits.hardLimitBufferFactor).toBeGreaterThan(0);
+    }
+  );
+
+  it.each(ECHO_INSTANCE_IDS)(
+    '%s の runtime 設定を catalogue から取得できる',
+    (instanceId) => {
+      const definition = getEchoInstanceDefinition(instanceId);
+
+      expect({
+        mainLlm: definition.mainLlm,
+        tokenLimits: definition.tokenLimits,
+      }).toEqual(expectedInstanceRuntimeSettings[instanceId]);
     }
   );
 });
