@@ -103,7 +103,18 @@ describe('dashboard contract schemas', () => {
           output_tokens: 5,
           reasoning_tokens: 1,
           total_tokens: 35,
-          total_cost: 0.001,
+          by_model: [
+            {
+              provider: 'openai',
+              model: 'gpt-5',
+              cached_input_tokens: 10,
+              uncached_input_tokens: 20,
+              total_input_tokens: 30,
+              output_tokens: 5,
+              reasoning_tokens: 1,
+              total_tokens: 35,
+            },
+          ],
         },
       },
     });
@@ -129,7 +140,18 @@ describe('dashboard contract schemas', () => {
             output_tokens: 5,
             reasoning_tokens: 1,
             total_tokens: '35',
-            total_cost: 0.001,
+            by_model: [
+              {
+                provider: 'openai',
+                model: 'gpt-5',
+                cached_input_tokens: 10,
+                uncached_input_tokens: 20,
+                total_input_tokens: 30,
+                output_tokens: 5,
+                reasoning_tokens: 1,
+                total_tokens: '35',
+              },
+            ],
           },
         },
       });

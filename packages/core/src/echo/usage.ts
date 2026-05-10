@@ -1,12 +1,25 @@
 import { formatDate } from '../utils/datetime';
 
-import type { Usage, UsageRecord } from './types';
+import type {
+  TokenUsage,
+  Usage,
+  UsageModelBreakdown,
+  UsageRecord,
+} from './types';
 import type { ModelUsage } from '../ports/model';
 
 const TOKYO_OFFSET_MS = 9 * 60 * 60 * 1000;
 const MINUTES_PER_TOKEN_LIMIT_WINDOW = 20 * 60;
 const USAGE_RESET_HOUR = 7;
 const MINUTE_MS = 60 * 1000;
+
+/**
+ * usage を発生させた model の識別情報。
+ */
+export interface UsageModelIdentity {
+  provider: string;
+  model: string;
+}
 
 /**
  * 今日の日付キーを 'YYYY-MM-DD' 形式で取得
@@ -29,13 +42,8 @@ export function addUsage(
   usage: Usage
 ): UsageRecord {
   if (usageRecord[key]) {
-    usageRecord[key].cached_input_tokens += usage.cached_input_tokens;
-    usageRecord[key].uncached_input_tokens += usage.uncached_input_tokens;
-    usageRecord[key].total_input_tokens += usage.total_input_tokens;
-    usageRecord[key].output_tokens += usage.output_tokens;
-    usageRecord[key].reasoning_tokens += usage.reasoning_tokens;
-    usageRecord[key].total_tokens += usage.total_tokens;
-    usageRecord[key].total_cost += usage.total_cost;
+    addTokenUsage(usageRecord[key], usage);
+    mergeUsageModelBreakdowns(usageRecord[key].by_model, usage.by_model);
   } else {
     usageRecord[key] = usage;
   }
@@ -46,32 +54,183 @@ export function addUsage(
 /**
  * provider 非依存の ModelUsage を Echo の Usage に変換する
  * @param usage provider 正規化済みの usage
+ * @param modelIdentity usage を発生させた provider / model
  * @returns EchoのUsage
  */
-export function convertUsage(usage: ModelUsage): Usage {
-  const cached_input_tokens = usage.cachedInputTokens;
-  const uncached_input_tokens = usage.uncachedInputTokens;
-  const total_input_tokens = usage.totalInputTokens;
-  const output_tokens = usage.outputTokens;
-  const reasoning_tokens = usage.reasoningTokens;
-  const total_tokens = usage.totalTokens;
-
-  // See https://platform.openai.com/docs/pricing
-  const total_cost =
-    (cached_input_tokens * 0.125 +
-      uncached_input_tokens * 1.25 +
-      output_tokens * 10) /
-    1_000_000;
+export function convertUsage(
+  usage: ModelUsage,
+  modelIdentity: UsageModelIdentity
+): Usage {
+  const tokenUsage = toTokenUsage(usage);
 
   return {
-    cached_input_tokens,
-    uncached_input_tokens,
-    total_input_tokens,
-    output_tokens,
-    reasoning_tokens,
-    total_tokens,
-    total_cost,
+    ...tokenUsage,
+    by_model: [
+      {
+        provider: modelIdentity.provider,
+        model: modelIdentity.model,
+        ...tokenUsage,
+      },
+    ],
   };
+}
+
+/**
+ * 永続化済み usage record を現在の token-only schema へ正規化する。
+ *
+ * 旧 schema の `total_cost` は保存済みデータに残っていても捨て、model 内訳が
+ * ない record は `unknown` bucket に寄せる。
+ *
+ * @param value Durable Object storage から読んだ未検証値
+ * @returns 現行 schema の usage record
+ */
+export function normalizeUsageRecord(value: unknown): UsageRecord {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).map(([key, usage]) => [key, normalizeUsage(usage)])
+  );
+}
+
+/**
+ * provider 非依存の `ModelUsage` を永続化用 token usage へ写す。
+ *
+ * @param usage provider adapter が正規化した model usage
+ * @returns Echo の usage record が保持する token usage
+ */
+function toTokenUsage(usage: ModelUsage): TokenUsage {
+  return {
+    cached_input_tokens: usage.cachedInputTokens,
+    uncached_input_tokens: usage.uncachedInputTokens,
+    total_input_tokens: usage.totalInputTokens,
+    output_tokens: usage.outputTokens,
+    reasoning_tokens: usage.reasoningTokens,
+    total_tokens: usage.totalTokens,
+  };
+}
+
+/**
+ * token usage の各数値フィールドを破壊的に加算する。
+ *
+ * @param total 加算先の token usage
+ * @param additional 加算する token usage
+ */
+function addTokenUsage(total: TokenUsage, additional: TokenUsage): void {
+  total.cached_input_tokens += additional.cached_input_tokens;
+  total.uncached_input_tokens += additional.uncached_input_tokens;
+  total.total_input_tokens += additional.total_input_tokens;
+  total.output_tokens += additional.output_tokens;
+  total.reasoning_tokens += additional.reasoning_tokens;
+  total.total_tokens += additional.total_tokens;
+}
+
+/**
+ * provider/model 別 usage 内訳を同一 bucket ごとに累積する。
+ *
+ * @param total 累積先の provider/model 別 usage 配列
+ * @param additional 今回追加する provider/model 別 usage 配列
+ */
+function mergeUsageModelBreakdowns(
+  total: UsageModelBreakdown[],
+  additional: UsageModelBreakdown[]
+): void {
+  for (const item of additional) {
+    const existing = total.find(
+      (candidate) =>
+        candidate.provider === item.provider && candidate.model === item.model
+    );
+    if (existing === undefined) {
+      total.push({ ...item });
+      continue;
+    }
+
+    addTokenUsage(existing, item);
+  }
+}
+
+/**
+ * 未検証の 1 日分 usage payload を現行 schema へ正規化する。
+ *
+ * @param value Durable Object storage から読んだ 1 日分の未検証 payload
+ * @returns 現行 schema の 1 日分 usage
+ */
+function normalizeUsage(value: unknown): Usage {
+  const tokenUsage = normalizeTokenUsage(value);
+  const rawBreakdowns =
+    value !== null &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    Array.isArray((value as { by_model?: unknown }).by_model)
+      ? (value as { by_model: unknown[] }).by_model
+      : null;
+  const by_model =
+    rawBreakdowns === null
+      ? [{ provider: 'unknown', model: 'unknown', ...tokenUsage }]
+      : rawBreakdowns.map(normalizeUsageModelBreakdown);
+
+  return {
+    ...tokenUsage,
+    by_model,
+  };
+}
+
+/**
+ * 未検証の provider/model 別 usage payload を現行 schema へ正規化する。
+ *
+ * @param value 未検証の provider/model 別 usage payload
+ * @returns 現行 schema の provider/model 別 usage
+ */
+function normalizeUsageModelBreakdown(value: unknown): UsageModelBreakdown {
+  const objectValue =
+    value !== null && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+
+  return {
+    provider:
+      typeof objectValue.provider === 'string'
+        ? objectValue.provider
+        : 'unknown',
+    model:
+      typeof objectValue.model === 'string' ? objectValue.model : 'unknown',
+    ...normalizeTokenUsage(value),
+  };
+}
+
+/**
+ * 未検証 payload から token usage の数値フィールドだけを取り出す。
+ *
+ * @param value 未検証の usage payload
+ * @returns 不正値を 0 に丸めた token usage
+ */
+function normalizeTokenUsage(value: unknown): TokenUsage {
+  const objectValue =
+    value !== null && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+
+  return {
+    cached_input_tokens: finiteNumberOrZero(objectValue.cached_input_tokens),
+    uncached_input_tokens: finiteNumberOrZero(
+      objectValue.uncached_input_tokens
+    ),
+    total_input_tokens: finiteNumberOrZero(objectValue.total_input_tokens),
+    output_tokens: finiteNumberOrZero(objectValue.output_tokens),
+    reasoning_tokens: finiteNumberOrZero(objectValue.reasoning_tokens),
+    total_tokens: finiteNumberOrZero(objectValue.total_tokens),
+  };
+}
+
+/**
+ * 有限数だけを受け入れ、それ以外を 0 に丸める。
+ *
+ * @param value 未検証の値
+ * @returns 有限数ならその値、それ以外は 0
+ */
+function finiteNumberOrZero(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
 /**

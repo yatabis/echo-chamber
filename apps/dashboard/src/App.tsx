@@ -120,6 +120,13 @@ function formatPercent(value: number): string {
 }
 
 /**
+ * 推定 USD コストを dashboard 表示用に整形する。
+ */
+function formatEstimatedCost(value: number | null): string {
+  return value === null ? 'Unknown' : `$${value.toFixed(4)}`;
+}
+
+/**
  * `YYYY-MM-DD` 形式の usage キーから表示用ラベル (`MM-DD`) を作る。
  */
 function formatDateLabel(dateKey: string): string {
@@ -291,7 +298,7 @@ function findPeakUsagePoint(
       dateKey: '-',
       normalOutputTokens: 0,
       reasoningOutputTokens: 0,
-      totalCost: 0,
+      estimatedCostUsd: 0,
       totalInputTokens: 0,
       totalOutputTokens: 0,
       totalTokens: 0,
@@ -381,8 +388,8 @@ function UsageTooltip(props: {
         <strong>{formatNumber(point.totalTokens)}</strong>
       </p>
       <p className="usage-tooltip-row usage-tooltip-total">
-        <span>Cost</span>
-        <strong>${point.totalCost.toFixed(4)}</strong>
+        <span>Estimated cost</span>
+        <strong>{formatEstimatedCost(point.estimatedCostUsd)}</strong>
       </p>
     </div>
   );
@@ -406,8 +413,8 @@ function UsageStackedChart(props: {
       <div className="section-header">
         <h2>Usage ({days} days)</h2>
         <p>
-          total {formatNumber(totals.totalTokens)} tokens / cost $
-          {totals.totalCost.toFixed(4)}
+          total {formatNumber(totals.totalTokens)} tokens / estimated cost{' '}
+          {formatEstimatedCost(totals.estimatedCostUsd)}
         </p>
       </div>
 
@@ -508,8 +515,10 @@ function UsageMetricsPanel(props: {
       </article>
 
       <article className="card usage-metric-card">
-        <h3>Total cost</h3>
-        <p className="usage-metric-emphasis">${totals.totalCost.toFixed(4)}</p>
+        <h3>Estimated cost</h3>
+        <p className="usage-metric-emphasis">
+          {formatEstimatedCost(totals.estimatedCostUsd)}
+        </p>
       </article>
 
       <article className="card usage-metric-card">

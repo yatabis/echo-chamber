@@ -6,13 +6,93 @@ import type {
   DashboardUsageRatioMetrics,
   DashboardUsageStackedPoint,
   Note,
+  TokenUsage,
   Usage,
+  UsageModelBreakdown,
   UsageRecord,
 } from './types';
 
 const USAGE_DAY_BOUNDARY_OFFSET_HOURS = 7;
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
+const TOKENS_PER_MILLION = 1_000_000;
+
+/**
+ * 100 万 tokens あたりの model 価格定義。
+ */
+interface ModelPricing {
+  inputPerMillionUsd: number;
+  cachedInputPerMillionUsd: number | null;
+  outputPerMillionUsd: number;
+}
+
+const OPENAI_MODEL_PRICING: Record<string, ModelPricing> = {
+  'gpt-5.5': {
+    inputPerMillionUsd: 5,
+    cachedInputPerMillionUsd: 0.5,
+    outputPerMillionUsd: 30,
+  },
+  'gpt-5.4': {
+    inputPerMillionUsd: 2.5,
+    cachedInputPerMillionUsd: 0.25,
+    outputPerMillionUsd: 15,
+  },
+  'gpt-5.4-mini': {
+    inputPerMillionUsd: 0.75,
+    cachedInputPerMillionUsd: 0.075,
+    outputPerMillionUsd: 4.5,
+  },
+  'gpt-5.2': {
+    inputPerMillionUsd: 1.75,
+    cachedInputPerMillionUsd: 0.175,
+    outputPerMillionUsd: 14,
+  },
+  'gpt-5.1': {
+    inputPerMillionUsd: 1.25,
+    cachedInputPerMillionUsd: 0.125,
+    outputPerMillionUsd: 10,
+  },
+  'gpt-5': {
+    inputPerMillionUsd: 1.25,
+    cachedInputPerMillionUsd: 0.125,
+    outputPerMillionUsd: 10,
+  },
+  'gpt-5-mini': {
+    inputPerMillionUsd: 0.25,
+    cachedInputPerMillionUsd: 0.025,
+    outputPerMillionUsd: 2,
+  },
+  'gpt-5-nano': {
+    inputPerMillionUsd: 0.05,
+    cachedInputPerMillionUsd: 0.005,
+    outputPerMillionUsd: 0.4,
+  },
+  'gpt-4.1': {
+    inputPerMillionUsd: 2,
+    cachedInputPerMillionUsd: 0.5,
+    outputPerMillionUsd: 8,
+  },
+  'gpt-4.1-mini': {
+    inputPerMillionUsd: 0.4,
+    cachedInputPerMillionUsd: 0.1,
+    outputPerMillionUsd: 1.6,
+  },
+  'gpt-4.1-nano': {
+    inputPerMillionUsd: 0.1,
+    cachedInputPerMillionUsd: 0.025,
+    outputPerMillionUsd: 0.4,
+  },
+  'gpt-4o': {
+    inputPerMillionUsd: 2.5,
+    cachedInputPerMillionUsd: 1.25,
+    outputPerMillionUsd: 10,
+  },
+  'gpt-4o-mini': {
+    inputPerMillionUsd: 0.15,
+    cachedInputPerMillionUsd: 0.075,
+    outputPerMillionUsd: 0.6,
+  },
+};
 
 /**
  * Dashboard 用の usage 期間キー配列を生成する。
@@ -40,7 +120,18 @@ function buildUsageDateKeys(
   });
 }
 
-function assertValidUsage(dateKey: string, usage: Usage): void {
+/**
+ * token usage の数値整合性を検証する。
+ *
+ * @param dateKey 検証対象の usage 日付キー
+ * @param usage 検証対象の token usage
+ * @param path エラー表示用のフィールドパス
+ */
+function assertValidTokenUsage(
+  dateKey: string,
+  usage: TokenUsage,
+  path = 'usage'
+): void {
   const numericFields: [string, number][] = [
     ['cached_input_tokens', usage.cached_input_tokens],
     ['uncached_input_tokens', usage.uncached_input_tokens],
@@ -48,25 +139,24 @@ function assertValidUsage(dateKey: string, usage: Usage): void {
     ['output_tokens', usage.output_tokens],
     ['reasoning_tokens', usage.reasoning_tokens],
     ['total_tokens', usage.total_tokens],
-    ['total_cost', usage.total_cost],
   ];
 
   for (const [fieldName, value] of numericFields) {
     if (!Number.isFinite(value)) {
       throw new Error(
-        `Invalid usage value for ${dateKey}: ${fieldName} is not finite`
+        `Invalid usage value for ${dateKey}: ${path}.${fieldName} is not finite`
       );
     }
     if (value < 0) {
       throw new Error(
-        `Invalid usage value for ${dateKey}: ${fieldName} is negative`
+        `Invalid usage value for ${dateKey}: ${path}.${fieldName} is negative`
       );
     }
   }
 
   if (usage.reasoning_tokens > usage.output_tokens) {
     throw new Error(
-      `Invalid usage value for ${dateKey}: reasoning_tokens exceeds output_tokens`
+      `Invalid usage value for ${dateKey}: ${path}.reasoning_tokens exceeds output_tokens`
     );
   }
 
@@ -75,15 +165,144 @@ function assertValidUsage(dateKey: string, usage: Usage): void {
     usage.total_input_tokens
   ) {
     throw new Error(
-      `Invalid usage value for ${dateKey}: input token fields are inconsistent`
+      `Invalid usage value for ${dateKey}: ${path}.input token fields are inconsistent`
     );
   }
 
   if (usage.total_input_tokens + usage.output_tokens !== usage.total_tokens) {
     throw new Error(
-      `Invalid usage value for ${dateKey}: total_tokens is inconsistent with input/output`
+      `Invalid usage value for ${dateKey}: ${path}.total_tokens is inconsistent with input/output`
     );
   }
+}
+
+/**
+ * 日次 usage と provider/model 別内訳の整合性を検証する。
+ *
+ * @param dateKey 検証対象の usage 日付キー
+ * @param usage 検証対象の日次 usage
+ */
+function assertValidUsage(dateKey: string, usage: Usage): void {
+  assertValidTokenUsage(dateKey, usage);
+
+  if (usage.by_model.length === 0) {
+    throw new Error(`Invalid usage value for ${dateKey}: by_model is empty`);
+  }
+
+  for (const [index, breakdown] of usage.by_model.entries()) {
+    assertValidTokenUsage(dateKey, breakdown, `by_model[${index}]`);
+  }
+
+  const breakdownTotal = usage.by_model.reduce<TokenUsage>(
+    (total, breakdown) => {
+      return {
+        cached_input_tokens:
+          total.cached_input_tokens + breakdown.cached_input_tokens,
+        uncached_input_tokens:
+          total.uncached_input_tokens + breakdown.uncached_input_tokens,
+        total_input_tokens:
+          total.total_input_tokens + breakdown.total_input_tokens,
+        output_tokens: total.output_tokens + breakdown.output_tokens,
+        reasoning_tokens: total.reasoning_tokens + breakdown.reasoning_tokens,
+        total_tokens: total.total_tokens + breakdown.total_tokens,
+      };
+    },
+    {
+      cached_input_tokens: 0,
+      uncached_input_tokens: 0,
+      total_input_tokens: 0,
+      output_tokens: 0,
+      reasoning_tokens: 0,
+      total_tokens: 0,
+    }
+  );
+
+  if (
+    breakdownTotal.cached_input_tokens !== usage.cached_input_tokens ||
+    breakdownTotal.uncached_input_tokens !== usage.uncached_input_tokens ||
+    breakdownTotal.total_input_tokens !== usage.total_input_tokens ||
+    breakdownTotal.output_tokens !== usage.output_tokens ||
+    breakdownTotal.reasoning_tokens !== usage.reasoning_tokens ||
+    breakdownTotal.total_tokens !== usage.total_tokens
+  ) {
+    throw new Error(
+      `Invalid usage value for ${dateKey}: by_model totals are inconsistent`
+    );
+  }
+}
+
+/**
+ * 価格表 lookup 用に model 名を正規化する。
+ *
+ * @param model usage 内訳に記録された model 名
+ * @returns trim と小文字化を適用した model 名
+ */
+function normalizeModelName(model: string): string {
+  return model.trim().toLowerCase();
+}
+
+/**
+ * provider/model 別 usage 内訳に対応する価格定義を返す。
+ *
+ * @param breakdown provider/model 別 usage 内訳
+ * @returns 対応する価格定義。未対応 provider/model なら `null`
+ */
+function resolveModelPricing(
+  breakdown: UsageModelBreakdown
+): ModelPricing | null {
+  if (breakdown.provider !== 'openai') {
+    return null;
+  }
+
+  return OPENAI_MODEL_PRICING[normalizeModelName(breakdown.model)] ?? null;
+}
+
+/**
+ * provider/model 別 usage 内訳の推定 USD コストを計算する。
+ *
+ * @param breakdown provider/model 別 usage 内訳
+ * @returns 推定 USD コスト。価格定義がない場合は `null`
+ */
+function estimateBreakdownCostUsd(
+  breakdown: UsageModelBreakdown
+): number | null {
+  const pricing = resolveModelPricing(breakdown);
+  if (pricing === null) {
+    return null;
+  }
+  if (
+    breakdown.cached_input_tokens > 0 &&
+    pricing.cachedInputPerMillionUsd === null
+  ) {
+    return null;
+  }
+
+  return (
+    (breakdown.uncached_input_tokens * pricing.inputPerMillionUsd +
+      breakdown.cached_input_tokens *
+        (pricing.cachedInputPerMillionUsd ?? pricing.inputPerMillionUsd) +
+      breakdown.output_tokens * pricing.outputPerMillionUsd) /
+    TOKENS_PER_MILLION
+  );
+}
+
+/**
+ * model/provider 別内訳から、現在の価格表に基づく推定 USD コストを返す。
+ *
+ * 未対応 provider/model が含まれる場合、全体の推定値は `null` にする。
+ *
+ * @param usage 日次 usage
+ * @returns 推定 USD コスト。不明な内訳がある場合は `null`
+ */
+export function estimateUsageCostUsd(usage: Usage): number | null {
+  return usage.by_model.reduce<number | null>((total, breakdown) => {
+    const cost = estimateBreakdownCostUsd(breakdown);
+    if (total === null || cost === null) {
+      return null;
+    }
+
+    return total + cost;
+  }, 0);
 }
 
 /**
@@ -114,7 +333,7 @@ export function buildUsageStackedSeries(
         totalInputTokens: 0,
         totalOutputTokens: 0,
         totalTokens: 0,
-        totalCost: 0,
+        estimatedCostUsd: 0,
       };
     }
 
@@ -129,7 +348,7 @@ export function buildUsageStackedSeries(
       totalInputTokens: usage.total_input_tokens,
       totalOutputTokens: usage.output_tokens,
       totalTokens: usage.total_tokens,
-      totalCost: usage.total_cost,
+      estimatedCostUsd: estimateUsageCostUsd(usage),
     };
   });
 }
@@ -155,7 +374,10 @@ export function sumUsageBreakdown(
         totalInputTokens: total.totalInputTokens + point.totalInputTokens,
         totalOutputTokens: total.totalOutputTokens + point.totalOutputTokens,
         totalTokens: total.totalTokens + point.totalTokens,
-        totalCost: total.totalCost + point.totalCost,
+        estimatedCostUsd:
+          total.estimatedCostUsd === null || point.estimatedCostUsd === null
+            ? null
+            : total.estimatedCostUsd + point.estimatedCostUsd,
       };
     },
     {
@@ -166,11 +388,18 @@ export function sumUsageBreakdown(
       totalInputTokens: 0,
       totalOutputTokens: 0,
       totalTokens: 0,
-      totalCost: 0,
+      estimatedCostUsd: 0,
     }
   );
 }
 
+/**
+ * 分母が 0 の場合に 0 を返す安全な比率計算。
+ *
+ * @param value 分子
+ * @param base 分母
+ * @returns `value / base`。分母が 0 の場合は 0
+ */
 function ratioOrZero(value: number, base: number): number {
   if (base === 0) {
     return 0;

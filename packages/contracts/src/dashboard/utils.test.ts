@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import type { Note, UsageRecord } from '@echo-chamber/core/echo/types';
-
 import {
   buildUsageRatioMetrics,
   buildUsageStackedSeries,
   filterNotes,
   sumUsageBreakdown,
 } from './utils';
+
+import type { Note, UsageRecord } from './types';
 
 describe('buildUsageStackedSeries', () => {
   it('7日分の系列を生成し、欠損日は0埋めする', () => {
@@ -19,7 +19,18 @@ describe('buildUsageStackedSeries', () => {
         output_tokens: 7,
         reasoning_tokens: 2,
         total_tokens: 37,
-        total_cost: 0.001,
+        by_model: [
+          {
+            provider: 'openai',
+            model: 'gpt-5',
+            cached_input_tokens: 10,
+            uncached_input_tokens: 20,
+            total_input_tokens: 30,
+            output_tokens: 7,
+            reasoning_tokens: 2,
+            total_tokens: 37,
+          },
+        ],
       },
       '2026-02-22': {
         cached_input_tokens: 5,
@@ -28,7 +39,18 @@ describe('buildUsageStackedSeries', () => {
         output_tokens: 4,
         reasoning_tokens: 1,
         total_tokens: 24,
-        total_cost: 0.0008,
+        by_model: [
+          {
+            provider: 'openai',
+            model: 'gpt-5-mini',
+            cached_input_tokens: 5,
+            uncached_input_tokens: 15,
+            total_input_tokens: 20,
+            output_tokens: 4,
+            reasoning_tokens: 1,
+            total_tokens: 24,
+          },
+        ],
       },
     };
 
@@ -50,7 +72,7 @@ describe('buildUsageStackedSeries', () => {
       totalInputTokens: 0,
       totalOutputTokens: 0,
       totalTokens: 0,
-      totalCost: 0,
+      estimatedCostUsd: 0,
     });
     expect(series[4]).toMatchObject({
       cachedInputTokens: 10,
@@ -60,7 +82,7 @@ describe('buildUsageStackedSeries', () => {
       totalInputTokens: 30,
       totalOutputTokens: 7,
       totalTokens: 37,
-      totalCost: 0.001,
+      estimatedCostUsd: (10 * 0.125 + 20 * 1.25 + 7 * 10) / 1_000_000,
     });
     expect(series[6]).toMatchObject({
       cachedInputTokens: 5,
@@ -70,7 +92,7 @@ describe('buildUsageStackedSeries', () => {
       totalInputTokens: 20,
       totalOutputTokens: 4,
       totalTokens: 24,
-      totalCost: 0.0008,
+      estimatedCostUsd: (5 * 0.025 + 15 * 0.25 + 4 * 2) / 1_000_000,
     });
   });
 
@@ -87,7 +109,18 @@ describe('buildUsageStackedSeries', () => {
           output_tokens: 7,
           reasoning_tokens: 2,
           total_tokens: 37,
-          total_cost: 0.001,
+          by_model: [
+            {
+              provider: 'openai',
+              model: 'gpt-5',
+              cached_input_tokens: 10,
+              uncached_input_tokens: 20,
+              total_input_tokens: 30,
+              output_tokens: 7,
+              reasoning_tokens: 2,
+              total_tokens: 37,
+            },
+          ],
         },
       };
 
@@ -120,13 +153,55 @@ describe('buildUsageStackedSeries', () => {
             output_tokens: 5,
             reasoning_tokens: 6,
             total_tokens: 25,
-            total_cost: 0.001,
+            by_model: [
+              {
+                provider: 'openai',
+                model: 'gpt-5',
+                cached_input_tokens: 10,
+                uncached_input_tokens: 10,
+                total_input_tokens: 20,
+                output_tokens: 5,
+                reasoning_tokens: 6,
+                total_tokens: 25,
+              },
+            ],
           },
         },
         7,
         new Date('2026-02-22T12:00:00+09:00')
       );
     }).toThrow(/reasoning_tokens exceeds output_tokens/);
+  });
+
+  it('by_model の合計が日次合計と一致しない場合はエラーにする', () => {
+    expect(() => {
+      buildUsageStackedSeries(
+        {
+          '2026-02-22': {
+            cached_input_tokens: 10,
+            uncached_input_tokens: 10,
+            total_input_tokens: 20,
+            output_tokens: 5,
+            reasoning_tokens: 1,
+            total_tokens: 25,
+            by_model: [
+              {
+                provider: 'openai',
+                model: 'gpt-5',
+                cached_input_tokens: 1,
+                uncached_input_tokens: 1,
+                total_input_tokens: 2,
+                output_tokens: 1,
+                reasoning_tokens: 0,
+                total_tokens: 3,
+              },
+            ],
+          },
+        },
+        7,
+        new Date('2026-02-22T12:00:00+09:00')
+      );
+    }).toThrow(/by_model totals are inconsistent/);
   });
 });
 
@@ -141,7 +216,18 @@ describe('sumUsageBreakdown', () => {
           output_tokens: 5,
           reasoning_tokens: 1,
           total_tokens: 25,
-          total_cost: 0.001,
+          by_model: [
+            {
+              provider: 'openai',
+              model: 'gpt-5',
+              cached_input_tokens: 10,
+              uncached_input_tokens: 10,
+              total_input_tokens: 20,
+              output_tokens: 5,
+              reasoning_tokens: 1,
+              total_tokens: 25,
+            },
+          ],
         },
         '2026-02-22': {
           cached_input_tokens: 2,
@@ -150,7 +236,18 @@ describe('sumUsageBreakdown', () => {
           output_tokens: 4,
           reasoning_tokens: 0,
           total_tokens: 9,
-          total_cost: 0.0004,
+          by_model: [
+            {
+              provider: 'openai',
+              model: 'gpt-5-mini',
+              cached_input_tokens: 2,
+              uncached_input_tokens: 3,
+              total_input_tokens: 5,
+              output_tokens: 4,
+              reasoning_tokens: 0,
+              total_tokens: 9,
+            },
+          ],
         },
       },
       7,
@@ -167,8 +264,42 @@ describe('sumUsageBreakdown', () => {
       totalInputTokens: 25,
       totalOutputTokens: 9,
       totalTokens: 34,
-      totalCost: 0.0014,
+      estimatedCostUsd:
+        (10 * 0.125 + 10 * 1.25 + 5 * 10) / 1_000_000 +
+        (2 * 0.025 + 3 * 0.25 + 4 * 2) / 1_000_000,
     });
+  });
+
+  it('未対応 provider が含まれると推定コストを null にする', () => {
+    const series = buildUsageStackedSeries(
+      {
+        '2026-02-22': {
+          cached_input_tokens: 10,
+          uncached_input_tokens: 10,
+          total_input_tokens: 20,
+          output_tokens: 5,
+          reasoning_tokens: 1,
+          total_tokens: 25,
+          by_model: [
+            {
+              provider: 'lmstudio',
+              model: 'local-model',
+              cached_input_tokens: 10,
+              uncached_input_tokens: 10,
+              total_input_tokens: 20,
+              output_tokens: 5,
+              reasoning_tokens: 1,
+              total_tokens: 25,
+            },
+          ],
+        },
+      },
+      7,
+      new Date('2026-02-22T12:00:00+09:00')
+    );
+
+    expect(series[6]?.estimatedCostUsd).toBeNull();
+    expect(sumUsageBreakdown(series).estimatedCostUsd).toBeNull();
   });
 });
 
@@ -182,7 +313,7 @@ describe('buildUsageRatioMetrics', () => {
       totalInputTokens: 100,
       totalOutputTokens: 40,
       totalTokens: 140,
-      totalCost: 0.01,
+      estimatedCostUsd: 0.01,
     });
 
     expect(ratios.cacheRateInInput).toBeCloseTo(0.25, 10);
@@ -200,7 +331,7 @@ describe('buildUsageRatioMetrics', () => {
       totalInputTokens: 0,
       totalOutputTokens: 0,
       totalTokens: 0,
-      totalCost: 0,
+      estimatedCostUsd: 0,
     });
 
     expect(ratios).toEqual({

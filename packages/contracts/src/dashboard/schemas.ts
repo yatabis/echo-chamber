@@ -22,9 +22,9 @@ export const dashboardSummaryStateSchema = z.union([
 ]);
 
 /**
- * 日次 usage 1 件分の payload。
+ * token usage 1 件分の payload。
  */
-export const usageSchema = z
+export const tokenUsageSchema = z
   .object({
     cached_input_tokens: finiteNumber,
     uncached_input_tokens: finiteNumber,
@@ -32,7 +32,25 @@ export const usageSchema = z
     output_tokens: finiteNumber,
     reasoning_tokens: finiteNumber,
     total_tokens: finiteNumber,
-    total_cost: finiteNumber,
+  })
+  .strict();
+
+/**
+ * provider / model ごとの usage 内訳。
+ */
+export const usageModelBreakdownSchema = tokenUsageSchema
+  .extend({
+    provider: z.string(),
+    model: z.string(),
+  })
+  .strict();
+
+/**
+ * 日次 usage 1 件分の payload。
+ */
+export const usageSchema = tokenUsageSchema
+  .extend({
+    by_model: z.array(usageModelBreakdownSchema).min(1),
   })
   .strict();
 

@@ -6,10 +6,35 @@ import {
   calculateDynamicTokenLimit,
   findNextTokenLimitRecoveryTime,
   getTodayUsageKey,
+  normalizeUsageRecord,
 } from './usage';
 
 import type { Usage, UsageRecord } from './types';
 import type { ModelUsage } from '../ports/model';
+
+function createUsage(overrides: Partial<Usage> = {}): Usage {
+  return {
+    cached_input_tokens: 100,
+    uncached_input_tokens: 200,
+    total_input_tokens: 300,
+    output_tokens: 50,
+    reasoning_tokens: 10,
+    total_tokens: 350,
+    by_model: [
+      {
+        provider: 'openai',
+        model: 'gpt-5.5',
+        cached_input_tokens: 100,
+        uncached_input_tokens: 200,
+        total_input_tokens: 300,
+        output_tokens: 50,
+        reasoning_tokens: 10,
+        total_tokens: 350,
+      },
+    ],
+    ...overrides,
+  };
+}
 
 describe('getTodayUsageKey', () => {
   beforeEach(() => {
@@ -105,15 +130,7 @@ describe('addUsage', () => {
   it('新しいキーを追加する', () => {
     const usageRecord: UsageRecord = {};
     const key = '2025-01-01';
-    const usage: Usage = {
-      cached_input_tokens: 100,
-      uncached_input_tokens: 200,
-      total_input_tokens: 300,
-      output_tokens: 50,
-      reasoning_tokens: 10,
-      total_tokens: 350,
-      total_cost: 0.5,
-    };
+    const usage = createUsage();
 
     const result = addUsage(usageRecord, key, usage);
 
@@ -122,29 +139,32 @@ describe('addUsage', () => {
   });
 
   it('既存のキーに使用量を累積する', () => {
-    const existingUsage: Usage = {
-      cached_input_tokens: 100,
-      uncached_input_tokens: 200,
-      total_input_tokens: 300,
-      output_tokens: 50,
-      reasoning_tokens: 10,
-      total_tokens: 350,
-      total_cost: 0.5,
-    };
+    const existingUsage = createUsage();
 
     const usageRecord: UsageRecord = {
       '2025-01-01': existingUsage,
     };
 
-    const additionalUsage: Usage = {
+    const additionalUsage = createUsage({
       cached_input_tokens: 50,
       uncached_input_tokens: 100,
       total_input_tokens: 150,
       output_tokens: 25,
       reasoning_tokens: 5,
       total_tokens: 175,
-      total_cost: 0.25,
-    };
+      by_model: [
+        {
+          provider: 'openai',
+          model: 'gpt-5.5',
+          cached_input_tokens: 50,
+          uncached_input_tokens: 100,
+          total_input_tokens: 150,
+          output_tokens: 25,
+          reasoning_tokens: 5,
+          total_tokens: 175,
+        },
+      ],
+    });
 
     const result = addUsage(usageRecord, '2025-01-01', additionalUsage);
 
@@ -155,7 +175,18 @@ describe('addUsage', () => {
       output_tokens: 75,
       reasoning_tokens: 15,
       total_tokens: 525,
-      total_cost: 0.75,
+      by_model: [
+        {
+          provider: 'openai',
+          model: 'gpt-5.5',
+          cached_input_tokens: 150,
+          uncached_input_tokens: 300,
+          total_input_tokens: 450,
+          output_tokens: 75,
+          reasoning_tokens: 15,
+          total_tokens: 525,
+        },
+      ],
     });
   });
 
@@ -163,35 +194,47 @@ describe('addUsage', () => {
     const usageRecord: UsageRecord = {};
     const key = '2025-01-01';
 
-    const usage1: Usage = {
-      cached_input_tokens: 100,
-      uncached_input_tokens: 200,
-      total_input_tokens: 300,
-      output_tokens: 50,
-      reasoning_tokens: 10,
-      total_tokens: 350,
-      total_cost: 0.5,
-    };
-
-    const usage2: Usage = {
+    const usage1 = createUsage();
+    const usage2 = createUsage({
       cached_input_tokens: 50,
       uncached_input_tokens: 100,
       total_input_tokens: 150,
       output_tokens: 25,
       reasoning_tokens: 5,
       total_tokens: 175,
-      total_cost: 0.25,
-    };
-
-    const usage3: Usage = {
+      by_model: [
+        {
+          provider: 'openai',
+          model: 'gpt-5.5',
+          cached_input_tokens: 50,
+          uncached_input_tokens: 100,
+          total_input_tokens: 150,
+          output_tokens: 25,
+          reasoning_tokens: 5,
+          total_tokens: 175,
+        },
+      ],
+    });
+    const usage3 = createUsage({
       cached_input_tokens: 25,
       uncached_input_tokens: 50,
       total_input_tokens: 75,
       output_tokens: 10,
       reasoning_tokens: 2,
       total_tokens: 85,
-      total_cost: 0.1,
-    };
+      by_model: [
+        {
+          provider: 'openai',
+          model: 'gpt-5-mini',
+          cached_input_tokens: 25,
+          uncached_input_tokens: 50,
+          total_input_tokens: 75,
+          output_tokens: 10,
+          reasoning_tokens: 2,
+          total_tokens: 85,
+        },
+      ],
+    });
 
     addUsage(usageRecord, key, usage1);
     addUsage(usageRecord, key, usage2);
@@ -204,32 +247,55 @@ describe('addUsage', () => {
       output_tokens: 85,
       reasoning_tokens: 17,
       total_tokens: 610,
-      total_cost: 0.85,
+      by_model: [
+        {
+          provider: 'openai',
+          model: 'gpt-5.5',
+          cached_input_tokens: 150,
+          uncached_input_tokens: 300,
+          total_input_tokens: 450,
+          output_tokens: 75,
+          reasoning_tokens: 15,
+          total_tokens: 525,
+        },
+        {
+          provider: 'openai',
+          model: 'gpt-5-mini',
+          cached_input_tokens: 25,
+          uncached_input_tokens: 50,
+          total_input_tokens: 75,
+          output_tokens: 10,
+          reasoning_tokens: 2,
+          total_tokens: 85,
+        },
+      ],
     });
   });
 
   it('異なる複数のキーを処理する', () => {
     const usageRecord: UsageRecord = {};
 
-    const usage1: Usage = {
-      cached_input_tokens: 100,
-      uncached_input_tokens: 200,
-      total_input_tokens: 300,
-      output_tokens: 50,
-      reasoning_tokens: 10,
-      total_tokens: 350,
-      total_cost: 0.5,
-    };
-
-    const usage2: Usage = {
+    const usage1 = createUsage();
+    const usage2 = createUsage({
       cached_input_tokens: 50,
       uncached_input_tokens: 100,
       total_input_tokens: 150,
       output_tokens: 25,
       reasoning_tokens: 5,
       total_tokens: 175,
-      total_cost: 0.25,
-    };
+      by_model: [
+        {
+          provider: 'openai',
+          model: 'gpt-5.5',
+          cached_input_tokens: 50,
+          uncached_input_tokens: 100,
+          total_input_tokens: 150,
+          output_tokens: 25,
+          reasoning_tokens: 5,
+          total_tokens: 175,
+        },
+      ],
+    });
 
     addUsage(usageRecord, '2025-01-01', usage1);
     const result = addUsage(usageRecord, '2025-01-02', usage2);
@@ -251,7 +317,10 @@ describe('convertUsage', () => {
       totalTokens: 1500,
     };
 
-    const result = convertUsage(responseUsage);
+    const result = convertUsage(responseUsage, {
+      provider: 'openai',
+      model: 'gpt-5.5',
+    });
 
     expect(result).toEqual({
       cached_input_tokens: 200,
@@ -260,96 +329,57 @@ describe('convertUsage', () => {
       output_tokens: 500,
       reasoning_tokens: 50,
       total_tokens: 1500,
-      total_cost: (200 * 0.125 + 800 * 1.25 + 500 * 10) / 1_000_000, // 0.006025
+      by_model: [
+        {
+          provider: 'openai',
+          model: 'gpt-5.5',
+          cached_input_tokens: 200,
+          uncached_input_tokens: 800,
+          total_input_tokens: 1000,
+          output_tokens: 500,
+          reasoning_tokens: 50,
+          total_tokens: 1500,
+        },
+      ],
     });
   });
+});
 
-  it('料金計算が正確である', () => {
-    const responseUsage: ModelUsage = {
-      cachedInputTokens: 500,
-      uncachedInputTokens: 1500,
-      totalInputTokens: 2000,
-      outputTokens: 1000,
-      reasoningTokens: 100,
-      totalTokens: 3000,
-    };
-
-    const result = convertUsage(responseUsage);
-
-    // 期待される料金計算: (500 * 0.125 + 1500 * 1.25 + 1000 * 10) / 1,000,000
-    const expectedCost = (500 * 0.125 + 1500 * 1.25 + 1000 * 10) / 1_000_000;
-
-    expect(result.total_cost).toBeCloseTo(expectedCost, 10);
-    // 正確な値: (62.5 + 1875 + 10000) / 1000000 = 11937.5 / 1000000 = 0.0119375
-    expect(result.total_cost).toBeCloseTo(0.0119375, 10);
-  });
-
-  it('キャッシュトークンがゼロの場合', () => {
-    const responseUsage: ModelUsage = {
-      cachedInputTokens: 0,
-      uncachedInputTokens: 1000,
-      totalInputTokens: 1000,
-      outputTokens: 500,
-      reasoningTokens: 25,
-      totalTokens: 1500,
-    };
-
-    const result = convertUsage(responseUsage);
-
-    expect(result).toEqual({
-      cached_input_tokens: 0,
-      uncached_input_tokens: 1000,
-      total_input_tokens: 1000,
-      output_tokens: 500,
-      reasoning_tokens: 25,
-      total_tokens: 1500,
-      total_cost: (0 * 0.125 + 1000 * 1.25 + 500 * 10) / 1_000_000, // 0.00625
+describe('normalizeUsageRecord', () => {
+  it('旧 total_cost 付き usage を token-only schema へ変換する', () => {
+    const result = normalizeUsageRecord({
+      '2025-01-01': {
+        cached_input_tokens: 100,
+        uncached_input_tokens: 200,
+        total_input_tokens: 300,
+        output_tokens: 50,
+        reasoning_tokens: 10,
+        total_tokens: 350,
+        total_cost: 0.5,
+      },
     });
-  });
-
-  it('リーズニングトークンがゼロの場合', () => {
-    const responseUsage: ModelUsage = {
-      cachedInputTokens: 100,
-      uncachedInputTokens: 400,
-      totalInputTokens: 500,
-      outputTokens: 300,
-      reasoningTokens: 0,
-      totalTokens: 800,
-    };
-
-    const result = convertUsage(responseUsage);
 
     expect(result).toEqual({
-      cached_input_tokens: 100,
-      uncached_input_tokens: 400,
-      total_input_tokens: 500,
-      output_tokens: 300,
-      reasoning_tokens: 0,
-      total_tokens: 800,
-      total_cost: (100 * 0.125 + 400 * 1.25 + 300 * 10) / 1_000_000, // 0.003512
-    });
-  });
-
-  it('すべてのトークンがキャッシュされている場合', () => {
-    const responseUsage: ModelUsage = {
-      cachedInputTokens: 1000,
-      uncachedInputTokens: 0,
-      totalInputTokens: 1000,
-      outputTokens: 200,
-      reasoningTokens: 10,
-      totalTokens: 1200,
-    };
-
-    const result = convertUsage(responseUsage);
-
-    expect(result).toEqual({
-      cached_input_tokens: 1000,
-      uncached_input_tokens: 0,
-      total_input_tokens: 1000,
-      output_tokens: 200,
-      reasoning_tokens: 10,
-      total_tokens: 1200,
-      total_cost: (1000 * 0.125 + 0 * 1.25 + 200 * 10) / 1_000_000, // 0.002125
+      '2025-01-01': {
+        cached_input_tokens: 100,
+        uncached_input_tokens: 200,
+        total_input_tokens: 300,
+        output_tokens: 50,
+        reasoning_tokens: 10,
+        total_tokens: 350,
+        by_model: [
+          {
+            provider: 'unknown',
+            model: 'unknown',
+            cached_input_tokens: 100,
+            uncached_input_tokens: 200,
+            total_input_tokens: 300,
+            output_tokens: 50,
+            reasoning_tokens: 10,
+            total_tokens: 350,
+          },
+        ],
+      },
     });
   });
 });

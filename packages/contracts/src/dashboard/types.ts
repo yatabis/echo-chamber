@@ -6,6 +6,8 @@ import type {
   echoStateSchema,
   echoStatusSchema,
   noteSchema,
+  tokenUsageSchema,
+  usageModelBreakdownSchema,
   usageRecordSchema,
   usageSchema,
 } from './schemas';
@@ -13,6 +15,8 @@ import type { z } from 'zod';
 
 export type EchoState = z.infer<typeof echoStateSchema>;
 export type DashboardSummaryState = z.infer<typeof dashboardSummaryStateSchema>;
+export type TokenUsage = z.infer<typeof tokenUsageSchema>;
+export type UsageModelBreakdown = z.infer<typeof usageModelBreakdownSchema>;
 export type Usage = z.infer<typeof usageSchema>;
 export type UsageRecord = z.infer<typeof usageRecordSchema>;
 export type Note = z.infer<typeof noteSchema>;
@@ -36,7 +40,7 @@ export interface DashboardUsageStackedPoint {
   totalInputTokens: number;
   totalOutputTokens: number;
   totalTokens: number;
-  totalCost: number;
+  estimatedCostUsd: number | null;
 }
 
 export interface DashboardUsageBreakdownTotals {
@@ -47,7 +51,7 @@ export interface DashboardUsageBreakdownTotals {
   totalInputTokens: number;
   totalOutputTokens: number;
   totalTokens: number;
-  totalCost: number;
+  estimatedCostUsd: number | null;
 }
 
 export interface DashboardUsageRatioMetrics {

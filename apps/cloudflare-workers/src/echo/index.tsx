@@ -40,6 +40,7 @@ import {
   convertUsage,
   findNextTokenLimitRecoveryTime,
   getTodayUsageKey,
+  normalizeUsageRecord,
 } from '@echo-chamber/core/echo/usage';
 import type { ContextSnapshot } from '@echo-chamber/core/ports/context';
 import type { ModelPort } from '@echo-chamber/core/ports/model';
@@ -65,6 +66,8 @@ import { createLogger } from '../utils/logger';
 import { createToolExecutionContext } from './tool-context';
 
 import type { Logger } from '../utils/logger';
+
+const DEFAULT_OPENAI_RESPONSES_MODEL = 'gpt-5.5';
 
 async function fetchUnreadMessageCounts(
   token: string,
@@ -439,8 +442,8 @@ export class Echo extends DurableObject<Env> {
    * 全期間のUsage履歴を取得
    */
   async getAllUsage(): Promise<UsageRecord> {
-    const usage = await this.storage.get<UsageRecord>('usage');
-    return usage ?? {};
+    const usage = await this.storage.get('usage');
+    return normalizeUsageRecord(usage);
   }
 
   /**
@@ -523,7 +526,9 @@ export class Echo extends DurableObject<Env> {
         await this.saveNextWakeAt(nextWakeAt);
       }
       await this.logger.info(`usage: ${usage.totalTokens}`);
-      const totalUsage = await this.updateUsage(convertUsage(usage));
+      const totalUsage = await this.updateUsage(
+        convertUsage(usage, this.getMainLLMUsageIdentity())
+      );
       await this.createThoughtLog().send(
         `Usage: ${usage.totalTokens} tokens (Total: ${totalUsage.total_tokens} tokens)`
       );
@@ -836,6 +841,18 @@ export class Echo extends DurableObject<Env> {
       `Usage accumulated for ${dateKey}: ${JSON.stringify(totalUsage, null, 2)}`
     );
     return totalUsage;
+  }
+
+  /**
+   * usage 内訳へ保存するメイン LLM の provider / model 名を返す。
+   */
+  private getMainLLMUsageIdentity(): { provider: string; model: string } {
+    const config = resolveMainLLMConfig(this._env);
+
+    return {
+      provider: config.provider,
+      model: config.model ?? DEFAULT_OPENAI_RESPONSES_MODEL,
+    };
   }
 
   /**

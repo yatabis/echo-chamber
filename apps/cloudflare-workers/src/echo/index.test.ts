@@ -184,7 +184,18 @@ function createUsage(totalTokens: number): Usage {
     output_tokens: 0,
     reasoning_tokens: 0,
     total_tokens: totalTokens,
-    total_cost: 0,
+    by_model: [
+      {
+        provider: 'openai',
+        model: 'gpt-5.5',
+        cached_input_tokens: 0,
+        uncached_input_tokens: 0,
+        total_input_tokens: 0,
+        output_tokens: 0,
+        reasoning_tokens: 0,
+        total_tokens: totalTokens,
+      },
+    ],
   };
 }
 
