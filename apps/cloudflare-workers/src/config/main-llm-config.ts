@@ -40,7 +40,13 @@ export interface MainLLMConfig {
   extraBody?: MainLLMExtraBody;
 }
 
-interface MainLLMEnv {
+/**
+ * main LLM 設定解決で参照する Worker 環境変数。
+ *
+ * instance 固有キーは `readEnv` で動的に参照するため、
+ * ここでは共通 fallback と OpenAI の既定 API key だけを明示する。
+ */
+export interface MainLLMEnv {
   OPENAI_API_KEY: string;
   MAIN_LLM_PROVIDER?: string;
   MAIN_LLM_MODEL?: string;

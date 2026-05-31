@@ -1,3 +1,4 @@
+import { emitEchoEvent } from '../ports/echo-event';
 import { getErrorMessage } from '../utils/error';
 
 import {
@@ -6,6 +7,7 @@ import {
   type FinishThinkingSessionRecord,
 } from './tools/thinking';
 
+import type { EchoEventPort } from '../ports/echo-event';
 import type { LoggerPort } from '../ports/logger';
 import type {
   ModelInputItem,
@@ -35,6 +37,7 @@ export interface RunAgentSessionInput {
   tools: readonly AgentSessionTool[];
   initialInput: ModelInputItem[];
   logger?: Pick<LoggerPort, 'warn'>;
+  events?: EchoEventPort;
   maxTurns?: number;
 }
 
@@ -102,10 +105,37 @@ function findTool(
  */
 export async function executeAgentToolCall(
   toolCall: ModelToolCall,
-  tools: readonly AgentSessionTool[]
+  tools: readonly AgentSessionTool[],
+  events?: EchoEventPort,
+  turnIndex?: number
 ): Promise<string> {
+  await emitEchoEvent(events, {
+    type: 'tool.called',
+    severity: 'info',
+    summary: `${toolCall.toolName} called`,
+    payload: {
+      callId: toolCall.callId,
+      toolName: toolCall.toolName,
+      turnIndex,
+      input: toolCall.input,
+    },
+  });
+
+  const startedAt = Date.now();
   const tool = findTool(tools, toolCall.toolName);
   if (tool === undefined) {
+    await emitEchoEvent(events, {
+      type: 'tool.failed',
+      severity: 'warn',
+      summary: `${toolCall.toolName} is not registered`,
+      payload: {
+        callId: toolCall.callId,
+        toolName: toolCall.toolName,
+        turnIndex,
+        durationMs: Date.now() - startedAt,
+        availableFunctions: tools.map((candidate) => candidate.name),
+      },
+    });
     return JSON.stringify({
       error: `Function '${toolCall.toolName}' is not registered`,
       available_functions: tools.map((candidate) => candidate.name),
@@ -113,12 +143,63 @@ export async function executeAgentToolCall(
   }
 
   try {
-    return await tool.execute(toolCall.input);
+    const output = await tool.execute(toolCall.input);
+    const parsedOutput = parseToolOutput(output);
+    const success = parsedOutput.success !== false;
+    await emitEchoEvent(events, {
+      type: success ? 'tool.completed' : 'tool.failed',
+      severity: success ? 'info' : 'warn',
+      summary: `${toolCall.toolName} ${success ? 'completed' : 'failed'}`,
+      payload: {
+        callId: toolCall.callId,
+        toolName: toolCall.toolName,
+        turnIndex,
+        durationMs: Date.now() - startedAt,
+        success,
+        error: parsedOutput.error,
+        outputLength: output.length,
+      },
+    });
+    return output;
   } catch (error) {
+    const message = getErrorMessage(error);
+    await emitEchoEvent(events, {
+      type: 'tool.failed',
+      severity: 'warn',
+      summary: `${toolCall.toolName} failed`,
+      payload: {
+        callId: toolCall.callId,
+        toolName: toolCall.toolName,
+        turnIndex,
+        durationMs: Date.now() - startedAt,
+        success: false,
+        error: message,
+      },
+    });
     return JSON.stringify({
       success: false,
-      error: getErrorMessage(error),
+      error: message,
     });
+  }
+}
+
+function parseToolOutput(output: string): {
+  success?: boolean;
+  error?: unknown;
+} {
+  try {
+    const parsed: unknown = JSON.parse(output);
+    if (typeof parsed !== 'object' || parsed === null) {
+      return {};
+    }
+
+    const record = parsed as Record<string, unknown>;
+    return {
+      success: typeof record.success === 'boolean' ? record.success : undefined,
+      error: record.error,
+    };
+  } catch {
+    return {};
   }
 }
 
@@ -166,7 +247,9 @@ function parseFinishThinkingInput(
  */
 async function createNextInput(
   toolCalls: readonly ModelToolCall[],
-  tools: readonly AgentSessionTool[]
+  tools: readonly AgentSessionTool[],
+  events: EchoEventPort | undefined,
+  turnIndex: number
 ): Promise<ModelInputItem[]> {
   if (toolCalls.length === 0) {
     return [];
@@ -176,7 +259,7 @@ async function createNextInput(
     toolCalls.map(async (toolCall) => ({
       type: 'tool_result' as const,
       callId: toolCall.callId,
-      output: await executeAgentToolCall(toolCall, tools),
+      output: await executeAgentToolCall(toolCall, tools, events, turnIndex),
     }))
   );
 }
@@ -195,6 +278,19 @@ export async function runAgentSession(
   let totalUsage = ZERO_MODEL_USAGE;
 
   for (let turn = 1; turn <= maxTurns; turn += 1) {
+    // Agent turns are sequential; event emission belongs to the same turn.
+    // eslint-disable-next-line no-await-in-loop
+    await emitEchoEvent(input.events, {
+      type: 'model.turn.started',
+      severity: 'debug',
+      summary: `model turn ${turn} started`,
+      payload: {
+        turnIndex: turn,
+        inputItemCount: currentInput.length,
+      },
+    });
+
+    const turnStartedAt = Date.now();
     // Agent turns are inherently sequential because each model response
     // depends on the previous turn's tool outputs.
     // eslint-disable-next-line no-await-in-loop
@@ -208,6 +304,21 @@ export async function runAgentSession(
     previousResponseToken = response.responseToken;
 
     const toolCalls = getToolCalls(response);
+    // Agent turns are sequential; event emission belongs to the same turn.
+    // eslint-disable-next-line no-await-in-loop
+    await emitEchoEvent(input.events, {
+      type: 'model.turn.completed',
+      severity: 'debug',
+      summary: `model turn ${turn} completed`,
+      payload: {
+        turnIndex: turn,
+        durationMs: Date.now() - turnStartedAt,
+        outputItemCount: response.output.length,
+        toolCallCount: toolCalls.length,
+        usage: response.usage,
+      },
+    });
+
     if (toolCalls.length === 0) {
       // The loop stays alive until finish_thinking appears explicitly.
       // eslint-disable-next-line no-await-in-loop
@@ -219,7 +330,12 @@ export async function runAgentSession(
     // Tool results, or an empty carry-over when no tools were used,
     // become the next model input for the following turn.
     // eslint-disable-next-line no-await-in-loop
-    currentInput = await createNextInput(toolCalls, input.tools);
+    currentInput = await createNextInput(
+      toolCalls,
+      input.tools,
+      input.events,
+      turn
+    );
     if (finishThinking !== null) {
       return {
         context: finishThinking.session_record,

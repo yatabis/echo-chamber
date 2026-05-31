@@ -43,6 +43,8 @@ import {
   normalizeUsageRecord,
 } from '@echo-chamber/core/echo/usage';
 import type { ContextSnapshot } from '@echo-chamber/core/ports/context';
+import { emitEchoEvent } from '@echo-chamber/core/ports/echo-event';
+import type { EchoEventPort } from '@echo-chamber/core/ports/echo-event';
 import type { ModelPort } from '@echo-chamber/core/ports/model';
 import type { EchoInstanceId } from '@echo-chamber/core/types/echo-config';
 import { isValidInstanceId } from '@echo-chamber/core/types/echo-config';
@@ -65,6 +67,7 @@ import {
 } from '../config/token-limit-config';
 import { createEmbeddingService } from '../embedding/create-embedding-service';
 import { createRerankingService } from '../reranking/create-reranking-service';
+import { createConsoleEchoEventPort } from '../utils/echo-event';
 import { createLogger } from '../utils/logger';
 
 import { createToolExecutionContext } from './tool-context';
@@ -119,8 +122,10 @@ export class Echo extends DurableObject<Env> {
   private readonly storage: DurableObjectStorage;
   private readonly router: Hono;
   private readonly logger: Logger;
+  private readonly events: EchoEventPort;
   private readonly _env: Env;
   private readonly noteSystem: NoteSystem;
+  private currentSessionId: string | null = null;
 
   // 遅延初期化されるプロパティ（ensureInitializedで設定されるためreadonlyではない）
   private executableTools: readonly AgentSessionTool[] | null = null;
@@ -140,6 +145,11 @@ export class Echo extends DurableObject<Env> {
     this.store = env.ECHO_KV;
     this.storage = ctx.storage;
     this.logger = createLogger(env);
+    this.events = createConsoleEchoEventPort({
+      source: 'cloudflare-workers',
+      getInstanceId: (): string | null => this.instanceDefinition?.id ?? null,
+      getSessionId: (): string | null => this.currentSessionId,
+    });
     this._env = env;
     this.noteSystem = new NoteSystem({
       storage: this.storage,
@@ -210,6 +220,7 @@ export class Echo extends DurableObject<Env> {
       embeddingService,
       rerankingService,
       logger: this.logger,
+      events: this.events,
     });
     const toolContext = createToolExecutionContext({
       chatBindings: this.getRuntimeBindingsOrThrow(),
@@ -511,6 +522,7 @@ export class Echo extends DurableObject<Env> {
     }
 
     await this.setState('Running');
+    this.currentSessionId = crypto.randomUUID();
     const name = await this.getName();
     await this.logger.info(`${name}が思考を開始しました。`);
     let thinkMs = 0;
@@ -533,6 +545,15 @@ export class Echo extends DurableObject<Env> {
       const totalUsage = await this.updateUsage(
         convertUsage(usage, this.getMainLLMUsageIdentity())
       );
+      await emitEchoEvent(this.events, {
+        type: 'usage.recorded',
+        severity: 'info',
+        summary: `usage recorded: ${usage.totalTokens} tokens`,
+        payload: {
+          usage,
+          totalUsage,
+        },
+      });
       await this.createThoughtLog().send(
         `Usage: ${usage.totalTokens} tokens (Total: ${totalUsage.total_tokens} tokens)`
       );
@@ -545,6 +566,7 @@ export class Echo extends DurableObject<Env> {
         `${name}の思考中にエラーが発生しました: ${getErrorMessage(error)}`
       );
     } finally {
+      this.currentSessionId = null;
       await this.setState('Idling');
     }
 
@@ -562,6 +584,11 @@ export class Echo extends DurableObject<Env> {
   private async resolveRunDecision(): Promise<RunDecision> {
     // Stateチェック
     if (!(await this.validateEchoState())) {
+      await this.emitRunDecisionEvaluated({
+        shouldRun: false,
+        reason: 'invalid_state',
+        unreadCheckMs: 0,
+      });
       return {
         shouldRun: false,
         unreadCheckMs: 0,
@@ -573,6 +600,11 @@ export class Echo extends DurableObject<Env> {
     const hasUnreadMessages = await this.validateChatMessage();
     const unreadCheckMs = Date.now() - unreadCheckStartedAt;
     if (hasUnreadMessages) {
+      await this.emitRunDecisionEvaluated({
+        shouldRun: true,
+        reason: 'unread_messages',
+        unreadCheckMs,
+      });
       return {
         shouldRun: true,
         unreadCheckMs,
@@ -583,38 +615,97 @@ export class Echo extends DurableObject<Env> {
     const totalTokens = todayUsage?.total_tokens ?? 0;
     const { nextWakeAt, hasReachedNextWakeAt } =
       await this.resolveNextWakeAtStatus();
+
+    return await this.resolveScheduledRunDecision({
+      unreadCheckMs,
+      totalTokens,
+      nextWakeAt,
+      hasReachedNextWakeAt,
+    });
+  }
+
+  /**
+   * 未読以外の通常起動条件を token limit と next_wake_at から判定する。
+   */
+  private async resolveScheduledRunDecision(input: {
+    unreadCheckMs: number;
+    totalTokens: number;
+    nextWakeAt: Date | null;
+    hasReachedNextWakeAt: boolean;
+  }): Promise<RunDecision> {
     if (
       !(await this.validateHardTokenLimit(
-        totalTokens,
-        nextWakeAt,
-        hasReachedNextWakeAt
+        input.totalTokens,
+        input.nextWakeAt,
+        input.hasReachedNextWakeAt
       ))
     ) {
+      await this.emitRunDecisionEvaluated({
+        shouldRun: false,
+        reason: 'hard_token_limit',
+        unreadCheckMs: input.unreadCheckMs,
+        totalTokens: input.totalTokens,
+        nextWakeAt: input.nextWakeAt?.toISOString() ?? null,
+      });
       return {
         shouldRun: false,
-        unreadCheckMs,
+        unreadCheckMs: input.unreadCheckMs,
       };
     }
 
-    if (hasReachedNextWakeAt && nextWakeAt !== null) {
+    if (input.hasReachedNextWakeAt && input.nextWakeAt !== null) {
       await this.logger.info(
-        `next_wake_at reached: ${nextWakeAt.toISOString()}`
+        `next_wake_at reached: ${input.nextWakeAt.toISOString()}`
       );
+      await this.emitRunDecisionEvaluated({
+        shouldRun: true,
+        reason: 'next_wake_at_reached',
+        unreadCheckMs: input.unreadCheckMs,
+        totalTokens: input.totalTokens,
+        nextWakeAt: input.nextWakeAt.toISOString(),
+      });
       return {
         shouldRun: true,
-        unreadCheckMs,
+        unreadCheckMs: input.unreadCheckMs,
       };
     }
 
     const shouldRunForSoftLimit = await this.validateSoftLimitRun(
-      totalTokens,
-      nextWakeAt
+      input.totalTokens,
+      input.nextWakeAt
     );
+    await this.emitRunDecisionEvaluated({
+      shouldRun: shouldRunForSoftLimit,
+      reason: shouldRunForSoftLimit
+        ? 'soft_limit_allows_run'
+        : 'soft_limit_skip',
+      unreadCheckMs: input.unreadCheckMs,
+      totalTokens: input.totalTokens,
+      nextWakeAt: input.nextWakeAt?.toISOString() ?? null,
+    });
 
     return {
       shouldRun: shouldRunForSoftLimit,
-      unreadCheckMs,
+      unreadCheckMs: input.unreadCheckMs,
     };
+  }
+
+  /**
+   * run / alarm の起動判定イベントを送る。
+   */
+  private async emitRunDecisionEvaluated(input: {
+    shouldRun: boolean;
+    reason: string;
+    unreadCheckMs: number;
+    totalTokens?: number;
+    nextWakeAt?: string | null;
+  }): Promise<void> {
+    await emitEchoEvent(this.events, {
+      type: 'run_decision.evaluated',
+      severity: input.shouldRun ? 'info' : 'debug',
+      summary: `run decision: ${input.shouldRun ? 'run' : 'skip'} (${input.reason})`,
+      payload: input,
+    });
   }
 
   /**
@@ -1004,6 +1095,7 @@ export class Echo extends DurableObject<Env> {
       model: this.createMainLLMClient(thoughtLog),
       thoughtLog,
       logger: this.logger,
+      events: this.events,
       context: {
         load: async (): Promise<ContextSnapshot | null> =>
           await this.loadContext(),

@@ -1,3 +1,4 @@
+import { emitEchoEvent } from '../ports/echo-event';
 import { getErrorMessage } from '../utils/error';
 
 import { buildAgentPromptMessages } from './prompt-builder';
@@ -10,6 +11,7 @@ import type {
 } from './prompt-builder';
 import type { AgentSessionTool } from './session';
 import type { ContextPort, ContextSnapshot } from '../ports/context';
+import type { EchoEventPort } from '../ports/echo-event';
 import type { LoggerPort } from '../ports/logger';
 import type { MemoryPort, MemorySearchResult } from '../ports/memory';
 import type {
@@ -29,6 +31,7 @@ export interface ThinkingEngineInput {
   model: ModelPort;
   thoughtLog: ThoughtLogPort;
   logger: LoggerPort;
+  events?: EchoEventPort;
   context: Pick<ContextPort, 'load'>;
   memory: Pick<MemoryPort, 'search'>;
   tools: readonly AgentSessionTool[];
@@ -101,30 +104,56 @@ export class ThinkingEngine {
    * 次回起動時刻
    */
   async think(): Promise<ThinkingEngineResult> {
+    await emitEchoEvent(this.input.events, {
+      type: 'session.started',
+      severity: 'info',
+      summary: 'thinking session started',
+    });
     await this.input.thoughtLog.send(THINKING_STARTED_MESSAGE);
 
-    const session = await runAgentSession({
-      model: this.input.model,
-      tools: this.input.tools,
-      initialInput: await this.buildInitialInput(),
-      logger: this.input.logger,
-    });
-    const completedAt = new Date().toISOString();
+    try {
+      const session = await runAgentSession({
+        model: this.input.model,
+        tools: this.input.tools,
+        initialInput: await this.buildInitialInput(),
+        logger: this.input.logger,
+        events: this.input.events,
+      });
+      const completedAt = new Date().toISOString();
+      const result = {
+        context:
+          session.context === undefined
+            ? null
+            : {
+                content: session.context.content,
+                createdAt: completedAt,
+                emotion: session.context.emotion,
+                updatedAt: completedAt,
+              },
+        nextWakeAt: session.nextWakeAt,
+        usage: session.usage,
+      };
 
-    await this.input.thoughtLog.send(THINKING_COMPLETED_MESSAGE);
-    return {
-      context:
-        session.context === undefined
-          ? null
-          : {
-              content: session.context.content,
-              createdAt: completedAt,
-              emotion: session.context.emotion,
-              updatedAt: completedAt,
-            },
-      nextWakeAt: session.nextWakeAt,
-      usage: session.usage,
-    };
+      await this.input.thoughtLog.send(THINKING_COMPLETED_MESSAGE);
+      await emitEchoEvent(this.input.events, {
+        type: 'session.completed',
+        severity: 'info',
+        summary: 'thinking session completed',
+        payload: {
+          nextWakeAt: result.nextWakeAt,
+          totalTokens: result.usage.totalTokens,
+          hasContext: result.context !== null,
+        },
+      });
+      return result;
+    } catch (error) {
+      await emitEchoEvent(this.input.events, {
+        type: 'session.failed',
+        severity: 'error',
+        summary: `thinking session failed: ${getErrorMessage(error)}`,
+      });
+      throw error;
+    }
   }
 
   /**

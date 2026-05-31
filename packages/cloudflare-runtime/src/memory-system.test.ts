@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Emotion } from '@echo-chamber/core/echo/types';
+import type { EchoEventPort } from '@echo-chamber/core/ports/echo-event';
 import type { LoggerPort } from '@echo-chamber/core/ports/logger';
 
 import { MemorySystem } from './memory-system';
@@ -431,6 +432,75 @@ describe('MemorySystem', () => {
       ]);
       expect(results[0]?.similarity).toBeCloseTo(0.97, 5);
       expect(results[1]?.similarity).toBeCloseTo(0.88, 5);
+    });
+
+    it('検索クエリ・候補・最終結果をイベントに流す', async () => {
+      const emit = vi.fn<EchoEventPort['emit']>().mockResolvedValue(undefined);
+      memorySystem = new MemorySystem({
+        sql: mockSql as unknown as SqlStorage,
+        embeddingService: mockEmbeddingService,
+        rerankingService: mockRerankingService,
+        logger: mockLogger,
+        events: { emit },
+      });
+      const embedding = new Float32Array(1536).fill(0.5);
+      (
+        mockEmbeddingService.embed as ReturnType<typeof vi.fn>
+      ).mockResolvedValue(Array.from(embedding));
+      mockedRerank.mockResolvedValue([{ id: 0, score: 0.93 }]);
+      mockSql._tables.memories = [
+        createMockMemoryRow({
+          id: 'memory-1',
+          content: 'Memory hit',
+          embedding: embedding.buffer,
+        }),
+      ];
+
+      await memorySystem.searchMemory('test query', 'episode');
+
+      expect(emit).toHaveBeenCalledWith({
+        type: 'memory.search.started',
+        category: 'memory',
+        severity: 'debug',
+        streams: ['system', 'analysis'],
+        summary: 'memory search started: test query',
+        payload: {
+          query: 'test query',
+          type: 'episode',
+        },
+      });
+      expect(emit).toHaveBeenCalledWith({
+        type: 'memory.search.completed',
+        category: 'memory',
+        severity: 'info',
+        streams: ['system', 'analysis'],
+        summary: 'memory search completed: 1 results',
+        payload: {
+          query: 'test query',
+          type: 'episode',
+          durationMs: 0,
+          sourceCount: 1,
+          vectorCandidateCount: 1,
+          finalResultCount: 1,
+          vectorCandidates: [
+            {
+              id: 'memory-1',
+              content: 'Memory hit',
+              type: 'episode',
+              vectorScore: 1.0000000000000002,
+            },
+          ],
+          finalResults: [
+            {
+              id: 'memory-1',
+              content: 'Memory hit',
+              type: 'episode',
+              vectorScore: 1.0000000000000002,
+              rerankScore: 0.93,
+            },
+          ],
+        },
+      });
     });
 
     it('type未指定時は全タイプのメモリを検索する', async () => {

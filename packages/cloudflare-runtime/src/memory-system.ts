@@ -1,4 +1,6 @@
 import type { Emotion, MemoryType } from '@echo-chamber/core/echo/types';
+import { emitEchoEvent } from '@echo-chamber/core/ports/echo-event';
+import type { EchoEventPort } from '@echo-chamber/core/ports/echo-event';
 import type { LoggerPort } from '@echo-chamber/core/ports/logger';
 import { formatDatetimeForAgent } from '@echo-chamber/core/utils/datetime';
 import { getErrorMessage } from '@echo-chamber/core/utils/error';
@@ -63,6 +65,7 @@ export class MemorySystem {
   private readonly embeddingService: EmbeddingService;
   private readonly rerankingService: RerankingService;
   private readonly logger: Pick<LoggerPort, 'debug' | 'info' | 'error'>;
+  private readonly events: EchoEventPort | undefined;
   private initialized = false;
 
   /**
@@ -75,11 +78,13 @@ export class MemorySystem {
     embeddingService: EmbeddingService;
     rerankingService: RerankingService;
     logger: Pick<LoggerPort, 'debug' | 'info' | 'error'>;
+    events?: EchoEventPort;
   }) {
     this.sql = options.sql;
     this.embeddingService = options.embeddingService;
     this.rerankingService = options.rerankingService;
     this.logger = options.logger;
+    this.events = options.events;
   }
 
   /**
@@ -213,6 +218,16 @@ export class MemorySystem {
     type?: MemoryType
   ): Promise<MemorySearchResult[]> {
     this.ensureSchema();
+    const startedAt = Date.now();
+    await emitEchoEvent(this.events, {
+      type: 'memory.search.started',
+      severity: 'debug',
+      summary: `memory search started: ${query}`,
+      payload: {
+        query,
+        type: type ?? 'all',
+      },
+    });
 
     let rows = this.getAllMemories();
 
@@ -222,6 +237,14 @@ export class MemorySystem {
     }
 
     if (rows.length === 0) {
+      await this.emitMemorySearchCompleted({
+        query,
+        type,
+        durationMs: Date.now() - startedAt,
+        sourceCount: 0,
+        vectorCandidates: [],
+        finalResults: [],
+      });
       return [];
     }
 
@@ -243,6 +266,14 @@ export class MemorySystem {
       .slice(0, VECTOR_CANDIDATE_LIMIT);
 
     if (vectorCandidates.length === 0) {
+      await this.emitMemorySearchCompleted({
+        query,
+        type,
+        durationMs: Date.now() - startedAt,
+        sourceCount: rows.length,
+        vectorCandidates: [],
+        finalResults: [],
+      });
       return [];
     }
 
@@ -265,10 +296,61 @@ export class MemorySystem {
         .join('\n')}`
     );
 
-    return rerankedMemories.map(({ row, rerankScore }) => ({
+    const results = rerankedMemories.map(({ row, rerankScore }) => ({
       ...this.rowToSnapshot(row),
       similarity: rerankScore,
     }));
+    await this.emitMemorySearchCompleted({
+      query,
+      type,
+      durationMs: Date.now() - startedAt,
+      sourceCount: rows.length,
+      vectorCandidates: vectorCandidates.map(({ row, similarity }) => ({
+        id: row.id,
+        content: row.content,
+        type: row.type,
+        vectorScore: similarity,
+      })),
+      finalResults: rerankedMemories.map(
+        ({ row, similarity, rerankScore }) => ({
+          id: row.id,
+          content: row.content,
+          type: row.type,
+          vectorScore: similarity,
+          rerankScore,
+        })
+      ),
+    });
+
+    return results;
+  }
+
+  /**
+   * memory search の分析用イベントを送る。
+   */
+  private async emitMemorySearchCompleted(input: {
+    query: string;
+    type?: MemoryType;
+    durationMs: number;
+    sourceCount: number;
+    vectorCandidates: Record<string, unknown>[];
+    finalResults: Record<string, unknown>[];
+  }): Promise<void> {
+    await emitEchoEvent(this.events, {
+      type: 'memory.search.completed',
+      severity: 'info',
+      summary: `memory search completed: ${input.finalResults.length} results`,
+      payload: {
+        query: input.query,
+        type: input.type ?? 'all',
+        durationMs: input.durationMs,
+        sourceCount: input.sourceCount,
+        vectorCandidateCount: input.vectorCandidates.length,
+        finalResultCount: input.finalResults.length,
+        vectorCandidates: input.vectorCandidates,
+        finalResults: input.finalResults,
+      },
+    });
   }
 
   /**

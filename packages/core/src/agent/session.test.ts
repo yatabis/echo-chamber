@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   accumulateModelUsage,
@@ -8,10 +8,15 @@ import {
 } from './session';
 
 import type { FinishThinkingSessionRecord } from './tools/thinking';
+import type { EchoEventPort } from '../ports/echo-event';
 import type { ModelPort, ModelToolContract, ModelUsage } from '../ports/model';
 
 const NO_TOOL_CALLS_CONTINUING_WARNING =
   'No tool calls returned; continuing until finish_thinking is called';
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function createSessionContext(): FinishThinkingSessionRecord {
   return {
@@ -119,6 +124,64 @@ describe('executeAgentToolCall', () => {
 
     expect(execute).toHaveBeenCalledWith('{"thought":"test"}');
     expect(result).toBe('{"success":true}');
+  });
+
+  it('tool call の開始と完了をイベントに流す', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-21T00:00:00.000Z'));
+    const emit = vi.fn<EchoEventPort['emit']>().mockResolvedValue(undefined);
+    const execute = vi.fn().mockResolvedValue('{"success":true}');
+
+    const result = await executeAgentToolCall(
+      {
+        type: 'tool_call',
+        callId: 'call-1',
+        toolName: 'think_deeply',
+        input: '{"thought":"test"}',
+      },
+      [
+        {
+          name: 'think_deeply',
+          contract: createToolContract('think_deeply'),
+          execute,
+        },
+      ],
+      { emit },
+      2
+    );
+
+    expect(result).toBe('{"success":true}');
+    expect(emit).toHaveBeenCalledWith({
+      type: 'tool.called',
+      category: 'tool',
+      severity: 'info',
+      streams: ['thought', 'analysis'],
+      summary: 'think_deeply called',
+      payload: {
+        callId: 'call-1',
+        toolName: 'think_deeply',
+        turnIndex: 2,
+        input: '{"thought":"test"}',
+      },
+    });
+    expect(emit).toHaveBeenCalledWith({
+      type: 'tool.completed',
+      category: 'tool',
+      severity: 'info',
+      streams: ['system', 'analysis'],
+      summary: 'think_deeply completed',
+      payload: {
+        callId: 'call-1',
+        toolName: 'think_deeply',
+        turnIndex: 2,
+        durationMs: 0,
+        success: true,
+        error: undefined,
+        outputLength: 16,
+      },
+    });
+
+    vi.useRealTimers();
   });
 
   it('未登録ツールはエラー文字列を返す', async () => {

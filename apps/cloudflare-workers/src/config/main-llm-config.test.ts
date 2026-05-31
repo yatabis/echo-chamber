@@ -13,13 +13,17 @@ import {
   TOP_K,
   TOP_P,
   resolveMainLLMConfig,
+  type MainLLMEnv,
 } from './main-llm-config';
 
-function createEnv(overrides: Partial<Env> = {}): Env {
+type MainLLMTestEnvOverrides = Partial<MainLLMEnv> &
+  Record<string, string | undefined>;
+
+function createEnv(overrides: MainLLMTestEnvOverrides = {}): MainLLMEnv {
   return {
     OPENAI_API_KEY: 'openai-key',
     ...overrides,
-  } as Env;
+  };
 }
 
 function createDefinition(
@@ -51,7 +55,7 @@ describe('resolveMainLLMConfig', () => {
           RIN_MAIN_LLM_PROVIDER: 'openai',
           RIN_MAIN_LLM_API_KEY: 'main-Key',
           RIN_MAIN_LLM_MODEL: 'GPT-5.4',
-        } as Partial<Env>),
+        }),
         getEchoInstanceDefinition('rin')
       )
     ).toEqual({
@@ -85,7 +89,7 @@ describe('resolveMainLLMConfig', () => {
       resolveMainLLMConfig(
         createEnv({
           RIN_MAIN_LLM_API_KEY: 'sk-lm-AbC123',
-        } as Partial<Env>),
+        }),
         createDefinition({
           mainLlm: {
             provider: 'lmstudio',
@@ -119,7 +123,7 @@ describe('resolveMainLLMConfig', () => {
           MARIE_MAIN_LLM_API_KEY: 'local-key',
           MARIE_MAIN_LLM_MODEL: 'local-model',
           MARIE_MAIN_LLM_BASE_URL: 'http://127.0.0.1:4321/v1',
-        } as Partial<Env>),
+        }),
         getEchoInstanceDefinition('marie')
       )
     ).toEqual({
@@ -146,7 +150,7 @@ describe('resolveMainLLMConfig', () => {
           RIN_MAIN_LLM_PROVIDER: 'lmstudio',
           RIN_MAIN_LLM_BASE_URL: 'http://localhost:1234/v1',
           RIN_MAIN_LLM_API_KEY: 'local-key',
-        } as Partial<Env>),
+        }),
         getEchoInstanceDefinition('rin')
       )
     ).toThrow(
@@ -162,7 +166,7 @@ describe('resolveMainLLMConfig', () => {
           RIN_MAIN_LLM_BASE_URL: 'http://localhost:1234/v1',
           RIN_MAIN_LLM_API_KEY: 'local-key',
           MAIN_LLM_MODEL: 'local-global-model',
-        } as Partial<Env>),
+        }),
         getEchoInstanceDefinition('rin')
       )
     ).toMatchObject({
@@ -193,7 +197,7 @@ describe('resolveMainLLMConfig', () => {
           RIN_MAIN_LLM_PROVIDER: 'lmstudio',
           RIN_MAIN_LLM_MODEL: 'local-model',
           RIN_MAIN_LLM_BASE_URL: 'http://localhost:1234/v1',
-        } as Partial<Env>),
+        }),
         getEchoInstanceDefinition('rin')
       )
     ).toThrow(
@@ -208,7 +212,7 @@ describe('resolveMainLLMConfig', () => {
           RIN_MAIN_LLM_PROVIDER: 'lmstudio',
           RIN_MAIN_LLM_MODEL: 'local-model',
           RIN_MAIN_LLM_API_KEY: 'local-key',
-        } as Partial<Env>),
+        }),
         getEchoInstanceDefinition('rin')
       )
     ).toThrow(
@@ -221,7 +225,7 @@ describe('resolveMainLLMConfig', () => {
       resolveMainLLMConfig(
         createEnv({
           RIN_MAIN_LLM_PROVIDER: 'anthropic',
-        } as Partial<Env>),
+        }),
         getEchoInstanceDefinition('rin')
       )
     ).toThrow(

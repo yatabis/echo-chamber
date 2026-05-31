@@ -5,4 +5,5 @@
 
 現在の現役ドキュメント:
 
+- [`echo-event-logging.md`](./echo-event-logging.md)
 - [`echo-registry-boundary.md`](./echo-registry-boundary.md)

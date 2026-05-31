@@ -24,6 +24,7 @@ import { Echo } from './index';
 const {
   mockEmbeddingService,
   mockExecutableTools,
+  mockEvents,
   mockInstanceDefinition,
   mockLogger,
   mockMemorySystem,
@@ -34,6 +35,9 @@ const {
 } = vi.hoisted(() => ({
   mockEmbeddingService: { provider: 'test-embedding' },
   mockExecutableTools: [{ name: 'tool-1' }],
+  mockEvents: {
+    emit: vi.fn(async (_event: unknown) => Promise.resolve()),
+  },
   mockInstanceDefinition: {
     id: 'rin',
     name: 'リン',
@@ -139,6 +143,10 @@ vi.mock('../reranking/create-reranking-service', () => ({
 
 vi.mock('../utils/logger', () => ({
   createLogger: vi.fn(() => mockLogger),
+}));
+
+vi.mock('../utils/echo-event', () => ({
+  createConsoleEchoEventPort: vi.fn(() => mockEvents),
 }));
 
 vi.mock('./tool-context', () => ({
@@ -279,6 +287,7 @@ describe('Echo.ensureInitialized', () => {
       embeddingService: mockEmbeddingService,
       rerankingService: mockRerankingService,
       logger: mockLogger,
+      events: mockEvents,
     });
     const toolContextCalls = vi.mocked(createToolExecutionContext).mock.calls;
     expect(toolContextCalls).toHaveLength(1);
