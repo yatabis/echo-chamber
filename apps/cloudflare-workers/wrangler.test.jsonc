@@ -1,0 +1,40 @@
+/**
+ * Vitest 用の Wrangler 設定。
+ *
+ * Workers AI は単体テスト内で mock するため、ここでは `ai` binding を定義しない。
+ * production / dev 用の binding 定義は `wrangler.jsonc` を参照する。
+ */
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "echo-chamber-test",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-06-10",
+  "migrations": [
+    {
+      "new_sqlite_classes": ["Echo"],
+      "tag": "v1",
+    },
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "class_name": "Echo",
+        "name": "ECHO",
+      },
+    ],
+  },
+  "kv_namespaces": [
+    {
+      "binding": "ECHO_KV",
+      "id": "test-echo-kv",
+    },
+  ],
+  "observability": {
+    "enabled": false,
+  },
+  "assets": {
+    "directory": "./public/",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+  },
+}
