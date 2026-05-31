@@ -51,7 +51,7 @@ worker は Cloudflare 依存の runtime binding を解決する。
 `Echo` は definition と runtime bindings を別 field で保持する。
 
 - `ThinkingEngine` には `systemPrompt`
-- `DiscordThoughtLog` には token と `thinkingChannelId`
+- `DiscordEchoEventPort` には token と `thinkingChannelId`
 - `tool-context` には chat 用の binding だけを渡す
 
 chat channels は worker 側の固定定義として管理し、`thinkingChannelId` だけを KV から解決する。

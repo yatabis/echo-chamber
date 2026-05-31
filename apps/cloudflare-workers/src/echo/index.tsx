@@ -66,7 +66,7 @@ import {
 } from '../config/token-limit-config';
 import { createEmbeddingService } from '../embedding/create-embedding-service';
 import { createRerankingService } from '../reranking/create-reranking-service';
-import { createConsoleEchoEventPort } from '../utils/echo-event';
+import { createCloudflareEchoEventPort } from '../utils/echo-event';
 
 import { createToolExecutionContext } from './tool-context';
 
@@ -147,10 +147,20 @@ export class Echo extends DurableObject<Env> {
     super(ctx, env);
     this.store = env.ECHO_KV;
     this.storage = ctx.storage;
-    this.events = createConsoleEchoEventPort({
+    this.events = createCloudflareEchoEventPort({
       source: 'cloudflare-workers',
       getInstanceId: (): string | null => this.instanceDefinition?.id ?? null,
       getSessionId: (): string | null => this.currentSessionId,
+      getDiscordConfig: (): { token: string; channelId: string } | null => {
+        if (this.runtimeBindings === null) {
+          return null;
+        }
+
+        return {
+          token: this.runtimeBindings.discordBotToken,
+          channelId: this.runtimeBindings.thinkingChannelId,
+        };
+      },
     });
     this._env = env;
     this.noteSystem = new NoteSystem({

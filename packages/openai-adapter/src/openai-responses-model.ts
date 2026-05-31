@@ -34,7 +34,7 @@ export interface OpenAIResponsesModelOptions {
 
 /**
  * OpenAI Responses API を `ModelPort` として扱う adapter。
- * provider 固有の request / response 型変換と thought log 送信だけを担当する。
+ * provider 固有の request / response 型変換と model event 送信だけを担当する。
  */
 export class OpenAIResponsesModel implements ModelPort {
   private readonly client: OpenAI;

@@ -2,12 +2,25 @@ import type {
   EchoEvent,
   EchoEventPort,
 } from '@echo-chamber/core/ports/echo-event';
+import { sendChannelMessage } from '@echo-chamber/discord-adapter/api';
 
 export interface ConsoleEchoEventPortOptions {
   source: string;
   getInstanceId(): string | null;
   getSessionId(): string | null;
 }
+
+export interface DiscordEchoEventConfig {
+  token: string;
+  channelId: string;
+}
+
+export interface DiscordEchoEventPortOptions
+  extends ConsoleEchoEventPortOptions {
+  getDiscordConfig(): DiscordEchoEventConfig | null;
+}
+
+const DISCORD_MESSAGE_MAX_LENGTH = 2000;
 
 /**
  * EchoEventPort を Cloudflare Workers の console log へ構造化出力する。
@@ -59,6 +72,155 @@ export class ConsoleEchoEventPort implements EchoEventPort {
 }
 
 /**
+ * Echo event を Discord 通知として送る port。
+ *
+ * Discord は即時確認用なので、session lifecycle と system stream の warn/error に絞る。
+ */
+export class DiscordEchoEventPort implements EchoEventPort {
+  private readonly options: DiscordEchoEventPortOptions;
+
+  /**
+   * @param options Discord 送信先と実行時 context の取得 callback
+   */
+  constructor(options: DiscordEchoEventPortOptions) {
+    this.options = options;
+  }
+
+  /**
+   * Discord 通知対象の event だけを送信する。
+   *
+   * @param event 出力する Echo event
+   * @returns 出力完了
+   */
+  async emit(event: EchoEvent): Promise<void> {
+    if (!shouldNotifyDiscord(event)) {
+      return;
+    }
+
+    const config = this.options.getDiscordConfig();
+    if (config === null) {
+      return;
+    }
+
+    await sendChannelMessage(config.token, config.channelId, {
+      content: truncateDiscordMessage(
+        formatDiscordEventMessage(event, {
+          source: this.options.source,
+          instanceId: this.options.getInstanceId(),
+          sessionId: this.options.getSessionId(),
+        })
+      ),
+    });
+  }
+}
+
+/**
+ * 複数の EchoEventPort へ同じ event を配送する。
+ */
+export class CompositeEchoEventPort implements EchoEventPort {
+  private readonly ports: readonly EchoEventPort[];
+
+  /**
+   * @param ports 配送先 port
+   */
+  constructor(ports: readonly EchoEventPort[]) {
+    this.ports = ports;
+  }
+
+  /**
+   * 登録済み port へ順に event を送る。
+   *
+   * @param event 出力する Echo event
+   * @returns 出力完了
+   */
+  async emit(event: EchoEvent): Promise<void> {
+    for (const port of this.ports) {
+      // Observability sinks should preserve order for the same event.
+      // eslint-disable-next-line no-await-in-loop
+      await port.emit(event);
+    }
+  }
+}
+
+/**
+ * Discord に通知する event かを判定する。
+ *
+ * @param event 判定対象の Echo event
+ * @returns Discord に送るなら `true`
+ */
+export function shouldNotifyDiscord(event: EchoEvent): boolean {
+  if (event.category === 'session') {
+    return true;
+  }
+  if (event.severity === 'error') {
+    return true;
+  }
+  if (event.severity === 'warn' && event.streams.includes('system')) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Discord に送る event message を組み立てる。
+ *
+ * @param event Echo event
+ * @param context 実行時 context
+ * @returns Discord 投稿本文
+ */
+function formatDiscordEventMessage(
+  event: EchoEvent,
+  context: {
+    source: string;
+    instanceId: string | null;
+    sessionId: string | null;
+  }
+): string {
+  const lines = [
+    `**[${event.severity.toUpperCase()}] ${event.type}**`,
+    event.summary,
+    `source: ${context.source}`,
+    context.instanceId === null ? undefined : `instance: ${context.instanceId}`,
+    context.sessionId === null ? undefined : `session: ${context.sessionId}`,
+  ].filter((line) => line !== undefined);
+  const payload =
+    event.payload === undefined
+      ? ''
+      : `\n\n\`\`\`json\n${stringifyPayload(event.payload)}\n\`\`\``;
+
+  return `${lines.join('\n')}${payload}`;
+}
+
+/**
+ * payload を Discord 表示用 JSON にする。
+ *
+ * @param payload event payload
+ * @returns JSON 文字列
+ */
+function stringifyPayload(payload: Record<string, unknown>): string {
+  try {
+    return JSON.stringify(payload, null, 2);
+  } catch {
+    return JSON.stringify({ error: 'payload serialization failed' });
+  }
+}
+
+/**
+ * Discord の投稿上限に合わせて本文を切り詰める。
+ *
+ * @param message 投稿本文
+ * @returns Discord に渡せる長さの本文
+ */
+function truncateDiscordMessage(message: string): string {
+  if (message.length <= DISCORD_MESSAGE_MAX_LENGTH) {
+    return message;
+  }
+
+  return `${message.slice(0, DISCORD_MESSAGE_MAX_LENGTH - 3)}...`;
+}
+
+/**
  * Cloudflare console 出力用の EchoEventPort を作る。
  *
  * @param options 出力元名と実行時 context の取得 callback
@@ -68,4 +230,19 @@ export function createConsoleEchoEventPort(
   options: ConsoleEchoEventPortOptions
 ): EchoEventPort {
   return new ConsoleEchoEventPort(options);
+}
+
+/**
+ * Cloudflare runtime 用の EchoEventPort を作る。
+ *
+ * @param options 出力元名、実行時 context、Discord 送信先の取得 callback
+ * @returns console と Discord へ配送する EchoEventPort
+ */
+export function createCloudflareEchoEventPort(
+  options: DiscordEchoEventPortOptions
+): EchoEventPort {
+  return new CompositeEchoEventPort([
+    new ConsoleEchoEventPort(options),
+    new DiscordEchoEventPort(options),
+  ]);
 }

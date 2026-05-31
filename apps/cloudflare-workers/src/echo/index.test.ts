@@ -127,7 +127,7 @@ vi.mock('../reranking/create-reranking-service', () => ({
 }));
 
 vi.mock('../utils/echo-event', () => ({
-  createConsoleEchoEventPort: vi.fn(() => mockEvents),
+  createCloudflareEchoEventPort: vi.fn(() => mockEvents),
 }));
 
 vi.mock('./tool-context', () => ({

@@ -1,13 +1,12 @@
 # @echo-chamber/discord-adapter
 
-`@echo-chamber/core` が要求する chat / notification / thought-log port を Discord に接続する adapter package です。
+Discord REST API への接続をまとめる adapter package です。
 
 ## 役割
 
 - Discord REST 呼び出し
 - チャット通知取得
 - メッセージ送信とリアクション追加
-- thought log 送信
 
 ## 依存ルール
 

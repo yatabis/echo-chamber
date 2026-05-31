@@ -183,20 +183,19 @@ Cloudflare Workers Observability で拾いやすいように、次のような�
 
 ### Discord
 
-未実装の将来 sink。
+実装済みの短期通知 sink。
 
 Discord は「今、人間が見る価値がある通知」だけに絞る。`analysis` 単独の event を Discord に出すことは原則避ける。
 
-Discord へ送る候補:
+現行 policy では次を Discord に送る。
 
-- `session.failed`
-- `tool.failed`
-- warning / error
-- token hard / soft limit による重要な skip
-- memory search が 0 件、低スコア、異常に遅い場合
-- session summary
+- `category === "session"` の event
+- `severity === "error"` の event
+- `severity === "warn"` かつ `system` stream を持つ event
 
-Discord の配送先は event に直接持たせず、sink 側で `streams` を見て thought / system のチャンネルへ分ける。
+これにより `session.started` / `session.completed` は毎回 Discord に出る。`model.turn.completed` の `no_tool_calls` は `analysis` 専用なので Discord には出ない。
+
+Discord の配送先は event に直接持たせない。現行 Worker では instance ごとの `thinkingChannelId` へ送る。
 
 ### Archive
 
@@ -217,8 +216,7 @@ Dashboard は archive または observability から event を読み、`streams`
 
 ## 現時点の未決事項
 
-- Discord に出す event の最小セット
-- `session.started` / `session.completed` を常に Discord に出すか、summary だけにするか
+- Discord 通知を thought / system など複数チャンネルへ分けるか
 - archive sink の保存先を D1 + R2 にするか、まずは R2 JSONL から始めるか
 - raw payload の redaction 方針
 - payload が大きい event の分割・圧縮・sampling 方針
