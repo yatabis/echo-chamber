@@ -11,9 +11,6 @@ import type { FinishThinkingSessionRecord } from './tools/thinking';
 import type { EchoEventPort } from '../ports/echo-event';
 import type { ModelPort, ModelToolContract, ModelUsage } from '../ports/model';
 
-const NO_TOOL_CALLS_CONTINUING_WARNING =
-  'No tool calls returned; continuing until finish_thinking is called';
-
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -184,6 +181,104 @@ describe('executeAgentToolCall', () => {
     vi.useRealTimers();
   });
 
+  it('note tool の entity 情報は tool event の payload に吸収する', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-21T00:00:00.000Z'));
+    const emit = vi.fn<EchoEventPort['emit']>().mockResolvedValue(undefined);
+    const execute = vi.fn().mockResolvedValue(
+      JSON.stringify({
+        success: true,
+        note: {
+          id: 'note-1',
+          title: '買い物メモ',
+        },
+      })
+    );
+
+    await executeAgentToolCall(
+      {
+        type: 'tool_call',
+        callId: 'call-note',
+        toolName: 'create_note',
+        input: '{"title":"買い物メモ","content":"牛乳"}',
+      },
+      [
+        {
+          name: 'create_note',
+          contract: createToolContract('create_note'),
+          execute,
+        },
+      ],
+      { emit },
+      1
+    );
+
+    const completedEvent = emit.mock.calls.find(
+      ([event]) => event.type === 'tool.completed'
+    )?.[0];
+    expect(completedEvent).toMatchObject({
+      type: 'tool.completed',
+      payload: {
+        toolName: 'create_note',
+        operation: 'note.create',
+        entityType: 'note',
+        entityId: 'note-1',
+      },
+    });
+
+    vi.useRealTimers();
+  });
+
+  it('tool 診断情報は event に載せ、model へ返す output からは除く', async () => {
+    const emit = vi.fn<EchoEventPort['emit']>().mockResolvedValue(undefined);
+    const execute = vi.fn().mockResolvedValue(
+      JSON.stringify({
+        success: false,
+        error: 'Failed to read messages',
+        diagnostics: {
+          error: 'Discord API returned 500',
+        },
+      })
+    );
+
+    const result = await executeAgentToolCall(
+      {
+        type: 'tool_call',
+        callId: 'call-read',
+        toolName: 'read_chat_messages',
+        input: '{"channelKey":"main","limit":10}',
+      },
+      [
+        {
+          name: 'read_chat_messages',
+          contract: createToolContract('read_chat_messages'),
+          execute,
+        },
+      ],
+      { emit },
+      1
+    );
+
+    expect(result).toBe(
+      JSON.stringify({
+        success: false,
+        error: 'Failed to read messages',
+      })
+    );
+    const failedEvent = emit.mock.calls.find(
+      ([event]) => event.type === 'tool.failed'
+    )?.[0];
+    expect(failedEvent).toMatchObject({
+      type: 'tool.failed',
+      payload: {
+        error: 'Failed to read messages',
+        diagnostics: {
+          error: 'Discord API returned 500',
+        },
+      },
+    });
+  });
+
   it('未登録ツールはエラー文字列を返す', async () => {
     const result = await executeAgentToolCall(
       {
@@ -212,9 +307,6 @@ describe('executeAgentToolCall', () => {
 
 describe('runAgentSession', () => {
   it('tool call がなくても空 input で継続する', async () => {
-    const logger = {
-      warn: vi.fn().mockResolvedValue(undefined),
-    };
     const generate = vi
       .fn<ModelPort['generate']>()
       .mockResolvedValueOnce({
@@ -251,7 +343,6 @@ describe('runAgentSession', () => {
           execute: executeFinish,
         },
       ],
-      logger,
       initialInput: [
         {
           role: 'developer',
@@ -269,21 +360,89 @@ describe('runAgentSession', () => {
       ],
       tools: [createToolContract('finish_thinking')],
       previousResponseToken: undefined,
+      turnIndex: 1,
     });
     expect(generate).toHaveBeenNthCalledWith(2, {
       input: [],
       tools: [createToolContract('finish_thinking')],
       previousResponseToken: 'resp-1',
+      turnIndex: 2,
     });
-    expect(logger.warn).toHaveBeenCalledTimes(1);
-    expect(logger.warn).toHaveBeenCalledWith(NO_TOOL_CALLS_CONTINUING_WARNING);
     expect(executeFinish).toHaveBeenCalledWith(createFinishThinkingInput());
     expect(result).toEqual({
       context: createSessionContext(),
       nextWakeAt: null,
       usage: createUsage({ totalTokens: 15 }),
       responseToken: 'resp-2',
+      terminationReason: 'finish_thinking',
     });
+  });
+
+  it('tool call がない model turn は warning として event payload に残す', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-21T00:00:00.000Z'));
+    const emit = vi.fn<EchoEventPort['emit']>().mockResolvedValue(undefined);
+    const generate = vi
+      .fn<ModelPort['generate']>()
+      .mockResolvedValueOnce({
+        output: [
+          {
+            type: 'message',
+            role: 'assistant',
+            content: 'still thinking',
+          },
+        ],
+        usage: createUsage({ totalTokens: 10 }),
+        responseToken: 'resp-1',
+      })
+      .mockResolvedValueOnce({
+        output: [
+          {
+            type: 'tool_call',
+            callId: 'call-finish',
+            toolName: 'finish_thinking',
+            input: createFinishThinkingInput(),
+          },
+        ],
+        usage: createUsage({ totalTokens: 5 }),
+        responseToken: 'resp-2',
+      });
+
+    await runAgentSession({
+      model: { generate },
+      tools: [
+        {
+          name: 'finish_thinking',
+          contract: createToolContract('finish_thinking'),
+          execute: vi.fn().mockResolvedValue('{"success":true}'),
+        },
+      ],
+      events: { emit },
+      initialInput: [
+        {
+          role: 'developer',
+          content: 'test',
+        },
+      ],
+    });
+
+    const completedEvent = emit.mock.calls.find(
+      ([event]) =>
+        event.type === 'model.turn.completed' && event.payload?.turnIndex === 1
+    )?.[0];
+    expect(completedEvent).toMatchObject({
+      type: 'model.turn.completed',
+      category: 'model',
+      severity: 'warn',
+      streams: ['analysis'],
+      payload: {
+        turnIndex: 1,
+        toolCallCount: 0,
+        warnings: ['no_tool_calls'],
+      },
+    });
+
+    vi.useRealTimers();
   });
 
   it('tool call の結果を次ターンの input として渡す', async () => {
@@ -384,6 +543,7 @@ describe('runAgentSession', () => {
         createToolContract('finish_thinking'),
       ],
       previousResponseToken: 'resp-1',
+      turnIndex: 2,
     });
     expect(generate).toHaveBeenNthCalledWith(3, {
       input: [],
@@ -392,6 +552,7 @@ describe('runAgentSession', () => {
         createToolContract('finish_thinking'),
       ],
       previousResponseToken: 'resp-2',
+      turnIndex: 3,
     });
     expect(executeFinish).toHaveBeenCalledWith(createFinishThinkingInput());
     expect(result).toEqual({
@@ -406,6 +567,7 @@ describe('runAgentSession', () => {
         totalTokens: 666,
       }),
       responseToken: 'resp-3',
+      terminationReason: 'finish_thinking',
     });
   });
 
@@ -461,6 +623,7 @@ describe('runAgentSession', () => {
       nextWakeAt: null,
       usage: createUsage({ totalTokens: 10 }),
       responseToken: 'resp-1',
+      terminationReason: 'finish_thinking',
     });
   });
 
@@ -501,6 +664,7 @@ describe('runAgentSession', () => {
       nextWakeAt,
       usage: createUsage({ totalTokens: 10 }),
       responseToken: 'resp-1',
+      terminationReason: 'finish_thinking',
     });
   });
 
@@ -564,19 +728,18 @@ describe('runAgentSession', () => {
       ],
       tools: [createToolContract('finish_thinking')],
       previousResponseToken: 'resp-1',
+      turnIndex: 2,
     });
     expect(result).toEqual({
       context: createSessionContext(),
       nextWakeAt: null,
       usage: createUsage({ totalTokens: 15 }),
       responseToken: 'resp-2',
+      terminationReason: 'finish_thinking',
     });
   });
 
-  it('maxTurns を超えたら warn を出して終了する', async () => {
-    const logger = {
-      warn: vi.fn().mockResolvedValue(undefined),
-    };
+  it('maxTurns を超えたら終了理由を返す', async () => {
     const generate = vi.fn<ModelPort['generate']>().mockResolvedValue({
       output: [
         {
@@ -605,24 +768,19 @@ describe('runAgentSession', () => {
           content: 'test',
         },
       ],
-      logger,
       maxTurns: 2,
     });
 
     expect(generate).toHaveBeenCalledTimes(2);
-    expect(logger.warn).toHaveBeenCalledTimes(1);
-    expect(logger.warn).toHaveBeenCalledWith('Maximum turns exceeded');
     expect(result).toEqual({
       nextWakeAt: null,
       usage: createUsage({ totalTokens: 20 }),
       responseToken: 'resp-1',
+      terminationReason: 'max_turns',
     });
   });
 
-  it('tool call が無い状態が続くと maxTurns で warn を出す', async () => {
-    const logger = {
-      warn: vi.fn().mockResolvedValue(undefined),
-    };
+  it('tool call が無い状態が続いても maxTurns で終了する', async () => {
     const generate = vi.fn<ModelPort['generate']>().mockResolvedValue({
       output: [
         {
@@ -650,7 +808,6 @@ describe('runAgentSession', () => {
           content: 'test',
         },
       ],
-      logger,
       maxTurns: 2,
     });
 
@@ -659,21 +816,13 @@ describe('runAgentSession', () => {
       input: [],
       tools: [createToolContract('finish_thinking')],
       previousResponseToken: 'resp-1',
+      turnIndex: 2,
     });
-    expect(logger.warn).toHaveBeenCalledTimes(3);
-    expect(logger.warn).toHaveBeenNthCalledWith(
-      1,
-      NO_TOOL_CALLS_CONTINUING_WARNING
-    );
-    expect(logger.warn).toHaveBeenNthCalledWith(
-      2,
-      NO_TOOL_CALLS_CONTINUING_WARNING
-    );
-    expect(logger.warn).toHaveBeenNthCalledWith(3, 'Maximum turns exceeded');
     expect(result).toEqual({
       nextWakeAt: null,
       usage: createUsage({ totalTokens: 20 }),
       responseToken: 'resp-1',
+      terminationReason: 'max_turns',
     });
   });
 });

@@ -1,7 +1,6 @@
-import { getErrorMessage } from '../../utils/error';
 import { searchMemoryToolSpec, storeMemoryToolSpec } from '../tools/memory';
 
-import { Tool } from './tool';
+import { createToolErrorResult, Tool } from './tool';
 
 export const storeMemoryTool = new Tool(
   storeMemoryToolSpec,
@@ -10,11 +9,7 @@ export const storeMemoryTool = new Tool(
       await ctx.memory.store(content, emotion, type);
       return { success: true };
     } catch (error) {
-      await ctx.logger.error(`Error storing memory: ${getErrorMessage(error)}`);
-      return {
-        success: false,
-        error: 'Failed to store memory',
-      };
+      return createToolErrorResult('Failed to store memory', error);
     }
   }
 );
@@ -34,13 +29,7 @@ export const searchMemoryTool = new Tool(
         })),
       };
     } catch (error) {
-      await ctx.logger.error(
-        `Error searching memory: ${getErrorMessage(error)}`
-      );
-      return {
-        success: false,
-        error: 'Failed to search memory',
-      };
+      return createToolErrorResult('Failed to search memory', error);
     }
   }
 );

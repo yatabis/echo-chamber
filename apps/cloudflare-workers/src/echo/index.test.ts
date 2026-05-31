@@ -3,19 +3,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemorySystem } from '@echo-chamber/cloudflare-runtime/memory-system';
 import { canonicalRuntimeTools } from '@echo-chamber/core/agent/runtime-tools/catalog';
 import { bindRuntimeTools } from '@echo-chamber/core/agent/runtime-tools/tool';
-import {
-  SCHEDULING_CONFIG,
-  TOKEN_LIMITS,
-} from '@echo-chamber/core/echo/constants';
+import { TOKEN_LIMITS } from '@echo-chamber/core/echo/constants';
 import { getEchoInstanceDefinition } from '@echo-chamber/core/echo/instance-definitions';
 import type { Usage } from '@echo-chamber/core/echo/types';
 import { calculateDynamicTokenLimit } from '@echo-chamber/core/echo/usage';
 import type { ContextSnapshot } from '@echo-chamber/core/ports/context';
+import type {
+  EchoEvent,
+  EchoEventType,
+} from '@echo-chamber/core/ports/echo-event';
 
 import { resolveEchoRuntimeBindings } from '../config/echo-runtime-bindings';
 import { createEmbeddingService } from '../embedding/create-embedding-service';
 import { createRerankingService } from '../reranking/create-reranking-service';
-import { createLogger } from '../utils/logger';
 
 import { createToolExecutionContext } from './tool-context';
 
@@ -26,7 +26,6 @@ const {
   mockExecutableTools,
   mockEvents,
   mockInstanceDefinition,
-  mockLogger,
   mockMemorySystem,
   mockNoteSystem,
   mockRerankingService,
@@ -51,20 +50,6 @@ const {
       dailySoftLimit: 300_000,
       hardLimitBufferFactor: 1.5,
     },
-  },
-  mockLogger: {
-    debug: vi.fn(async (_message?: unknown, _context?: unknown) =>
-      Promise.resolve()
-    ),
-    info: vi.fn(async (_message?: unknown, _context?: unknown) =>
-      Promise.resolve()
-    ),
-    warn: vi.fn(async (_message?: unknown, _context?: unknown) =>
-      Promise.resolve()
-    ),
-    error: vi.fn(async (_message?: unknown, _error?: unknown) =>
-      Promise.resolve()
-    ),
   },
   mockMemorySystem: {
     reEmbedStaleMemories: vi.fn(async () => Promise.resolve()),
@@ -141,10 +126,6 @@ vi.mock('../reranking/create-reranking-service', () => ({
   createRerankingService: vi.fn(() => mockRerankingService),
 }));
 
-vi.mock('../utils/logger', () => ({
-  createLogger: vi.fn(() => mockLogger),
-}));
-
 vi.mock('../utils/echo-event', () => ({
   createConsoleEchoEventPort: vi.fn(() => mockEvents),
 }));
@@ -174,6 +155,13 @@ function createMockStorage(): {
     getFn,
     putFn,
   };
+}
+
+function findEmittedEvent(type: EchoEventType): EchoEvent | undefined {
+  return vi
+    .mocked(mockEvents.emit)
+    .mock.calls.map(([event]) => event as EchoEvent)
+    .find((event) => event.type === type);
 }
 
 function createMockState(storage: DurableObjectStorage): DurableObjectState {
@@ -266,9 +254,6 @@ describe('Echo.ensureInitialized', () => {
     await ensureInitialized(echo, 'rin');
 
     expect(deleteFn).not.toHaveBeenCalled();
-    const loggerCreateCalls = vi.mocked(createLogger).mock.calls;
-    expect(loggerCreateCalls).toHaveLength(1);
-    expect(loggerCreateCalls[0]?.[0]).toBe(env);
     expect(getEchoInstanceDefinition).toHaveBeenCalledWith('rin');
     expect(resolveEchoRuntimeBindings).toHaveBeenCalledWith(
       env,
@@ -281,12 +266,12 @@ describe('Echo.ensureInitialized', () => {
     expect(embeddingServiceCalls[0]?.[1]).toBe(
       mockRuntimeBindings.embeddingConfig
     );
+    expect(embeddingServiceCalls[0]?.[2]).toBe(mockEvents);
     expect(createRerankingService).toHaveBeenCalledWith(env);
     expect(MemorySystem).toHaveBeenCalledWith({
       sql: storage.sql,
       embeddingService: mockEmbeddingService,
       rerankingService: mockRerankingService,
-      logger: mockLogger,
       events: mockEvents,
     });
     const toolContextCalls = vi.mocked(createToolExecutionContext).mock.calls;
@@ -295,7 +280,6 @@ describe('Echo.ensureInitialized', () => {
       chatBindings: mockRuntimeBindings,
       memorySystem: mockMemorySystem,
       noteSystem: mockNoteSystem,
-      logger: mockLogger,
     });
     expect(bindRuntimeTools).toHaveBeenCalledWith(
       canonicalRuntimeTools,
@@ -385,8 +369,6 @@ describe('Echo context storage', () => {
         totalTokens: 42,
       },
     });
-    const thoughtLogSend = vi.fn().mockResolvedValue(undefined);
-
     vi.spyOn(
       echo as unknown as { setState(state: string): Promise<void> },
       'setState'
@@ -419,22 +401,10 @@ describe('Echo context storage', () => {
       echo as unknown as { updateUsage(): Promise<{ total_tokens: number }> },
       'updateUsage'
     ).mockResolvedValue({ total_tokens: 42 });
-    vi.spyOn(
-      echo as unknown as {
-        createThoughtLog(): { send(message: string): Promise<void> };
-      },
-      'createThoughtLog'
-    ).mockReturnValue({
-      send: thoughtLogSend,
-    });
-
     const result = await echo.run();
 
     expect(think).toHaveBeenCalledTimes(1);
     expect(putFn).toHaveBeenCalledWith('context', context);
-    expect(thoughtLogSend).toHaveBeenCalledWith(
-      'Usage: 42 tokens (Total: 42 tokens)'
-    );
     expect(result).toMatchObject({
       unreadCheckMs: 12,
     });
@@ -516,14 +486,6 @@ describe('Echo next_wake_at storage', () => {
       echo as unknown as { updateUsage(): Promise<{ total_tokens: number }> },
       'updateUsage'
     ).mockResolvedValue({ total_tokens: 42 });
-    vi.spyOn(
-      echo as unknown as {
-        createThoughtLog(): { send(message: string): Promise<void> };
-      },
-      'createThoughtLog'
-    ).mockReturnValue({
-      send: vi.fn().mockResolvedValue(undefined),
-    });
 
     const result = await echo.run();
 
@@ -584,14 +546,6 @@ describe('Echo next_wake_at storage', () => {
       echo as unknown as { updateUsage(): Promise<{ total_tokens: number }> },
       'updateUsage'
     ).mockResolvedValue({ total_tokens: 42 });
-    vi.spyOn(
-      echo as unknown as {
-        createThoughtLog(): { send(message: string): Promise<void> };
-      },
-      'createThoughtLog'
-    ).mockReturnValue({
-      send: vi.fn().mockResolvedValue(undefined),
-    });
 
     const result = await echo.run();
 
@@ -676,12 +630,17 @@ describe('Echo run preconditions', () => {
       'next_wake_at',
       '2026-03-22T01:01:00.000Z'
     );
-    expect(mockLogger.warn).toHaveBeenCalledWith(
-      `Usage hard limit reached: ${hardLimit}  (Hard limit: ${hardLimit})`
-    );
-    expect(mockLogger.info).toHaveBeenCalledWith(
-      'Deferring next_wake_at due to hard limit: 2026-03-22T00:59:00.000Z -> 2026-03-22T01:01:00.000Z'
-    );
+    expect(
+      findEmittedEvent('system.schedule.next_wake_at_updated')
+    ).toMatchObject({
+      payload: {
+        previousValue: '2026-03-22T00:59:00.000Z',
+        nextValue: '2026-03-22T01:01:00.000Z',
+        reason: 'hard_token_limit_defer',
+        totalTokens: hardLimit,
+        hardLimit,
+      },
+    });
   });
 
   it('hard limit 超過でも next_wake_at 未到達なら warn しない', async () => {
@@ -716,9 +675,9 @@ describe('Echo run preconditions', () => {
     const result = await resolveRunDecision(echo);
 
     expect(result.shouldRun).toBe(false);
-    expect(mockLogger.warn).not.toHaveBeenCalledWith(
-      `Usage hard limit reached: ${hardLimit}  (Hard limit: ${hardLimit})`
-    );
+    expect(
+      findEmittedEvent('system.schedule.next_wake_at_updated')
+    ).toBeUndefined();
   });
 
   it('hard limit が当日中に回復しない場合は次の usage reset へ next_wake_at をフォールバックする', async () => {
@@ -753,9 +712,15 @@ describe('Echo run preconditions', () => {
       'next_wake_at',
       '2026-03-22T22:00:00.000Z'
     );
-    expect(mockLogger.info).toHaveBeenCalledWith(
-      'Deferring next_wake_at due to hard limit: 2026-03-22T14:29:00.000Z -> 2026-03-22T22:00:00.000Z'
-    );
+    expect(
+      findEmittedEvent('system.schedule.next_wake_at_updated')
+    ).toMatchObject({
+      payload: {
+        previousValue: '2026-03-22T14:29:00.000Z',
+        nextValue: '2026-03-22T22:00:00.000Z',
+        reason: 'hard_token_limit_defer',
+      },
+    });
   });
 
   it('到達済みの next_wake_at なら soft limit を超えていても実行する', async () => {
@@ -786,9 +751,12 @@ describe('Echo run preconditions', () => {
     const result = await resolveRunDecision(echo);
 
     expect(result.shouldRun).toBe(true);
-    expect(mockLogger.info).toHaveBeenCalledWith(
-      'next_wake_at reached: 2026-03-22T00:59:00.000Z'
-    );
+    expect(findEmittedEvent('system.run_decision.evaluated')).toMatchObject({
+      payload: {
+        reason: 'next_wake_at_reached',
+        nextWakeAt: '2026-03-22T00:59:00.000Z',
+      },
+    });
   });
 
   it('soft limit 未満でも next_wake_at が10分以内なら起動しない', async () => {
@@ -819,9 +787,12 @@ describe('Echo run preconditions', () => {
     const result = await resolveRunDecision(echo);
 
     expect(result.shouldRun).toBe(false);
-    expect(mockLogger.info).toHaveBeenCalledWith(
-      `Skipping soft-limit run because next_wake_at is within ${SCHEDULING_CONFIG.SOFT_LIMIT_NEXT_WAKE_AT_WINDOW_MINUTES} minutes: 2026-03-22T01:05:00.000Z`
-    );
+    expect(findEmittedEvent('system.run_decision.evaluated')).toMatchObject({
+      payload: {
+        reason: 'next_wake_at_suppression',
+        nextWakeAt: '2026-03-22T01:05:00.000Z',
+      },
+    });
   });
 
   it('soft limit 未満で next_wake_at が10分より先なら通常起動する', async () => {
@@ -852,9 +823,12 @@ describe('Echo run preconditions', () => {
     const result = await resolveRunDecision(echo);
 
     expect(result.shouldRun).toBe(true);
-    expect(mockLogger.info).toHaveBeenCalledWith(
-      'Usage: 0  (Soft limit: 45000)'
-    );
+    expect(findEmittedEvent('system.run_decision.evaluated')).toMatchObject({
+      payload: {
+        reason: 'soft_limit_allows_run',
+        softLimit: 45_000,
+      },
+    });
   });
 
   it('不正な next_wake_at は warn して破棄し、他条件が通れば起動する', async () => {
@@ -885,10 +859,15 @@ describe('Echo run preconditions', () => {
     const result = await resolveRunDecision(echo);
 
     expect(result.shouldRun).toBe(true);
-    expect(mockLogger.warn).toHaveBeenCalledWith(
-      'Stored next_wake_at is invalid and will be ignored: not-a-date'
-    );
     expect(deleteFn).toHaveBeenCalledWith('next_wake_at');
+    expect(
+      findEmittedEvent('system.schedule.next_wake_at_invalidated')
+    ).toMatchObject({
+      payload: {
+        storedValue: 'not-a-date',
+        reason: 'invalid_date',
+      },
+    });
   });
 });
 
@@ -958,21 +937,15 @@ describe('Echo run metrics', () => {
 
     await echo.alarm();
 
-    expect(mockLogger.debug).toHaveBeenCalledWith(
-      'Echo alarm metrics',
-      expect.objectContaining({
-        unread_check_ms: 14,
-        think_ms: 0,
-      })
-    );
-    const debugCalls = vi.mocked(mockLogger.debug).mock.calls;
-    const metricsContext = debugCalls.find(
-      (call) => call[0] === 'Echo alarm metrics'
-    )?.[1] as
-      | {
-          alarm_total_ms: number;
-        }
-      | undefined;
-    expect(typeof metricsContext?.alarm_total_ms).toBe('number');
+    const completedEvent = findEmittedEvent('system.schedule.alarm_completed');
+    expect(completedEvent).toMatchObject({
+      severity: 'debug',
+      payload: {
+        status: 'completed',
+        unreadCheckMs: 14,
+        thinkMs: 0,
+      },
+    });
+    expect(typeof completedEvent?.payload?.alarmTotalMs).toBe('number');
   });
 });

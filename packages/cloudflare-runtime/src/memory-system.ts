@@ -1,7 +1,6 @@
 import type { Emotion, MemoryType } from '@echo-chamber/core/echo/types';
 import { emitEchoEvent } from '@echo-chamber/core/ports/echo-event';
 import type { EchoEventPort } from '@echo-chamber/core/ports/echo-event';
-import type { LoggerPort } from '@echo-chamber/core/ports/logger';
 import { formatDatetimeForAgent } from '@echo-chamber/core/utils/datetime';
 import { getErrorMessage } from '@echo-chamber/core/utils/error';
 import { cosineSimilarity } from '@echo-chamber/core/utils/vector';
@@ -64,26 +63,23 @@ export class MemorySystem {
   private readonly sql: SqlStorage;
   private readonly embeddingService: EmbeddingService;
   private readonly rerankingService: RerankingService;
-  private readonly logger: Pick<LoggerPort, 'debug' | 'info' | 'error'>;
   private readonly events: EchoEventPort | undefined;
   private initialized = false;
 
   /**
-   * SQLite と embedding service を使う memory runtime を構築する。
+   * SQLite と embedding / reranking service を使う memory runtime を構築する。
    *
-   * @param options SQLite storage、embedding service、logger
+   * @param options SQLite storage、embedding service、reranking service、event port
    */
   constructor(options: {
     sql: SqlStorage;
     embeddingService: EmbeddingService;
     rerankingService: RerankingService;
-    logger: Pick<LoggerPort, 'debug' | 'info' | 'error'>;
     events?: EchoEventPort;
   }) {
     this.sql = options.sql;
     this.embeddingService = options.embeddingService;
     this.rerankingService = options.rerankingService;
-    this.logger = options.logger;
     this.events = options.events;
   }
 
@@ -181,9 +177,16 @@ export class MemorySystem {
         .one();
 
       this.sql.exec('DELETE FROM memories WHERE id = ?', oldest.id);
-      await this.logger.info(
-        `Memory capacity reached. Removed oldest memory: ${oldest.content}`
-      );
+      await emitEchoEvent(this.events, {
+        type: 'memory.evicted',
+        severity: 'warn',
+        summary: 'memory capacity reached; removed oldest memory',
+        payload: {
+          id: oldest.id,
+          content: oldest.content,
+          maxMemoryCount: MAX_MEMORY_COUNT,
+        },
+      });
     }
 
     const now = new Date().toISOString();
@@ -280,20 +283,6 @@ export class MemorySystem {
     const rerankedMemories = await this.rerankCandidates(
       query,
       vectorCandidates
-    );
-
-    await this.logger.info(
-      `Search Memory with query:\n[${type ?? 'all'}] ${query}\nVector candidates:\n${vectorCandidates
-        .map(
-          ({ row, similarity }) =>
-            `[${row.type}] ${row.content} (vector=${similarity.toFixed(4)})`
-        )
-        .join('\n')}\nFinal results:\n${rerankedMemories
-        .map(
-          ({ row, similarity, rerankScore }) =>
-            `[${row.type}] ${row.content} (vector=${similarity.toFixed(4)}, rerank=${rerankScore.toFixed(4)})`
-        )
-        .join('\n')}`
     );
 
     const results = rerankedMemories.map(({ row, rerankScore }) => ({
@@ -401,16 +390,28 @@ export class MemorySystem {
       .toArray();
 
     if (staleRows.length === 0) {
-      await this.logger.debug(
-        `No stale memories to re-embed (model: ${currentModel})`
-      );
+      await emitEchoEvent(this.events, {
+        type: 'memory.reembedding.skipped',
+        severity: 'debug',
+        summary: 'no stale memories to re-embed',
+        payload: {
+          currentModel,
+        },
+      });
       return;
     }
 
-    await this.logger.info(
-      `Re-embedding ${staleRows.length} memories with ${currentModel}...`
-    );
+    await emitEchoEvent(this.events, {
+      type: 'memory.reembedding.started',
+      severity: 'info',
+      summary: `re-embedding ${staleRows.length} memories`,
+      payload: {
+        currentModel,
+        staleCount: staleRows.length,
+      },
+    });
 
+    let failedCount = 0;
     for (const row of staleRows) {
       try {
         // eslint-disable-next-line no-await-in-loop
@@ -423,14 +424,32 @@ export class MemorySystem {
           row.id
         );
       } catch (error) {
+        failedCount += 1;
         // eslint-disable-next-line no-await-in-loop
-        await this.logger.error(
-          `Failed to re-embed memory ${row.id}: ${getErrorMessage(error)}`
-        );
+        await emitEchoEvent(this.events, {
+          type: 'memory.reembedding.item_failed',
+          severity: 'warn',
+          summary: `failed to re-embed memory ${row.id}`,
+          payload: {
+            id: row.id,
+            currentModel,
+            error: getErrorMessage(error),
+          },
+        });
       }
     }
 
-    await this.logger.info(`Re-embedding complete.`);
+    await emitEchoEvent(this.events, {
+      type: 'memory.reembedding.completed',
+      severity: failedCount > 0 ? 'warn' : 'info',
+      summary: 're-embedding completed',
+      payload: {
+        currentModel,
+        staleCount: staleRows.length,
+        successCount: staleRows.length - failedCount,
+        failedCount,
+      },
+    });
   }
 
   /**
@@ -480,13 +499,27 @@ export class MemorySystem {
         return rerankedCandidates;
       }
 
-      await this.logger.error(
-        'Reranker returned no usable results. Falling back to vector ranking.'
-      );
+      await emitEchoEvent(this.events, {
+        type: 'memory.rerank.fallback',
+        severity: 'warn',
+        summary:
+          'reranker returned no usable results; falling back to vector ranking',
+        payload: {
+          query,
+          candidateCount: candidates.length,
+        },
+      });
     } catch (error) {
-      await this.logger.error(
-        `Failed to rerank memory search results: ${getErrorMessage(error)}`
-      );
+      await emitEchoEvent(this.events, {
+        type: 'memory.rerank.failed',
+        severity: 'warn',
+        summary: `failed to rerank memory search results: ${getErrorMessage(error)}`,
+        payload: {
+          query,
+          candidateCount: candidates.length,
+          error: getErrorMessage(error),
+        },
+      });
     }
 
     return candidates.slice(0, SEARCH_RESULT_LIMIT).map((candidate) => ({

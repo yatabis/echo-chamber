@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 
-import type { LoggerPort } from '@echo-chamber/core/ports/logger';
+import { emitEchoEvent } from '@echo-chamber/core/ports/echo-event';
+import type { EchoEventPort } from '@echo-chamber/core/ports/echo-event';
 import type {
   ModelInputItem,
   ModelMessage,
@@ -12,7 +13,6 @@ import type {
   ModelToolContract,
   ModelUsage,
 } from '@echo-chamber/core/ports/model';
-import type { ThoughtLogPort } from '@echo-chamber/core/ports/thought-log';
 
 import { toFunctionParameters } from './openai-response-mappers';
 
@@ -33,8 +33,7 @@ export interface OpenAIChatCompletionsModelOptions {
   apiKey: string;
   model: string;
   baseURL?: string;
-  logger?: Pick<LoggerPort, 'debug' | 'warn'>;
-  thoughtLog?: Pick<ThoughtLogPort, 'send'>;
+  events?: EchoEventPort;
   reasoningEffort?: ReasoningEffort;
   maxTokens?: number;
   temperature?: number;
@@ -59,8 +58,7 @@ const EMPTY_CHAT_USAGE: CompletionUsage = {
 export class OpenAIChatCompletionsModel implements ModelPort {
   private readonly client: OpenAI;
   private readonly messages: ChatCompletionMessageParam[] = [];
-  private readonly logger: Pick<LoggerPort, 'debug' | 'warn'> | undefined;
-  private readonly thoughtLog: Pick<ThoughtLogPort, 'send'> | undefined;
+  private readonly events: EchoEventPort | undefined;
 
   /**
    * Chat Completions API を使う `ModelPort` adapter を構築する。
@@ -72,8 +70,7 @@ export class OpenAIChatCompletionsModel implements ModelPort {
       apiKey: options.apiKey,
       baseURL: options.baseURL,
     });
-    this.logger = options.logger;
-    this.thoughtLog = options.thoughtLog;
+    this.events = options.events;
   }
 
   /**
@@ -83,26 +80,45 @@ export class OpenAIChatCompletionsModel implements ModelPort {
    * @returns Chat Completions API が返した生の `ChatCompletion`
    */
   async createChatCompletion(request: ModelRequest): Promise<ChatCompletion> {
+    return (await this.createChatCompletionExchange(request)).response;
+  }
+
+  /**
+   * Chat Completions API request / response の組を作成する。
+   *
+   * @param request `core` が定義する provider 非依存の 1 ターン分リクエスト
+   * @returns provider request body と Chat Completions response
+   */
+  private async createChatCompletionExchange(request: ModelRequest): Promise<{
+    params: ChatCompletionCreateParamsNonStreaming &
+      OpenAIChatCompletionsExtraBody;
+    response: ChatCompletion;
+  }> {
     this.messages.push(...this.toChatMessages(request.input));
 
     const params = this.createParams(request);
-    await this.logger?.debug(JSON.stringify(params.messages, null, 2));
 
     const response = await this.client.chat.completions.create(params);
     const assistantMessage = response.choices[0]?.message;
 
     if (assistantMessage === undefined) {
-      await this.logger?.warn('Chat completion returned no choices');
-      return response;
+      await this.emitProviderWarning(request, {
+        code: 'missing_choice',
+        message: 'Chat completion returned no choices',
+      });
+      return { params, response };
     }
 
     this.messages.push(toAssistantMessageParam(assistantMessage));
 
     if (!response.usage) {
-      await this.logger?.warn('Chat completion usage information is undefined');
+      await this.emitProviderWarning(request, {
+        code: 'missing_usage',
+        message: 'Chat completion usage information is undefined',
+      });
     }
 
-    return response;
+    return { params, response };
   }
 
   /**
@@ -112,18 +128,98 @@ export class OpenAIChatCompletionsModel implements ModelPort {
    * @returns provider 非依存の output / usage
    */
   async generate(request: ModelRequest): Promise<ModelResponse> {
-    const response = await this.createChatCompletion(request);
+    const { params, response } =
+      await this.createChatCompletionExchange(request);
     const message = response.choices[0]?.message;
     const output = message === undefined ? [] : toModelOutput(message);
 
-    await this.logger?.debug(JSON.stringify(message ?? null, null, 2));
-    await this.thoughtLog?.send(formatChatLogOutput(output));
+    await this.emitModelExchangeRecorded(request, params, response);
+    await this.emitModelOutputEmitted(request, output);
 
     return {
       output,
       usage: toChatModelUsage(response.usage),
       responseToken: response.id,
     };
+  }
+
+  /**
+   * raw API payload を debug event として記録する。
+   *
+   * @param request provider-neutral request
+   * @param params Chat Completions request body
+   * @param response Chat Completions response body
+   */
+  private async emitModelExchangeRecorded(
+    request: ModelRequest,
+    params: ChatCompletionCreateParamsNonStreaming &
+      OpenAIChatCompletionsExtraBody,
+    response: ChatCompletion
+  ): Promise<void> {
+    await emitEchoEvent(this.events, {
+      type: 'model.exchange.recorded',
+      severity: 'debug',
+      summary: `model exchange recorded: ${this.options.model}`,
+      payload: {
+        provider: 'openai.chat_completions',
+        model: this.options.model,
+        turnIndex: request.turnIndex,
+        request: params,
+        response,
+      },
+    });
+  }
+
+  /**
+   * assistant message の本文だけを thought stream に載せる。
+   * tool call は `tool.*` event と重複するため含めない。
+   *
+   * @param request provider-neutral request
+   * @param output provider 非依存の output item
+   */
+  private async emitModelOutputEmitted(
+    request: ModelRequest,
+    output: readonly ModelOutputItem[]
+  ): Promise<void> {
+    const content = formatChatModelOutputContent(output);
+    if (content === '') {
+      return;
+    }
+
+    await emitEchoEvent(this.events, {
+      type: 'model.output.emitted',
+      severity: 'info',
+      summary: 'model output emitted',
+      payload: {
+        provider: 'openai.chat_completions',
+        model: this.options.model,
+        turnIndex: request.turnIndex,
+        content,
+      },
+    });
+  }
+
+  /**
+   * provider 応答の欠落など、adapter 内で検知した警告をイベント化する。
+   *
+   * @param request provider-neutral request
+   * @param warning 警告コードと説明
+   */
+  private async emitProviderWarning(
+    request: ModelRequest,
+    warning: { code: string; message: string }
+  ): Promise<void> {
+    await emitEchoEvent(this.events, {
+      type: 'model.provider.warning',
+      severity: 'warn',
+      summary: warning.message,
+      payload: {
+        provider: 'openai.chat_completions',
+        model: this.options.model,
+        turnIndex: request.turnIndex,
+        code: warning.code,
+      },
+    });
   }
 
   /**
@@ -315,18 +411,22 @@ function toAssistantMessageParam(
 }
 
 /**
- * thought log 向けに chat output を短く整形する。
+ * chat output から model category の thought 表示に載せる本文だけを整形する。
  */
-function formatChatLogOutput(output: readonly ModelOutputItem[]): string {
+function formatChatModelOutputContent(
+  output: readonly ModelOutputItem[]
+): string {
   return output
     .map((item) => {
-      if (item.type === 'message') {
-        return `*thinking: ${item.content}*`;
+      if (item.type !== 'message') {
+        return undefined;
       }
 
-      return `*${item.toolName}: ${item.input}*`;
+      return `*thinking: ${item.content}*`;
     })
-    .join('\n\n');
+    .filter((message) => message !== undefined)
+    .join('\n\n')
+    .trim();
 }
 
 /**

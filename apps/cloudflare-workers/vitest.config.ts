@@ -59,7 +59,6 @@ export default defineWorkersConfig({
         'vitest.config.ts',
         '**/*.test.ts',
         '**/*.spec.ts',
-        'src/utils/logger.ts',
       ],
     },
     testTimeout: 10000,

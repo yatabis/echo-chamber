@@ -1,8 +1,6 @@
 import type { EmbeddingService } from '@echo-chamber/cloudflare-runtime/embedding-service';
-
-import { createLogger } from '../../utils/logger';
-
-import type { Logger } from '../../utils/logger';
+import { emitEchoEvent } from '@echo-chamber/core/ports/echo-event';
+import type { EchoEventPort } from '@echo-chamber/core/ports/echo-event';
 
 const DEFAULT_MODEL = '@cf/pfnet/plamo-embedding-1b';
 
@@ -21,12 +19,17 @@ const DEFAULT_MODEL = '@cf/pfnet/plamo-embedding-1b';
 export class WorkersAIEmbeddingService implements EmbeddingService {
   private readonly ai: Ai;
   private readonly model: string;
-  private readonly logger: Logger;
+  private readonly events: EchoEventPort | undefined;
 
-  constructor(env: Env, model: string = DEFAULT_MODEL) {
+  /**
+   * @param env Cloudflare Workers environment
+   * @param model Workers AI embedding model
+   * @param events embedding 生成イベントの送信先
+   */
+  constructor(env: Env, model: string = DEFAULT_MODEL, events?: EchoEventPort) {
     this.ai = env.AI;
     this.model = model;
-    this.logger = createLogger(env);
+    this.events = events;
   }
 
   get modelIdentifier(): string {
@@ -34,19 +37,28 @@ export class WorkersAIEmbeddingService implements EmbeddingService {
   }
 
   async embed(text: string): Promise<number[]> {
+    const startedAt = Date.now();
     const response = await this.ai.run(this.model as Parameters<Ai['run']>[0], {
       text,
     });
-
-    await this.logger.info(
-      `Workers AI Embedding generated (model: ${this.model})`
-    );
 
     const output = response as { data: number[][] };
     const embedding = output.data[0];
     if (!embedding) {
       throw new Error('Failed to generate embedding from Workers AI');
     }
+    await emitEchoEvent(this.events, {
+      type: 'memory.embedding.generated',
+      severity: 'debug',
+      summary: 'embedding generated',
+      payload: {
+        provider: 'workersai',
+        model: this.modelIdentifier,
+        inputLength: text.length,
+        dimensions: embedding.length,
+        durationMs: Date.now() - startedAt,
+      },
+    });
     return embedding;
   }
 }

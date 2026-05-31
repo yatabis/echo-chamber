@@ -5,7 +5,7 @@ export type EchoEventCategory =
   | 'model'
   | 'tool'
   | 'memory'
-  | 'control'
+  | 'system'
   | 'usage';
 
 export type EchoEventStream = 'thought' | 'system' | 'analysis';
@@ -16,12 +16,35 @@ export type EchoEventType =
   | 'session.failed'
   | 'model.turn.started'
   | 'model.turn.completed'
+  | 'model.output.emitted'
+  | 'model.exchange.recorded'
+  | 'model.provider.warning'
   | 'tool.called'
   | 'tool.completed'
   | 'tool.failed'
+  | 'memory.evicted'
+  | 'memory.embedding.generated'
   | 'memory.search.started'
   | 'memory.search.completed'
-  | 'run_decision.evaluated'
+  | 'memory.search.failed'
+  | 'memory.reembedding.skipped'
+  | 'memory.reembedding.started'
+  | 'memory.reembedding.item_failed'
+  | 'memory.reembedding.completed'
+  | 'memory.rerank.failed'
+  | 'memory.rerank.fallback'
+  | 'system.schedule.alarm_triggered'
+  | 'system.schedule.alarm_completed'
+  | 'system.schedule.alarm_scheduled'
+  | 'system.schedule.next_wake_at_updated'
+  | 'system.schedule.next_wake_at_cleared'
+  | 'system.schedule.next_wake_at_invalidated'
+  | 'system.echo_state.changed'
+  | 'system.echo_state.change_rejected'
+  | 'system.echo_state.change_failed'
+  | 'system.run.failed'
+  | 'system.run.precondition_failed'
+  | 'system.run_decision.evaluated'
   | 'usage.recorded';
 
 const ECHO_EVENT_CATEGORIES: Record<EchoEventType, EchoEventCategory> = {
@@ -30,12 +53,35 @@ const ECHO_EVENT_CATEGORIES: Record<EchoEventType, EchoEventCategory> = {
   'session.failed': 'session',
   'model.turn.started': 'model',
   'model.turn.completed': 'model',
+  'model.output.emitted': 'model',
+  'model.exchange.recorded': 'model',
+  'model.provider.warning': 'model',
   'tool.called': 'tool',
   'tool.completed': 'tool',
   'tool.failed': 'tool',
+  'memory.evicted': 'memory',
+  'memory.embedding.generated': 'memory',
   'memory.search.started': 'memory',
   'memory.search.completed': 'memory',
-  'run_decision.evaluated': 'control',
+  'memory.search.failed': 'memory',
+  'memory.reembedding.skipped': 'memory',
+  'memory.reembedding.started': 'memory',
+  'memory.reembedding.item_failed': 'memory',
+  'memory.reembedding.completed': 'memory',
+  'memory.rerank.failed': 'memory',
+  'memory.rerank.fallback': 'memory',
+  'system.schedule.alarm_triggered': 'system',
+  'system.schedule.alarm_completed': 'system',
+  'system.schedule.alarm_scheduled': 'system',
+  'system.schedule.next_wake_at_updated': 'system',
+  'system.schedule.next_wake_at_cleared': 'system',
+  'system.schedule.next_wake_at_invalidated': 'system',
+  'system.echo_state.changed': 'system',
+  'system.echo_state.change_rejected': 'system',
+  'system.echo_state.change_failed': 'system',
+  'system.run.failed': 'system',
+  'system.run.precondition_failed': 'system',
+  'system.run_decision.evaluated': 'system',
   'usage.recorded': 'usage',
 };
 
@@ -45,12 +91,35 @@ const ECHO_EVENT_STREAMS: Record<EchoEventType, EchoEventStream[]> = {
   'session.failed': ['thought', 'system', 'analysis'],
   'model.turn.started': ['analysis'],
   'model.turn.completed': ['analysis'],
+  'model.output.emitted': ['thought', 'analysis'],
+  'model.exchange.recorded': ['analysis'],
+  'model.provider.warning': ['system', 'analysis'],
   'tool.called': ['thought', 'analysis'],
   'tool.completed': ['system', 'analysis'],
   'tool.failed': ['thought', 'system', 'analysis'],
+  'memory.evicted': ['system', 'analysis'],
+  'memory.embedding.generated': ['system', 'analysis'],
   'memory.search.started': ['system', 'analysis'],
   'memory.search.completed': ['system', 'analysis'],
-  'run_decision.evaluated': ['system', 'analysis'],
+  'memory.search.failed': ['system', 'analysis'],
+  'memory.reembedding.skipped': ['system', 'analysis'],
+  'memory.reembedding.started': ['system', 'analysis'],
+  'memory.reembedding.item_failed': ['system', 'analysis'],
+  'memory.reembedding.completed': ['system', 'analysis'],
+  'memory.rerank.failed': ['system', 'analysis'],
+  'memory.rerank.fallback': ['system', 'analysis'],
+  'system.schedule.alarm_triggered': ['system', 'analysis'],
+  'system.schedule.alarm_completed': ['system', 'analysis'],
+  'system.schedule.alarm_scheduled': ['system', 'analysis'],
+  'system.schedule.next_wake_at_updated': ['system', 'analysis'],
+  'system.schedule.next_wake_at_cleared': ['system', 'analysis'],
+  'system.schedule.next_wake_at_invalidated': ['system', 'analysis'],
+  'system.echo_state.changed': ['system', 'analysis'],
+  'system.echo_state.change_rejected': ['system', 'analysis'],
+  'system.echo_state.change_failed': ['system', 'analysis'],
+  'system.run.failed': ['system', 'analysis'],
+  'system.run.precondition_failed': ['system', 'analysis'],
+  'system.run_decision.evaluated': ['system', 'analysis'],
   'usage.recorded': ['system', 'analysis'],
 };
 

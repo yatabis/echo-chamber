@@ -6,7 +6,6 @@
   "exports": {
     "./api": "./src/api.ts",
     "./chat-port": "./src/chat-port.ts",
-    "./discord-thought-log": "./src/discord-thought-log.ts",
     "./notification-port": "./src/notification-port.ts",
     "./notification-utils": "./src/notification-utils.ts"
   },

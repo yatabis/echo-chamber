@@ -54,13 +54,6 @@ const mockToolContext: ToolContext = {
     listTrendingArticles: vi.fn().mockResolvedValue([]),
     getArticleBySlug: vi.fn(),
   },
-  logger: {
-    log: vi.fn().mockResolvedValue(undefined),
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  } as unknown as ToolContext['logger'],
 };
 
 beforeEach(() => {
@@ -127,6 +120,9 @@ describe('Note Functions', () => {
       expect(result).toEqual({
         success: false,
         error: 'Note capacity reached (max 200)',
+        diagnostics: {
+          error: 'Note capacity reached (max 200)',
+        },
       });
     });
   });

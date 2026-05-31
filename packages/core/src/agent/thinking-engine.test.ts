@@ -112,7 +112,6 @@ describe('ThinkingEngine', () => {
       usage,
       responseToken: 'resp-1',
     });
-    const thoughtLogSend = vi.fn().mockResolvedValue(undefined);
     const latestContext = createSessionContext();
     const relatedMemories = createRelatedMemories();
     const relatedMemory = relatedMemories[0];
@@ -124,14 +123,6 @@ describe('ThinkingEngine', () => {
 
     const engine = new ThinkingEngine({
       model: { generate },
-      thoughtLog: { send: thoughtLogSend },
-      logger: {
-        log: vi.fn(),
-        debug: vi.fn(),
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-      },
       context: {
         load: vi.fn().mockResolvedValue(latestContext),
       },
@@ -198,9 +189,8 @@ describe('ThinkingEngine', () => {
         createToolContract('finish_thinking'),
       ],
       previousResponseToken: undefined,
+      turnIndex: 1,
     });
-    expect(thoughtLogSend).toHaveBeenNthCalledWith(1, '*Thinking started...*');
-    expect(thoughtLogSend).toHaveBeenNthCalledWith(2, '*Thinking completed.*');
     expect(finishToolExecute).toHaveBeenCalledWith(
       createFinishThinkingInput(nextWakeAt)
     );
@@ -218,18 +208,9 @@ describe('ThinkingEngine', () => {
 
   it('起動用 tool が未登録なら失敗する', async () => {
     const generate = vi.fn<ModelPort['generate']>();
-    const thoughtLogSend = vi.fn().mockResolvedValue(undefined);
 
     const engine = new ThinkingEngine({
       model: { generate },
-      thoughtLog: { send: thoughtLogSend },
-      logger: {
-        log: vi.fn(),
-        debug: vi.fn(),
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-      },
       context: {
         load: vi.fn().mockResolvedValue(null),
       },
@@ -249,7 +230,6 @@ describe('ThinkingEngine', () => {
     await expect(engine.think()).rejects.toThrow(
       "Required startup tool 'check_notifications' is not registered"
     );
-    expect(thoughtLogSend).toHaveBeenCalledTimes(1);
     expect(generate).not.toHaveBeenCalled();
   });
 
@@ -258,18 +238,9 @@ describe('ThinkingEngine', () => {
       .fn()
       .mockRejectedValue(new Error('startup failed'));
     const generate = vi.fn<ModelPort['generate']>();
-    const thoughtLogSend = vi.fn().mockResolvedValue(undefined);
 
     const engine = new ThinkingEngine({
       model: { generate },
-      thoughtLog: { send: thoughtLogSend },
-      logger: {
-        log: vi.fn(),
-        debug: vi.fn(),
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-      },
       context: {
         load: vi.fn().mockResolvedValue(null),
       },
@@ -287,7 +258,6 @@ describe('ThinkingEngine', () => {
     });
 
     await expect(engine.think()).rejects.toThrow('startup failed');
-    expect(thoughtLogSend).toHaveBeenCalledTimes(1);
     expect(generate).not.toHaveBeenCalled();
   });
 
@@ -310,14 +280,6 @@ describe('ThinkingEngine', () => {
 
     const engine = new ThinkingEngine({
       model: { generate },
-      thoughtLog: { send: vi.fn().mockResolvedValue(undefined) },
-      logger: {
-        log: vi.fn(),
-        debug: vi.fn(),
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-      },
       context: {
         load: vi.fn().mockResolvedValue(null),
       },
@@ -368,19 +330,12 @@ describe('ThinkingEngine', () => {
           responseToken: 'resp-1',
         });
       });
-    const warn = vi.fn().mockResolvedValue(undefined);
+    const emit = vi.fn().mockResolvedValue(undefined);
     const latestContext = createSessionContext();
 
     const engine = new ThinkingEngine({
       model: { generate },
-      thoughtLog: { send: vi.fn().mockResolvedValue(undefined) },
-      logger: {
-        log: vi.fn(),
-        debug: vi.fn(),
-        info: vi.fn(),
-        warn,
-        error: vi.fn(),
-      },
+      events: { emit },
       context: {
         load: vi.fn().mockResolvedValue(latestContext),
       },
@@ -404,9 +359,19 @@ describe('ThinkingEngine', () => {
 
     await engine.think();
 
-    expect(warn).toHaveBeenCalledWith(
-      'Failed to load related memories for startup context: memory search failed'
-    );
+    expect(emit).toHaveBeenCalledWith({
+      type: 'memory.search.failed',
+      category: 'memory',
+      severity: 'warn',
+      streams: ['system', 'analysis'],
+      summary:
+        'failed to load related memories for startup context: memory search failed',
+      payload: {
+        source: 'startup_context',
+        query: latestContext.content,
+        error: 'memory search failed',
+      },
+    });
     expect(capturedRequest).toBeDefined();
     if (capturedRequest === undefined) {
       throw new Error('Expected generate to be called');

@@ -27,11 +27,4 @@ export const mockToolContext: ToolContext = {
     listTrendingArticles: vi.fn().mockResolvedValue([]),
     getArticleBySlug: vi.fn(),
   },
-  logger: {
-    log: vi.fn().mockResolvedValue(undefined),
-    debug: vi.fn().mockResolvedValue(undefined),
-    info: vi.fn().mockResolvedValue(undefined),
-    warn: vi.fn().mockResolvedValue(undefined),
-    error: vi.fn().mockResolvedValue(undefined),
-  },
 };

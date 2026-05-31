@@ -2,7 +2,7 @@ import { emitEchoEvent } from '../ports/echo-event';
 import { getErrorMessage } from '../utils/error';
 
 import { buildAgentPromptMessages } from './prompt-builder';
-import { runAgentSession } from './session';
+import { runAgentSession, sanitizeToolOutputForModel } from './session';
 import { checkNotificationsToolSpec } from './tools/chat';
 
 import type {
@@ -12,7 +12,6 @@ import type {
 import type { AgentSessionTool } from './session';
 import type { ContextPort, ContextSnapshot } from '../ports/context';
 import type { EchoEventPort } from '../ports/echo-event';
-import type { LoggerPort } from '../ports/logger';
 import type { MemoryPort, MemorySearchResult } from '../ports/memory';
 import type {
   ModelInputItem,
@@ -21,7 +20,6 @@ import type {
   ModelToolResult,
   ModelUsage,
 } from '../ports/model';
-import type { ThoughtLogPort } from '../ports/thought-log';
 
 /**
  * Thinking engine の構築入力。
@@ -29,8 +27,6 @@ import type { ThoughtLogPort } from '../ports/thought-log';
  */
 export interface ThinkingEngineInput {
   model: ModelPort;
-  thoughtLog: ThoughtLogPort;
-  logger: LoggerPort;
   events?: EchoEventPort;
   context: Pick<ContextPort, 'load'>;
   memory: Pick<MemoryPort, 'search'>;
@@ -50,8 +46,6 @@ export interface ThinkingEngineResult {
 }
 
 const STARTUP_TOOL_INPUT = '{}';
-const THINKING_STARTED_MESSAGE = '*Thinking started...*';
-const THINKING_COMPLETED_MESSAGE = '*Thinking completed.*';
 
 /**
  * 永続化された context snapshot を prompt builder 用の最小表現へ変換する。
@@ -89,7 +83,7 @@ function toPromptRelatedMemories(
 
 /**
  * provider/runtime 非依存の思考 orchestration。
- * prompt 構築、起動時通知チェック、session 実行、thought log 送信を順に担う。
+ * prompt 構築、起動時通知チェック、session 実行を順に担う。
  */
 export class ThinkingEngine {
   /**
@@ -109,14 +103,12 @@ export class ThinkingEngine {
       severity: 'info',
       summary: 'thinking session started',
     });
-    await this.input.thoughtLog.send(THINKING_STARTED_MESSAGE);
 
     try {
       const session = await runAgentSession({
         model: this.input.model,
         tools: this.input.tools,
         initialInput: await this.buildInitialInput(),
-        logger: this.input.logger,
         events: this.input.events,
       });
       const completedAt = new Date().toISOString();
@@ -134,15 +126,15 @@ export class ThinkingEngine {
         usage: session.usage,
       };
 
-      await this.input.thoughtLog.send(THINKING_COMPLETED_MESSAGE);
       await emitEchoEvent(this.input.events, {
         type: 'session.completed',
-        severity: 'info',
+        severity: session.terminationReason === 'max_turns' ? 'warn' : 'info',
         summary: 'thinking session completed',
         payload: {
           nextWakeAt: result.nextWakeAt,
           totalTokens: result.usage.totalTokens,
           hasContext: result.context !== null,
+          terminationReason: session.terminationReason,
         },
       });
       return result;
@@ -197,9 +189,16 @@ export class ThinkingEngine {
     try {
       return await this.input.memory.search(latestContext.content);
     } catch (error) {
-      await this.input.logger.warn(
-        `Failed to load related memories for startup context: ${getErrorMessage(error)}`
-      );
+      await emitEchoEvent(this.input.events, {
+        type: 'memory.search.failed',
+        severity: 'warn',
+        summary: `failed to load related memories for startup context: ${getErrorMessage(error)}`,
+        payload: {
+          source: 'startup_context',
+          query: latestContext.content,
+          error: getErrorMessage(error),
+        },
+      });
       return [];
     }
   }
@@ -231,7 +230,9 @@ export class ThinkingEngine {
     return {
       type: 'tool_result',
       callId: startupTool.name,
-      output: await startupTool.execute(STARTUP_TOOL_INPUT),
+      output: sanitizeToolOutputForModel(
+        await startupTool.execute(STARTUP_TOOL_INPUT)
+      ),
     };
   }
 

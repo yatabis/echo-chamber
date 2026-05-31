@@ -2,7 +2,6 @@ import type { MemorySystem } from '@echo-chamber/cloudflare-runtime/memory-syste
 import type { NoteSystem } from '@echo-chamber/cloudflare-runtime/note-system';
 import type { ToolExecutionContext } from '@echo-chamber/core/agent/tool-context';
 import type { Note } from '@echo-chamber/core/echo/types';
-import type { LoggerPort } from '@echo-chamber/core/ports/logger';
 import type { MemorySearchResult } from '@echo-chamber/core/ports/memory';
 import type { NotePort } from '@echo-chamber/core/ports/note';
 import { createDiscordChatPort } from '@echo-chamber/discord-adapter/chat-port';
@@ -11,7 +10,6 @@ import { createDiscordNotificationPort } from '@echo-chamber/discord-adapter/not
 import { createZennPort } from '../zenn/create-zenn-port';
 
 import type { EchoChatRuntimeBindings } from '../config/echo-runtime-bindings';
-import type { Logger } from '../utils/logger';
 
 function createMemoryPort(
   memorySystem: MemorySystem
@@ -55,48 +53,10 @@ function createNotePort(noteSystem: NoteSystem): NotePort {
   };
 }
 
-function createLoggerPort(logger: Logger): LoggerPort {
-  return {
-    async log(level, message, context): Promise<void> {
-      switch (level) {
-        case 'debug':
-          await logger.debug(message, context);
-          break;
-        case 'info':
-          await logger.info(message, context);
-          break;
-        case 'warn':
-          await logger.warn(message, context);
-          break;
-        case 'error':
-          await logger.error(message);
-          break;
-      }
-    },
-
-    async debug(message, context): Promise<void> {
-      await logger.debug(message, context);
-    },
-
-    async info(message, context): Promise<void> {
-      await logger.info(message, context);
-    },
-
-    async warn(message, context): Promise<void> {
-      await logger.warn(message, context);
-    },
-
-    async error(message, error): Promise<void> {
-      await logger.error(message, error);
-    },
-  };
-}
-
 export function createToolExecutionContext(options: {
   chatBindings: EchoChatRuntimeBindings;
   memorySystem: MemorySystem;
   noteSystem: NoteSystem;
-  logger: Logger;
 }): ToolExecutionContext {
   return {
     chat: createDiscordChatPort({
@@ -110,6 +70,5 @@ export function createToolExecutionContext(options: {
     memory: createMemoryPort(options.memorySystem),
     notes: createNotePort(options.noteSystem),
     zenn: createZennPort(),
-    logger: createLoggerPort(options.logger),
   };
 }

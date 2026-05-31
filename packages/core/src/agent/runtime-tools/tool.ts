@@ -17,6 +17,7 @@ interface ToolResultSuccess {
 interface ToolResultError {
   success: false;
   error: string;
+  diagnostics?: Record<string, unknown>;
 }
 
 export type ToolResult = ToolResultSuccess | ToolResultError;
@@ -90,6 +91,26 @@ export class Tool<
       return JSON.stringify({ success: false, error: getErrorMessage(error) });
     }
   }
+}
+
+/**
+ * model へ返す error と、EventPort 側だけに載せる診断情報を分ける。
+ *
+ * @param error model へ返す短い error
+ * @param cause 内部診断向けの原因
+ * @returns tool handler が返せる失敗結果
+ */
+export function createToolErrorResult(
+  error: string,
+  cause: unknown
+): ToolResultError {
+  return {
+    success: false,
+    error,
+    diagnostics: {
+      error: getErrorMessage(cause),
+    },
+  };
 }
 
 export function bindRuntimeTool(

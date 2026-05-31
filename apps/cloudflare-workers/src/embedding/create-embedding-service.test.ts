@@ -21,19 +21,23 @@ describe('createEmbeddingService', () => {
 
   it('config 省略時は OpenAIEmbeddingService を返す', () => {
     createEmbeddingService(mockEnv);
-    expect(OpenAIEmbeddingService).toHaveBeenCalledWith(mockEnv);
+    expect(OpenAIEmbeddingService).toHaveBeenCalledWith(mockEnv, undefined);
     expect(WorkersAIEmbeddingService).not.toHaveBeenCalled();
   });
 
   it("provider: 'openai' 指定時は OpenAIEmbeddingService を返す", () => {
     createEmbeddingService(mockEnv, { provider: 'openai' });
-    expect(OpenAIEmbeddingService).toHaveBeenCalledWith(mockEnv);
+    expect(OpenAIEmbeddingService).toHaveBeenCalledWith(mockEnv, undefined);
     expect(WorkersAIEmbeddingService).not.toHaveBeenCalled();
   });
 
   it("provider: 'workersai' 指定時は WorkersAIEmbeddingService を返す", () => {
     createEmbeddingService(mockEnv, { provider: 'workersai' });
-    expect(WorkersAIEmbeddingService).toHaveBeenCalledWith(mockEnv, undefined);
+    expect(WorkersAIEmbeddingService).toHaveBeenCalledWith(
+      mockEnv,
+      undefined,
+      undefined
+    );
     expect(OpenAIEmbeddingService).not.toHaveBeenCalled();
   });
 
@@ -44,7 +48,8 @@ describe('createEmbeddingService', () => {
     });
     expect(WorkersAIEmbeddingService).toHaveBeenCalledWith(
       mockEnv,
-      '@cf/baai/bge-large-en-v1.5'
+      '@cf/baai/bge-large-en-v1.5',
+      undefined
     );
   });
 });

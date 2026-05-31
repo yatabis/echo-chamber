@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { EchoEventPort } from '@echo-chamber/core/ports/echo-event';
+
 import {
   OpenAIChatCompletionsModel,
   toChatCompletionTool,
@@ -27,13 +29,9 @@ vi.mock('openai', () => {
   };
 });
 
-const mockLogger = {
-  debug: vi.fn().mockResolvedValue(undefined),
-  warn: vi.fn().mockResolvedValue(undefined),
-};
-
-const mockThoughtLog = {
-  send: vi.fn().mockResolvedValue(undefined),
+const mockEmit = vi.fn<EchoEventPort['emit']>().mockResolvedValue(undefined);
+const mockEvents: EchoEventPort = {
+  emit: mockEmit,
 };
 
 const thinkDeeplyTool = {
@@ -62,8 +60,6 @@ describe('OpenAIChatCompletionsModel', () => {
       apiKey: 'local-key',
       model: 'qwen3.6',
       baseURL: 'http://localhost:1234/v1',
-      logger: mockLogger,
-      thoughtLog: mockThoughtLog,
       reasoningEffort: 'none',
       maxTokens: 32768,
       temperature: 0.7,
@@ -183,8 +179,7 @@ describe('OpenAIChatCompletionsModel', () => {
     const model = new OpenAIChatCompletionsModel({
       apiKey: 'local-key',
       model: 'qwen3.6',
-      logger: mockLogger,
-      thoughtLog: mockThoughtLog,
+      events: mockEvents,
     });
 
     mockChatCreate
@@ -265,6 +260,7 @@ describe('OpenAIChatCompletionsModel', () => {
         },
       ],
       tools: [thinkDeeplyTool],
+      turnIndex: 2,
     });
 
     expect(first.output).toEqual([
@@ -324,6 +320,38 @@ describe('OpenAIChatCompletionsModel', () => {
         ],
       })
     );
+    const outputEvent = mockEmit.mock.calls.find(
+      ([event]) => event.type === 'model.output.emitted'
+    )?.[0];
+    expect(outputEvent).toMatchObject({
+      type: 'model.output.emitted',
+      category: 'model',
+      severity: 'info',
+      streams: ['thought', 'analysis'],
+      payload: {
+        provider: 'openai.chat_completions',
+        model: 'qwen3.6',
+        turnIndex: 2,
+        content: '*thinking: finished*',
+      },
+    });
+
+    const exchangeEvent = mockEmit.mock.calls.find(
+      ([event]) =>
+        event.type === 'model.exchange.recorded' &&
+        event.payload?.turnIndex === 2
+    )?.[0];
+    expect(exchangeEvent).toMatchObject({
+      type: 'model.exchange.recorded',
+      category: 'model',
+      severity: 'debug',
+      streams: ['analysis'],
+      payload: {
+        provider: 'openai.chat_completions',
+        model: 'qwen3.6',
+        turnIndex: 2,
+      },
+    });
   });
 
   it('usage がない response はゼロ usage として扱う', () => {

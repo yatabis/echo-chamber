@@ -1,5 +1,3 @@
-import type { Logger } from '../../utils/logger';
-
 /**
  * 感情エンジン（スケルトン）
  * 将来的にテキストやイベントから感情状態を推定・更新する。
@@ -8,20 +6,17 @@ export class EmotionEngine {
   private readonly _env: Env;
   private readonly _storage: DurableObjectStorage;
   private readonly _store: KVNamespace;
-  private readonly _logger: Logger;
   private readonly _echoId: string;
 
   constructor(options: {
     env: Env;
     storage: DurableObjectStorage;
     store: KVNamespace;
-    logger: Logger;
     echoId: string;
   }) {
     this._env = options.env;
     this._storage = options.storage;
     this._store = options.store;
-    this._logger = options.logger;
     this._echoId = options.echoId;
   }
 

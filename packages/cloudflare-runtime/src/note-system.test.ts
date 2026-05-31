@@ -5,7 +5,6 @@ import {
   MAX_NOTE_QUERY_LENGTH,
   MAX_NOTE_TITLE_LENGTH,
 } from '@echo-chamber/core/echo/note-constraints';
-import type { LoggerPort } from '@echo-chamber/core/ports/logger';
 
 import { MAX_NOTE_COUNT, NoteSystem } from './note-system';
 
@@ -50,16 +49,6 @@ function createMockStorage(): MockStorage {
   };
 }
 
-function createMockLogger(): Pick<LoggerPort, 'info'> {
-  return {
-    debug: vi.fn(async () => Promise.resolve()),
-    info: vi.fn(async () => Promise.resolve()),
-    warn: vi.fn(async () => Promise.resolve()),
-    error: vi.fn(async () => Promise.resolve()),
-    log: vi.fn(async () => Promise.resolve()),
-  } as unknown as LoggerPort;
-}
-
 async function createManyNotes(
   noteSystem: NoteSystem,
   count: number,
@@ -76,16 +65,13 @@ async function createManyNotes(
 
 describe('NoteSystem', () => {
   let storage: MockStorage;
-  let logger: Pick<LoggerPort, 'info'>;
   let noteSystem: NoteSystem;
 
   beforeEach(() => {
     vi.resetAllMocks();
     storage = createMockStorage();
-    logger = createMockLogger();
     noteSystem = new NoteSystem({
       storage: storage as DurableObjectStorage,
-      logger,
     });
   });
 
@@ -161,15 +147,6 @@ describe('NoteSystem', () => {
       ).rejects.toThrowError(
         `Content must be at most ${MAX_NOTE_CONTENT_LENGTH} characters`
       );
-    });
-
-    it('作成成功時はloggerに記録する', async () => {
-      const note = await noteSystem.createNote({
-        title: 'Meeting',
-        content: 'Discuss timeline',
-      });
-
-      expect(logger.info).toHaveBeenCalledWith(`Note created: ${note.id}`);
     });
   });
 
@@ -352,17 +329,6 @@ describe('NoteSystem', () => {
         vi.useRealTimers();
       }
     });
-
-    it('更新成功時はloggerに記録する', async () => {
-      const note = await noteSystem.createNote({
-        title: 'Draft',
-        content: 'Initial content',
-      });
-
-      await noteSystem.updateNote(note.id, { title: 'Final' });
-
-      expect(logger.info).toHaveBeenCalledWith(`Note updated: ${note.id}`);
-    });
   });
 
   describe('deleteNote', () => {
@@ -396,17 +362,6 @@ describe('NoteSystem', () => {
       await expect(noteSystem.deleteNote('   ')).rejects.toThrowError(
         'Note ID is required'
       );
-    });
-
-    it('削除成功時はloggerに記録する', async () => {
-      const note = await noteSystem.createNote({
-        title: 'Temp',
-        content: 'To be deleted',
-      });
-
-      await noteSystem.deleteNote(note.id);
-
-      expect(logger.info).toHaveBeenCalledWith(`Note deleted: ${note.id}`);
     });
   });
 

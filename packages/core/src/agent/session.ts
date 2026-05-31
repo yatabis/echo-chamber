@@ -8,7 +8,6 @@ import {
 } from './tools/thinking';
 
 import type { EchoEventPort } from '../ports/echo-event';
-import type { LoggerPort } from '../ports/logger';
 import type {
   ModelInputItem,
   ModelPort,
@@ -36,7 +35,6 @@ export interface RunAgentSessionInput {
   model: ModelPort;
   tools: readonly AgentSessionTool[];
   initialInput: ModelInputItem[];
-  logger?: Pick<LoggerPort, 'warn'>;
   events?: EchoEventPort;
   maxTurns?: number;
 }
@@ -44,13 +42,14 @@ export interface RunAgentSessionInput {
 /**
  * session 全体の実行結果。
  * usage 集計に加えて、`finish_thinking` が返した session record と
- * 次回起動時刻、provider 側の継続 token を返す。
+ * 次回起動時刻、provider 側の継続 token、終了理由を返す。
  */
 export interface AgentSessionResult {
   usage: ModelUsage;
   context?: FinishThinkingSessionRecord;
   nextWakeAt: string | null;
   responseToken?: string;
+  terminationReason: 'finish_thinking' | 'max_turns';
 }
 
 /**
@@ -64,9 +63,6 @@ export const ZERO_MODEL_USAGE: ModelUsage = {
   reasoningTokens: 0,
   totalTokens: 0,
 };
-
-const NO_TOOL_CALLS_CONTINUING_WARNING =
-  'No tool calls returned; continuing until finish_thinking is called';
 
 /**
  * 各ターンの usage を session 全体の usage に加算する。
@@ -145,7 +141,9 @@ export async function executeAgentToolCall(
   try {
     const output = await tool.execute(toolCall.input);
     const parsedOutput = parseToolOutput(output);
+    const sanitizedOutput = sanitizeToolOutputForModel(output);
     const success = parsedOutput.success !== false;
+    const metadata = createToolEventMetadata(toolCall, parsedOutput);
     await emitEchoEvent(events, {
       type: success ? 'tool.completed' : 'tool.failed',
       severity: success ? 'info' : 'warn',
@@ -157,10 +155,14 @@ export async function executeAgentToolCall(
         durationMs: Date.now() - startedAt,
         success,
         error: parsedOutput.error,
-        outputLength: output.length,
+        ...(parsedOutput.diagnostics === undefined
+          ? {}
+          : { diagnostics: parsedOutput.diagnostics }),
+        outputLength: sanitizedOutput.length,
+        ...metadata,
       },
     });
-    return output;
+    return sanitizedOutput;
   } catch (error) {
     const message = getErrorMessage(error);
     await emitEchoEvent(events, {
@@ -186,6 +188,8 @@ export async function executeAgentToolCall(
 function parseToolOutput(output: string): {
   success?: boolean;
   error?: unknown;
+  diagnostics?: unknown;
+  record?: Record<string, unknown>;
 } {
   try {
     const parsed: unknown = JSON.parse(output);
@@ -197,10 +201,118 @@ function parseToolOutput(output: string): {
     return {
       success: typeof record.success === 'boolean' ? record.success : undefined,
       error: record.error,
+      diagnostics: record.diagnostics,
+      record,
     };
   } catch {
     return {};
   }
+}
+
+function sanitizeToolOutput(
+  output: string,
+  parsedOutput: { diagnostics?: unknown; record?: Record<string, unknown> }
+): string {
+  if (
+    parsedOutput.diagnostics === undefined ||
+    parsedOutput.record === undefined
+  ) {
+    return output;
+  }
+
+  const sanitized = { ...parsedOutput.record };
+  delete sanitized.diagnostics;
+  return JSON.stringify(sanitized);
+}
+
+/**
+ * EventPort 用の診断情報を、model に返す tool output から取り除く。
+ *
+ * @param output tool handler が返した JSON 文字列
+ * @returns model input として渡せる JSON 文字列
+ */
+export function sanitizeToolOutputForModel(output: string): string {
+  return sanitizeToolOutput(output, parseToolOutput(output));
+}
+
+function createToolEventMetadata(
+  toolCall: ModelToolCall,
+  parsedOutput: { record?: Record<string, unknown> }
+): Record<string, unknown> {
+  const operation = getToolOperation(toolCall.toolName);
+  if (operation === undefined) {
+    return {};
+  }
+
+  return {
+    operation,
+    ...getToolEntityMetadata(toolCall, parsedOutput),
+  };
+}
+
+function getToolOperation(toolName: string): string | undefined {
+  switch (toolName) {
+    case 'create_note':
+      return 'note.create';
+    case 'list_notes':
+      return 'note.list';
+    case 'get_note':
+      return 'note.get';
+    case 'search_notes':
+      return 'note.search';
+    case 'update_note':
+      return 'note.update';
+    case 'delete_note':
+      return 'note.delete';
+    default:
+      return undefined;
+  }
+}
+
+function getToolEntityMetadata(
+  toolCall: ModelToolCall,
+  parsedOutput: { record?: Record<string, unknown> }
+): Record<string, unknown> {
+  const entityId =
+    getNoteIdFromOutput(parsedOutput.record) ??
+    getStringProperty(parseToolInput(toolCall.input), 'id');
+
+  return {
+    entityType: 'note',
+    ...(entityId === undefined ? {} : { entityId }),
+  };
+}
+
+function getNoteIdFromOutput(
+  output: Record<string, unknown> | undefined
+): string | undefined {
+  const note = output?.note;
+  if (typeof note !== 'object' || note === null) {
+    return undefined;
+  }
+
+  return getStringProperty(note as Record<string, unknown>, 'id');
+}
+
+function parseToolInput(input: string): Record<string, unknown> | undefined {
+  try {
+    const parsed: unknown = JSON.parse(input);
+    if (typeof parsed !== 'object' || parsed === null) {
+      return undefined;
+    }
+
+    return parsed as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
+
+function getStringProperty(
+  record: Record<string, unknown> | undefined,
+  key: string
+): string | undefined {
+  const value = record?.[key];
+  return typeof value === 'string' ? value : undefined;
 }
 
 function getToolCalls(response: ModelResponse): ModelToolCall[] {
@@ -298,32 +410,32 @@ export async function runAgentSession(
       input: currentInput,
       tools: getToolContracts(input.tools),
       previousResponseToken,
+      turnIndex: turn,
     });
 
     totalUsage = accumulateModelUsage(totalUsage, response.usage);
     previousResponseToken = response.responseToken;
 
     const toolCalls = getToolCalls(response);
+    const warnings = toolCalls.length === 0 ? ['no_tool_calls'] : [];
     // Agent turns are sequential; event emission belongs to the same turn.
     // eslint-disable-next-line no-await-in-loop
     await emitEchoEvent(input.events, {
       type: 'model.turn.completed',
-      severity: 'debug',
+      severity: warnings.length > 0 ? 'warn' : 'debug',
       summary: `model turn ${turn} completed`,
       payload: {
         turnIndex: turn,
         durationMs: Date.now() - turnStartedAt,
         outputItemCount: response.output.length,
         toolCallCount: toolCalls.length,
+        warnings,
         usage: response.usage,
       },
     });
 
-    if (toolCalls.length === 0) {
-      // The loop stays alive until finish_thinking appears explicitly.
-      // eslint-disable-next-line no-await-in-loop
-      await input.logger?.warn(NO_TOOL_CALLS_CONTINUING_WARNING);
-    }
+    // The loop stays alive until finish_thinking appears explicitly,
+    // even when the model returned no tool calls in this turn.
 
     const finishThinking = parseFinishThinkingInput(toolCalls);
 
@@ -342,14 +454,15 @@ export async function runAgentSession(
         nextWakeAt: finishThinking.next_wake_at ?? null,
         usage: totalUsage,
         responseToken: previousResponseToken,
+        terminationReason: 'finish_thinking',
       };
     }
   }
 
-  await input.logger?.warn('Maximum turns exceeded');
   return {
     nextWakeAt: null,
     usage: totalUsage,
     responseToken: previousResponseToken,
+    terminationReason: 'max_turns',
   };
 }

@@ -1,10 +1,9 @@
-import { getErrorMessage } from '../../utils/error';
 import {
   getZennArticleToolSpec,
   listTrendingZennArticlesToolSpec,
 } from '../tools/zenn';
 
-import { Tool } from './tool';
+import { createToolErrorResult, Tool } from './tool';
 
 const DEFAULT_TRENDING_ZENN_ARTICLE_LIMIT = 20;
 
@@ -66,13 +65,10 @@ export const listTrendingZennArticlesTool = new Tool(
         ),
       };
     } catch (error) {
-      await ctx.logger.error(
-        `Error listing Zenn trending articles: ${getErrorMessage(error)}`
+      return createToolErrorResult(
+        'Failed to list Zenn trending articles',
+        error
       );
-      return {
-        success: false,
-        error: 'Failed to list Zenn trending articles',
-      };
     }
   }
 );
@@ -102,13 +98,7 @@ export const getZennArticleTool = new Tool(
         truncated: truncatedContent.truncated,
       };
     } catch (error) {
-      await ctx.logger.error(
-        `Error fetching Zenn article: ${getErrorMessage(error)}`
-      );
-      return {
-        success: false,
-        error: 'Failed to fetch Zenn article',
-      };
+      return createToolErrorResult('Failed to fetch Zenn article', error);
     }
   }
 );

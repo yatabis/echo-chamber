@@ -83,6 +83,7 @@ export interface ModelRequest {
   input: ModelInputItem[];
   tools: ModelToolContract[];
   previousResponseToken?: string;
+  turnIndex?: number;
 }
 
 /**

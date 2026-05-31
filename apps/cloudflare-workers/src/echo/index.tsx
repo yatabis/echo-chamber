@@ -50,7 +50,6 @@ import type { EchoInstanceId } from '@echo-chamber/core/types/echo-config';
 import { isValidInstanceId } from '@echo-chamber/core/types/echo-config';
 import { formatDatetime } from '@echo-chamber/core/utils/datetime';
 import { getErrorMessage } from '@echo-chamber/core/utils/error';
-import { DiscordThoughtLog } from '@echo-chamber/discord-adapter/discord-thought-log';
 import { getUnreadMessageCount } from '@echo-chamber/discord-adapter/notification-utils';
 import { OpenAIChatCompletionsModel } from '@echo-chamber/openai-adapter/openai-chat-completions-model';
 import { OpenAIResponsesModel } from '@echo-chamber/openai-adapter/openai-responses-model';
@@ -68,11 +67,8 @@ import {
 import { createEmbeddingService } from '../embedding/create-embedding-service';
 import { createRerankingService } from '../reranking/create-reranking-service';
 import { createConsoleEchoEventPort } from '../utils/echo-event';
-import { createLogger } from '../utils/logger';
 
 import { createToolExecutionContext } from './tool-context';
-
-import type { Logger } from '../utils/logger';
 
 async function fetchUnreadMessageCounts(
   token: string,
@@ -121,7 +117,6 @@ export class Echo extends DurableObject<Env> {
   private readonly store: KVNamespace;
   private readonly storage: DurableObjectStorage;
   private readonly router: Hono;
-  private readonly logger: Logger;
   private readonly events: EchoEventPort;
   private readonly _env: Env;
   private readonly noteSystem: NoteSystem;
@@ -132,6 +127,14 @@ export class Echo extends DurableObject<Env> {
   private instanceDefinition: EchoInstanceDefinition | null = null;
   private runtimeBindings: EchoRuntimeBindings | null = null;
   private memorySystem: MemorySystem | null = null;
+  private lastUnreadMessageDetails: {
+    totalUnreadCount: number;
+    channels: {
+      key: string;
+      displayName: string;
+      unreadCount: number;
+    }[];
+  } | null = null;
 
   /**
    * The constructor is invoked once upon creation of the Durable Object, i.e. the first call to
@@ -144,7 +147,6 @@ export class Echo extends DurableObject<Env> {
     super(ctx, env);
     this.store = env.ECHO_KV;
     this.storage = ctx.storage;
-    this.logger = createLogger(env);
     this.events = createConsoleEchoEventPort({
       source: 'cloudflare-workers',
       getInstanceId: (): string | null => this.instanceDefinition?.id ?? null,
@@ -153,7 +155,6 @@ export class Echo extends DurableObject<Env> {
     this._env = env;
     this.noteSystem = new NoteSystem({
       storage: this.storage,
-      logger: this.logger,
     });
     this.router = new Hono()
       .basePath('/:id')
@@ -187,7 +188,6 @@ export class Echo extends DurableObject<Env> {
         await this.run();
         return c.text('OK.');
       });
-    console.log('Echo Durable Object created');
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -212,21 +212,20 @@ export class Echo extends DurableObject<Env> {
     );
     const embeddingService = createEmbeddingService(
       this._env,
-      this.runtimeBindings.embeddingConfig
+      this.runtimeBindings.embeddingConfig,
+      this.events
     );
     const rerankingService = createRerankingService(this._env);
     this.memorySystem = new MemorySystem({
       sql: this.ctx.storage.sql,
       embeddingService,
       rerankingService,
-      logger: this.logger,
       events: this.events,
     });
     const toolContext = createToolExecutionContext({
       chatBindings: this.getRuntimeBindingsOrThrow(),
       memorySystem: this.memorySystem,
       noteSystem: this.noteSystem,
-      logger: this.logger,
     });
     this.executableTools = bindRuntimeTools(canonicalRuntimeTools, toolContext);
     // embedding モデル変更時の自動再 embedding
@@ -283,18 +282,28 @@ export class Echo extends DurableObject<Env> {
       unreadCheckMs: 0,
       thinkMs: 0,
     };
+    let alarmStatus: 'completed' | 'failed' | 'sleep_scheduled' = 'completed';
+    let alarmReason: string | undefined;
 
     try {
-      await this.logger.debug(
-        `Alarm triggered with info: ${JSON.stringify(alarmInfo)}`
-      );
+      await emitEchoEvent(this.events, {
+        type: 'system.schedule.alarm_triggered',
+        severity: 'debug',
+        summary: 'alarm triggered',
+        payload: {
+          alarmInfo,
+        },
+      });
 
       // ストレージからIDを読み取り初期化
       const storedId = await this.storage.get<string>('id');
       if (storedId == null || !isValidInstanceId(storedId)) {
-        await this.logger.error(
-          'No valid instance ID in storage. Cannot run alarm.\nEcho going to sleep.'
-        );
+        alarmStatus = 'failed';
+        alarmReason = 'invalid_instance_id';
+        await this.emitRunPreconditionFailed({
+          reason: 'invalid_instance_id',
+          storedId: storedId ?? null,
+        });
         await this.sleep(true);
         return;
       }
@@ -307,10 +316,9 @@ export class Echo extends DurableObject<Env> {
         await this.sleep();
         const nextAlarm = new Date();
         nextAlarm.setHours(22, 0, 0, 0);
-        await this.setNextAlarm(nextAlarm);
-        await this.logger.info(
-          `Echo is going to sleep and will wake at ${formatDatetime(nextAlarm)}.`
-        );
+        await this.setNextAlarm(nextAlarm, 'daily_sleep_wake');
+        alarmStatus = 'sleep_scheduled';
+        alarmReason = 'daily_sleep_window';
         return;
       }
       if (now.getHours() === 22 && state === 'Sleeping') {
@@ -319,10 +327,17 @@ export class Echo extends DurableObject<Env> {
       runResult = await this.run();
       await this.setNextAlarm();
     } finally {
-      await this.logger.debug('Echo alarm metrics', {
-        alarm_total_ms: Date.now() - alarmStartedAt,
-        unread_check_ms: runResult.unreadCheckMs,
-        think_ms: runResult.thinkMs,
+      await emitEchoEvent(this.events, {
+        type: 'system.schedule.alarm_completed',
+        severity: alarmStatus === 'failed' ? 'error' : 'debug',
+        summary: `alarm ${alarmStatus}`,
+        payload: {
+          status: alarmStatus,
+          reason: alarmReason,
+          alarmTotalMs: Date.now() - alarmStartedAt,
+          unreadCheckMs: runResult.unreadCheckMs,
+          thinkMs: runResult.thinkMs,
+        },
       });
     }
   }
@@ -335,7 +350,10 @@ export class Echo extends DurableObject<Env> {
     return formatDatetime(new Date(nextAlarm));
   }
 
-  async setNextAlarm(nextAlarm?: Date): Promise<void> {
+  async setNextAlarm(
+    nextAlarm?: Date,
+    reason = 'regular_interval'
+  ): Promise<void> {
     if (!nextAlarm) {
       nextAlarm = new Date();
       nextAlarm.setMinutes(
@@ -345,7 +363,15 @@ export class Echo extends DurableObject<Env> {
       );
     }
     await this.storage.setAlarm(nextAlarm);
-    await this.logger.debug(`Next alarm set for ${nextAlarm.toISOString()}`);
+    await emitEchoEvent(this.events, {
+      type: 'system.schedule.alarm_scheduled',
+      severity: 'debug',
+      summary: `alarm scheduled: ${nextAlarm.toISOString()}`,
+      payload: {
+        scheduledAt: nextAlarm.toISOString(),
+        reason,
+      },
+    });
   }
 
   async getId(): Promise<string> {
@@ -363,8 +389,23 @@ export class Echo extends DurableObject<Env> {
     return state ?? 'Idling';
   }
 
-  async setState(newState: EchoState): Promise<void> {
+  async setState(newState: EchoState, reason = 'direct'): Promise<void> {
+    const previousState = await this.getState();
     await this.storage.put('state', newState);
+    if (previousState === newState) {
+      return;
+    }
+
+    await emitEchoEvent(this.events, {
+      type: 'system.echo_state.changed',
+      severity: 'info',
+      summary: `echo state changed: ${previousState} -> ${newState}`,
+      payload: {
+        previousState,
+        nextState: newState,
+        reason,
+      },
+    });
   }
 
   /**
@@ -473,39 +514,58 @@ export class Echo extends DurableObject<Env> {
     const state = await this.getState();
 
     if (!force && state === 'Sleeping') {
-      await this.logger.warn(
-        'Echo is currently sleeping! Cannot wake while sleeping.'
-      );
+      await this.emitEchoStateChangeRejected({
+        currentState: state,
+        requestedState: 'Idling',
+        reason: 'cannot_wake_while_sleeping',
+        severity: 'warn',
+      });
       return;
     }
 
-    await this.setNextAlarm();
-    await this.setState('Idling');
+    await this.setNextAlarm(undefined, 'wake');
+    await this.setState('Idling', 'wake');
   }
 
   async sleep(force = false): Promise<void> {
     const state = await this.getState();
 
     if (state === 'Sleeping') {
-      await this.logger.info('Echo is already sleeping.');
+      await this.emitEchoStateChangeRejected({
+        currentState: state,
+        requestedState: 'Sleeping',
+        reason: 'already_sleeping',
+        severity: 'info',
+      });
       return;
     }
 
     if (!force && state === 'Running') {
-      await this.logger.warn(
-        'Echo is currently running! Cannot sleep while running.'
-      );
+      await this.emitEchoStateChangeRejected({
+        currentState: state,
+        requestedState: 'Sleeping',
+        reason: 'cannot_sleep_while_running',
+        severity: 'warn',
+      });
       return;
     }
 
     try {
-      await this.setState('Sleeping');
+      await this.setState('Sleeping', 'sleep');
       await this.storage.deleteAlarm();
       // sleep 処理
     } catch (error) {
-      await this.logger.error(
-        `Echo encountered an error during sleep: ${getErrorMessage(error)}`
-      );
+      await emitEchoEvent(this.events, {
+        type: 'system.echo_state.change_failed',
+        severity: 'error',
+        summary: `echo state change failed: ${getErrorMessage(error)}`,
+        payload: {
+          currentState: state,
+          requestedState: 'Sleeping',
+          reason: 'sleep_failed',
+          error: getErrorMessage(error),
+        },
+      });
     } finally {
       // await this.setNextAlarm();
       // await this.setState('Idling');
@@ -521,10 +581,8 @@ export class Echo extends DurableObject<Env> {
       };
     }
 
-    await this.setState('Running');
+    await this.setState('Running', 'run_started');
     this.currentSessionId = crypto.randomUUID();
-    const name = await this.getName();
-    await this.logger.info(`${name}が思考を開始しました。`);
     let thinkMs = 0;
     let thinkStartedAt = 0;
 
@@ -537,11 +595,10 @@ export class Echo extends DurableObject<Env> {
         await this.saveContext(context);
       }
       if (nextWakeAt == null) {
-        await this.clearNextWakeAt();
+        await this.clearNextWakeAt('finish_thinking');
       } else {
-        await this.saveNextWakeAt(nextWakeAt);
+        await this.saveNextWakeAt(nextWakeAt, 'finish_thinking');
       }
-      await this.logger.info(`usage: ${usage.totalTokens}`);
       const totalUsage = await this.updateUsage(
         convertUsage(usage, this.getMainLLMUsageIdentity())
       );
@@ -554,20 +611,22 @@ export class Echo extends DurableObject<Env> {
           totalUsage,
         },
       });
-      await this.createThoughtLog().send(
-        `Usage: ${usage.totalTokens} tokens (Total: ${totalUsage.total_tokens} tokens)`
-      );
-      await this.logger.info(`${name}が思考を正常に完了しました。`);
     } catch (error) {
       if (thinkStartedAt !== 0) {
         thinkMs = Date.now() - thinkStartedAt;
       }
-      await this.logger.error(
-        `${name}の思考中にエラーが発生しました: ${getErrorMessage(error)}`
-      );
+      await emitEchoEvent(this.events, {
+        type: 'system.run.failed',
+        severity: 'error',
+        summary: `run failed: ${getErrorMessage(error)}`,
+        payload: {
+          error: getErrorMessage(error),
+          thinkMs,
+        },
+      });
     } finally {
       this.currentSessionId = null;
-      await this.setState('Idling');
+      await this.setState('Idling', 'run_completed');
     }
 
     return {
@@ -604,6 +663,8 @@ export class Echo extends DurableObject<Env> {
         shouldRun: true,
         reason: 'unread_messages',
         unreadCheckMs,
+        unreadTotalCount: this.lastUnreadMessageDetails?.totalUnreadCount,
+        unreadChannels: this.lastUnreadMessageDetails?.channels,
       });
       return {
         shouldRun: true,
@@ -654,9 +715,6 @@ export class Echo extends DurableObject<Env> {
     }
 
     if (input.hasReachedNextWakeAt && input.nextWakeAt !== null) {
-      await this.logger.info(
-        `next_wake_at reached: ${input.nextWakeAt.toISOString()}`
-      );
       await this.emitRunDecisionEvaluated({
         shouldRun: true,
         reason: 'next_wake_at_reached',
@@ -670,22 +728,21 @@ export class Echo extends DurableObject<Env> {
       };
     }
 
-    const shouldRunForSoftLimit = await this.validateSoftLimitRun(
+    const softLimitRun = this.evaluateSoftLimitRun(
       input.totalTokens,
       input.nextWakeAt
     );
     await this.emitRunDecisionEvaluated({
-      shouldRun: shouldRunForSoftLimit,
-      reason: shouldRunForSoftLimit
-        ? 'soft_limit_allows_run'
-        : 'soft_limit_skip',
+      shouldRun: softLimitRun.shouldRun,
+      reason: softLimitRun.reason,
       unreadCheckMs: input.unreadCheckMs,
       totalTokens: input.totalTokens,
+      softLimit: softLimitRun.softLimit,
       nextWakeAt: input.nextWakeAt?.toISOString() ?? null,
     });
 
     return {
-      shouldRun: shouldRunForSoftLimit,
+      shouldRun: softLimitRun.shouldRun,
       unreadCheckMs: input.unreadCheckMs,
     };
   }
@@ -698,12 +755,44 @@ export class Echo extends DurableObject<Env> {
     reason: string;
     unreadCheckMs: number;
     totalTokens?: number;
+    softLimit?: number;
     nextWakeAt?: string | null;
+    unreadTotalCount?: number;
+    unreadChannels?: {
+      key: string;
+      displayName: string;
+      unreadCount: number;
+    }[];
   }): Promise<void> {
     await emitEchoEvent(this.events, {
-      type: 'run_decision.evaluated',
+      type: 'system.run_decision.evaluated',
       severity: input.shouldRun ? 'info' : 'debug',
       summary: `run decision: ${input.shouldRun ? 'run' : 'skip'} (${input.reason})`,
+      payload: input,
+    });
+  }
+
+  private async emitRunPreconditionFailed(
+    payload: Record<string, unknown>
+  ): Promise<void> {
+    await emitEchoEvent(this.events, {
+      type: 'system.run.precondition_failed',
+      severity: 'warn',
+      summary: `run precondition failed: ${payload.reason as string}`,
+      payload,
+    });
+  }
+
+  private async emitEchoStateChangeRejected(input: {
+    currentState: EchoState;
+    requestedState: EchoState;
+    reason: string;
+    severity: 'info' | 'warn';
+  }): Promise<void> {
+    await emitEchoEvent(this.events, {
+      type: 'system.echo_state.change_rejected',
+      severity: input.severity,
+      summary: `echo state change rejected: ${input.reason}`,
       payload: input,
     });
   }
@@ -738,31 +827,44 @@ export class Echo extends DurableObject<Env> {
    * @param nextWakeAt 比較可能な next_wake_at。未設定または不正なら `null`
    * @returns soft limit 起動を許可する場合は `true`
    */
-  private async validateSoftLimitRun(
+  private evaluateSoftLimitRun(
     totalTokens: number,
     nextWakeAt: Date | null
-  ): Promise<boolean> {
+  ): {
+    shouldRun: boolean;
+    reason:
+      | 'soft_limit_allows_run'
+      | 'soft_token_limit'
+      | 'next_wake_at_suppression';
+    softLimit: number;
+  } {
     // soft limit 未満なら通常起動。ただし直近の next_wake_at があるときは待機する。
     const tokenLimits = this.getTokenLimitConfig();
     const softLimit = calculateDynamicTokenLimit(tokenLimits.dailySoftLimit);
     if (totalTokens >= softLimit) {
-      return false;
+      return {
+        shouldRun: false,
+        reason: 'soft_token_limit',
+        softLimit,
+      };
     }
 
     if (
       nextWakeAt !== null &&
       this.isNextWakeAtWithinSoftLimitWindow(nextWakeAt)
     ) {
-      await this.logger.info(
-        `Skipping soft-limit run because next_wake_at is within ${SCHEDULING_CONFIG.SOFT_LIMIT_NEXT_WAKE_AT_WINDOW_MINUTES} minutes: ${nextWakeAt.toISOString()}`
-      );
-      return false;
+      return {
+        shouldRun: false,
+        reason: 'next_wake_at_suppression',
+        softLimit,
+      };
     }
 
-    await this.logger.info(
-      `Usage: ${totalTokens}  (Soft limit: ${Math.floor(softLimit)})`
-    );
-    return true;
+    return {
+      shouldRun: true,
+      reason: 'soft_limit_allows_run',
+      softLimit,
+    };
   }
 
   /**
@@ -794,12 +896,14 @@ export class Echo extends DurableObject<Env> {
         tokenLimits.dailyHardLimit,
         tokenLimits.hardLimitBufferFactor
       );
-      await this.saveNextWakeAt(fallbackNextWakeAt.toISOString());
-      await this.logger.warn(
-        `Usage hard limit reached: ${totalTokens}  (Hard limit: ${Math.floor(hardLimit)})`
-      );
-      await this.logger.info(
-        `Deferring next_wake_at due to hard limit: ${nextWakeAt.toISOString()} -> ${fallbackNextWakeAt.toISOString()}`
+      await this.saveNextWakeAt(
+        fallbackNextWakeAt.toISOString(),
+        'hard_token_limit_defer',
+        {
+          totalTokens,
+          hardLimit,
+        },
+        nextWakeAt.toISOString()
       );
     }
     return false;
@@ -814,7 +918,10 @@ export class Echo extends DurableObject<Env> {
 
     // IDが未登録の場合は実行できない
     if (id === 'Echo') {
-      await this.logger.error('Echo ID is not set. Cannot validate state.');
+      await this.emitRunPreconditionFailed({
+        reason: 'missing_echo_id',
+        id,
+      });
       return false;
     }
 
@@ -822,15 +929,21 @@ export class Echo extends DurableObject<Env> {
 
     // 睡眠中は実行できない
     if (state === 'Sleeping') {
-      await this.logger.warn(
-        `${name} is currently sleeping! Cannot run while sleeping.`
-      );
+      await this.emitRunPreconditionFailed({
+        reason: 'sleeping',
+        state,
+        name,
+      });
       return false;
     }
 
     // 既に実行中の場合は何もしない
     if (state === 'Running') {
-      await this.logger.warn(`${name} is already running.`);
+      await this.emitRunPreconditionFailed({
+        reason: 'running',
+        state,
+        name,
+      });
       return false;
     }
 
@@ -843,11 +956,13 @@ export class Echo extends DurableObject<Env> {
   private async validateChatMessage(): Promise<boolean> {
     const name = await this.getName();
     const runtimeBindings = this.getRuntimeBindingsOrThrow();
+    this.lastUnreadMessageDetails = null;
 
     if (runtimeBindings.chatChannels.length === 0) {
-      await this.logger.error(
-        `${name}のチャットチャンネルが設定されていません。`
-      );
+      await this.emitRunPreconditionFailed({
+        reason: 'missing_chat_channels',
+        name,
+      });
       return false;
     }
 
@@ -859,23 +974,20 @@ export class Echo extends DurableObject<Env> {
     const unreadChannels = unreadCounts.filter(
       ({ unreadCount }) => unreadCount > 0
     );
-    if (unreadChannels.length > 0) {
-      const totalUnreadCount = unreadChannels.reduce(
-        (total, { unreadCount }) => total + unreadCount,
-        0
-      );
-      await this.logger.info(
-        `${name}の未読メッセージ数: ${totalUnreadCount} (${unreadChannels
-          .map(
-            ({ channel, unreadCount }) =>
-              `${channel.displayName}(${channel.key}): ${unreadCount}`
-          )
-          .join(', ')})`
-      );
-    } else {
-      await this.logger.debug(`${name}の未読メッセージはありません。`);
-    }
-
+    this.lastUnreadMessageDetails =
+      unreadChannels.length === 0
+        ? null
+        : {
+            totalUnreadCount: unreadChannels.reduce(
+              (total, { unreadCount }) => total + unreadCount,
+              0
+            ),
+            channels: unreadChannels.map(({ channel, unreadCount }) => ({
+              key: channel.key,
+              displayName: channel.displayName,
+              unreadCount,
+            })),
+          };
     return unreadChannels.length > 0;
   }
 
@@ -889,10 +1001,7 @@ export class Echo extends DurableObject<Env> {
   private async parseNextWakeAt(nextWakeAt: string): Promise<Date | null> {
     const parsed = new Date(nextWakeAt);
     if (Number.isNaN(parsed.getTime())) {
-      await this.logger.warn(
-        `Stored next_wake_at is invalid and will be ignored: ${nextWakeAt}`
-      );
-      await this.clearNextWakeAt();
+      await this.invalidateNextWakeAt(nextWakeAt, 'invalid_date');
       return null;
     }
 
@@ -934,9 +1043,6 @@ export class Echo extends DurableObject<Env> {
     }
 
     await this.storage.put('usage', updatedUsageRecord);
-    await this.logger.debug(
-      `Usage accumulated for ${dateKey}: ${JSON.stringify(totalUsage, null, 2)}`
-    );
     return totalUsage;
   }
 
@@ -1022,35 +1128,72 @@ export class Echo extends DurableObject<Env> {
    *
    * @param nextWakeAt 今回の終了時に確定した次回起動時刻
    */
-  private async saveNextWakeAt(nextWakeAt: string): Promise<void> {
+  private async saveNextWakeAt(
+    nextWakeAt: string,
+    reason: string,
+    metadata: Record<string, unknown> = {},
+    previousValueOverride?: string | null
+  ): Promise<void> {
+    const previousValue =
+      previousValueOverride === undefined
+        ? await this.loadNextWakeAt()
+        : previousValueOverride;
     await this.storage.put('next_wake_at', nextWakeAt);
+    await emitEchoEvent(this.events, {
+      type: 'system.schedule.next_wake_at_updated',
+      severity: 'info',
+      summary: `next_wake_at updated: ${nextWakeAt}`,
+      payload: {
+        previousValue,
+        nextValue: nextWakeAt,
+        reason,
+        ...metadata,
+      },
+    });
   }
 
   /**
    * 保存済みの次回起動時刻を破棄する。
    * 今回の session が next_wake_at を指定しなかった場合のリセットに使う。
    */
-  private async clearNextWakeAt(): Promise<void> {
+  private async clearNextWakeAt(reason: string): Promise<void> {
+    const previousValue = await this.loadNextWakeAt();
     await this.storage.delete('next_wake_at');
+    if (previousValue === null) {
+      return;
+    }
+
+    await emitEchoEvent(this.events, {
+      type: 'system.schedule.next_wake_at_cleared',
+      severity: 'info',
+      summary: 'next_wake_at cleared',
+      payload: {
+        previousValue,
+        reason,
+      },
+    });
   }
 
-  /**
-   * @returns 実行ごとの thought log adapter
-   */
-  private createThoughtLog(): DiscordThoughtLog {
-    const runtimeBindings = this.getRuntimeBindingsOrThrow();
-
-    return new DiscordThoughtLog({
-      token: runtimeBindings.discordBotToken,
-      channelId: runtimeBindings.thinkingChannelId,
+  private async invalidateNextWakeAt(
+    storedValue: string,
+    reason: string
+  ): Promise<void> {
+    await this.storage.delete('next_wake_at');
+    await emitEchoEvent(this.events, {
+      type: 'system.schedule.next_wake_at_invalidated',
+      severity: 'warn',
+      summary: `next_wake_at invalidated: ${reason}`,
+      payload: {
+        storedValue,
+        reason,
+      },
     });
   }
 
   /**
-   * @param thoughtLog 実行ごとの thought log adapter
    * @returns メイン LLM 用の OpenAI-compatible model adapter
    */
-  private createMainLLMClient(thoughtLog: DiscordThoughtLog): ModelPort {
+  private createMainLLMClient(): ModelPort {
     const config = resolveMainLLMConfig(
       this._env,
       this.getInstanceDefinitionOrThrow()
@@ -1065,8 +1208,7 @@ export class Echo extends DurableObject<Env> {
         apiKey: config.apiKey,
         model: config.model,
         baseURL: config.baseURL,
-        logger: this.logger,
-        thoughtLog,
+        events: this.events,
         maxTokens: config.maxTokens,
         temperature: config.temperature,
         topP: config.topP,
@@ -1078,8 +1220,7 @@ export class Echo extends DurableObject<Env> {
     return new OpenAIResponsesModel({
       apiKey: config.apiKey,
       model: config.model,
-      logger: this.logger,
-      thoughtLog,
+      events: this.events,
     });
   }
 
@@ -1089,12 +1230,9 @@ export class Echo extends DurableObject<Env> {
   private createThinkingEngine(): AgentThinkingEngine {
     const definition = this.getInstanceDefinitionOrThrow();
     const memorySystem = this.getMemorySystemOrThrow();
-    const thoughtLog = this.createThoughtLog();
 
     return new AgentThinkingEngine({
-      model: this.createMainLLMClient(thoughtLog),
-      thoughtLog,
-      logger: this.logger,
+      model: this.createMainLLMClient(),
       events: this.events,
       context: {
         load: async (): Promise<ContextSnapshot | null> =>

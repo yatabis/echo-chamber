@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { EchoEventPort } from '@echo-chamber/core/ports/echo-event';
 import type { ModelRequest } from '@echo-chamber/core/ports/model';
 
 import {
@@ -7,7 +8,7 @@ import {
   formatFunctionCall,
   formatFunctionCallOutput,
   formatInputItem,
-  formatLogOutput,
+  formatModelOutputContent,
   formatMessage,
   formatOutputItem,
   OpenAIResponsesModel,
@@ -33,13 +34,9 @@ vi.mock('openai', () => {
   };
 });
 
-const mockLogger = {
-  debug: vi.fn().mockResolvedValue(undefined),
-  warn: vi.fn().mockResolvedValue(undefined),
-};
-
-const mockThoughtLog = {
-  send: vi.fn().mockResolvedValue(undefined),
+const mockEmit = vi.fn<EchoEventPort['emit']>().mockResolvedValue(undefined);
+const mockEvents: EchoEventPort = {
+  emit: mockEmit,
 };
 
 const thinkDeeplyTool = {
@@ -66,8 +63,7 @@ describe('OpenAIResponsesModel', () => {
   it('createResponse は provider-neutral request を Responses API 形式へ変換する', async () => {
     const model = new OpenAIResponsesModel({
       apiKey: 'test-key',
-      logger: mockLogger,
-      thoughtLog: mockThoughtLog,
+      events: mockEvents,
     });
     const request: ModelRequest = {
       input: [
@@ -137,15 +133,24 @@ describe('OpenAIResponsesModel', () => {
         truncation: 'auto',
       })
     );
-    expect(mockLogger.warn).toHaveBeenCalledWith(
-      'Response usage information is undefined'
-    );
+    expect(mockEmit).toHaveBeenCalledWith({
+      type: 'model.provider.warning',
+      category: 'model',
+      severity: 'warn',
+      streams: ['system', 'analysis'],
+      summary: 'Response usage information is undefined',
+      payload: {
+        provider: 'openai.responses',
+        model: 'gpt-5.5',
+        turnIndex: undefined,
+        code: 'missing_usage',
+      },
+    });
   });
 
   it('createResponse は object でない inputSchema を parameters: null に正規化する', async () => {
     const model = new OpenAIResponsesModel({
       apiKey: 'test-key',
-      logger: mockLogger,
     });
 
     mockCreateResponse.mockResolvedValue({
@@ -184,8 +189,7 @@ describe('OpenAIResponsesModel', () => {
   it('generate は OpenAI response を core model response へ変換する', async () => {
     const model = new OpenAIResponsesModel({
       apiKey: 'test-key',
-      logger: mockLogger,
-      thoughtLog: mockThoughtLog,
+      events: mockEvents,
     });
 
     mockCreateResponse.mockResolvedValue({
@@ -229,6 +233,7 @@ describe('OpenAIResponsesModel', () => {
         },
       ],
       tools: [thinkDeeplyTool],
+      turnIndex: 2,
     });
 
     expect(response).toEqual({
@@ -255,16 +260,41 @@ describe('OpenAIResponsesModel', () => {
       },
       responseToken: 'response_123',
     });
-    expect(mockThoughtLog.send).toHaveBeenCalledWith(
-      '*thinking: Thinking complete*\n\n*think_deeply: test*'
-    );
+    const outputEvent = mockEmit.mock.calls.find(
+      ([event]) => event.type === 'model.output.emitted'
+    )?.[0];
+    expect(outputEvent).toMatchObject({
+      type: 'model.output.emitted',
+      category: 'model',
+      severity: 'info',
+      streams: ['thought', 'analysis'],
+      payload: {
+        provider: 'openai.responses',
+        model: 'gpt-5.5',
+        turnIndex: 2,
+        content: '*thinking: Thinking complete*',
+      },
+    });
+
+    const exchangeEvent = mockEmit.mock.calls.find(
+      ([event]) => event.type === 'model.exchange.recorded'
+    )?.[0];
+    expect(exchangeEvent).toMatchObject({
+      type: 'model.exchange.recorded',
+      category: 'model',
+      severity: 'debug',
+      streams: ['analysis'],
+      payload: {
+        provider: 'openai.responses',
+        model: 'gpt-5.5',
+        turnIndex: 2,
+      },
+    });
   });
 
   it('usage がない response はゼロ usage として扱う', async () => {
     const model = new OpenAIResponsesModel({
       apiKey: 'test-key',
-      logger: mockLogger,
-      thoughtLog: mockThoughtLog,
     });
 
     mockCreateResponse.mockResolvedValue({
@@ -295,8 +325,6 @@ describe('OpenAIResponsesModel', () => {
   it('generate は refusal message を assistant message に正規化し、reasoning item は output から除外する', async () => {
     const model = new OpenAIResponsesModel({
       apiKey: 'test-key',
-      logger: mockLogger,
-      thoughtLog: mockThoughtLog,
     });
 
     mockCreateResponse.mockResolvedValue({
@@ -345,15 +373,16 @@ describe('OpenAIResponsesModel', () => {
         content: '<refusal>I cannot assist with that request.</refusal>',
       },
     ]);
-    expect(mockThoughtLog.send).toHaveBeenCalledWith(
-      '*reasoning: Need to reject unsafe request.*\n\n*refusal: I cannot assist with that request.*'
-    );
   });
 });
 
-describe('formatLogOutput', () => {
-  it('ログ出力のフォーマット', () => {
+describe('formatModelOutputContent', () => {
+  it('message と reasoning だけを返し、function_call は tool event 側へ寄せる', () => {
     const output: ResponseOutputItem[] = [
+      {
+        type: 'reasoning',
+        content: [{ text: 'Need a note.' }],
+      } as unknown as ResponseOutputItem,
       {
         type: 'message',
         role: 'assistant',
@@ -362,507 +391,22 @@ describe('formatLogOutput', () => {
         content: [
           {
             type: 'output_text',
-            text: 'I am fine, thank you!',
+            text: 'I will create it.',
             annotations: [],
           },
         ],
       },
-    ];
-
-    expect(formatLogOutput(output)).toBe('*thinking: I am fine, thank you!*');
-  });
-
-  it('refusal', () => {
-    const output: ResponseOutputItem[] = [
-      {
-        type: 'message',
-        role: 'assistant',
-        id: 'msg_refusal',
-        status: 'completed',
-        content: [
-          {
-            type: 'refusal',
-            refusal: 'I cannot assist with that request.',
-          },
-        ],
-      },
-    ];
-
-    expect(formatLogOutput(output)).toBe(
-      '*refusal: I cannot assist with that request.*'
-    );
-  });
-
-  it('reasoning', () => {
-    const output: ResponseOutputItem[] = [
-      {
-        type: 'reasoning',
-        summary: [{ text: 'Need more context' }],
-      } as unknown as ResponseOutputItem,
-    ];
-
-    expect(formatLogOutput(output)).toBe('*reasoning: Need more context*');
-  });
-
-  it('空のreasoningはプレースホルダを返す', () => {
-    const output: ResponseOutputItem[] = [
-      {
-        type: 'reasoning',
-        summary: [],
-      } as unknown as ResponseOutputItem,
-    ];
-
-    expect(formatLogOutput(output)).toBe('*reasoning*');
-  });
-
-  it('read_chat_messages', () => {
-    const output: ResponseOutputItem[] = [
       {
         type: 'function_call',
-        call_id: 'call_read',
-        name: 'read_chat_messages',
-        arguments: JSON.stringify({ channelKey: 'main', limit: 10 }),
-        status: 'completed',
-      },
-    ];
-
-    expect(formatLogOutput(output)).toBe('*read_chat_messages [main]: 10*');
-  });
-
-  it('send_chat_message', () => {
-    const output: ResponseOutputItem[] = [
-      {
-        type: 'function_call',
-        call_id: 'call_send',
-        name: 'send_chat_message',
-        arguments: JSON.stringify({
-          channelKey: 'main',
-          message: 'hello',
-        }),
-        status: 'completed',
-      },
-    ];
-
-    expect(formatLogOutput(output)).toBe('*send_chat_message [main]: hello*');
-  });
-
-  it('add_reaction_to_chat_message', () => {
-    const output: ResponseOutputItem[] = [
-      {
-        type: 'function_call',
-        call_id: 'call_reaction',
-        name: 'add_reaction_to_chat_message',
-        arguments: JSON.stringify({
-          channelKey: 'main',
-          messageId: 'message-1',
-          reaction: '👍',
-        }),
-        status: 'completed',
-      },
-    ];
-
-    expect(formatLogOutput(output)).toBe(
-      '*add_reaction_to_chat_message [main]: message-1 👍*'
-    );
-  });
-
-  it('think_deeply', () => {
-    const output: ResponseOutputItem[] = [
-      {
-        type: 'function_call',
-        call_id: 'call_think',
-        name: 'think_deeply',
-        arguments: JSON.stringify({ thought: 'Deep philosophical question' }),
-        status: 'completed',
-      },
-    ];
-
-    expect(formatLogOutput(output)).toBe(
-      '*think_deeply: Deep philosophical question*'
-    );
-  });
-
-  it('store_memory with type', () => {
-    const output: ResponseOutputItem[] = [
-      {
-        type: 'function_call',
-        call_id: 'call_store',
-        name: 'store_memory',
-        arguments: JSON.stringify({
-          content: '今日は楽しい一日だった',
-          type: 'episode',
-          emotion: { valence: 0.8, arousal: 0.5, labels: ['楽しい', '満足'] },
-        }),
-        status: 'completed',
-      },
-    ];
-
-    expect(formatLogOutput(output)).toBe(
-      '*store_memory [episode]: 今日は楽しい一日だった\n(0.8, 0.5) [楽しい, 満足]*'
-    );
-  });
-
-  it('search_memory with type', () => {
-    const output: ResponseOutputItem[] = [
-      {
-        type: 'function_call',
-        call_id: 'call_search',
-        name: 'search_memory',
-        arguments: JSON.stringify({
-          query: '楽しかった思い出',
-          type: 'episode',
-        }),
-        status: 'completed',
-      },
-    ];
-
-    expect(formatLogOutput(output)).toBe(
-      '*search_memory [episode]: 楽しかった思い出*'
-    );
-  });
-
-  it('search_memory without type', () => {
-    const output: ResponseOutputItem[] = [
-      {
-        type: 'function_call',
-        call_id: 'call_search_no_type',
-        name: 'search_memory',
-        arguments: JSON.stringify({
-          query: '何か思い出',
-        }),
-        status: 'completed',
-      },
-    ];
-
-    expect(formatLogOutput(output)).toBe('*search_memory: 何か思い出*');
-  });
-
-  it('create_note', () => {
-    const output: ResponseOutputItem[] = [
-      {
-        type: 'function_call',
-        call_id: 'call_create_note',
+        call_id: 'call_123',
         name: 'create_note',
-        arguments: JSON.stringify({
-          title: '買い物メモ',
-          content: '牛乳とパン',
-        }),
+        arguments: '{"title":"memo"}',
         status: 'completed',
       },
     ];
 
-    expect(formatLogOutput(output)).toBe('*create_note: 買い物メモ*');
-  });
-
-  it('list_notes', () => {
-    const output: ResponseOutputItem[] = [
-      {
-        type: 'function_call',
-        call_id: 'call_list_notes',
-        name: 'list_notes',
-        arguments: JSON.stringify({}),
-        status: 'completed',
-      },
-    ];
-
-    expect(formatLogOutput(output)).toBe('*list_notes*');
-  });
-
-  it('get_note', () => {
-    const output: ResponseOutputItem[] = [
-      {
-        type: 'function_call',
-        call_id: 'call_get_note',
-        name: 'get_note',
-        arguments: JSON.stringify({
-          id: 'note-1',
-        }),
-        status: 'completed',
-      },
-    ];
-
-    expect(formatLogOutput(output)).toBe('*get_note: note-1*');
-  });
-
-  it('search_notes', () => {
-    const output: ResponseOutputItem[] = [
-      {
-        type: 'function_call',
-        call_id: 'call_search_notes',
-        name: 'search_notes',
-        arguments: JSON.stringify({
-          query: '買い物',
-        }),
-        status: 'completed',
-      },
-    ];
-
-    expect(formatLogOutput(output)).toBe('*search_notes: 買い物*');
-  });
-
-  it('update_note', () => {
-    const output: ResponseOutputItem[] = [
-      {
-        type: 'function_call',
-        call_id: 'call_update_note',
-        name: 'update_note',
-        arguments: JSON.stringify({
-          id: 'note-1',
-          title: '更新後タイトル',
-        }),
-        status: 'completed',
-      },
-    ];
-
-    expect(formatLogOutput(output)).toBe('*update_note: note-1*');
-  });
-
-  it('delete_note', () => {
-    const output: ResponseOutputItem[] = [
-      {
-        type: 'function_call',
-        call_id: 'call_delete_note',
-        name: 'delete_note',
-        arguments: JSON.stringify({
-          id: 'note-1',
-        }),
-        status: 'completed',
-      },
-    ];
-
-    expect(formatLogOutput(output)).toBe('*delete_note: note-1*');
-  });
-
-  it('list_trending_zenn_articles without articleType', () => {
-    const output: ResponseOutputItem[] = [
-      {
-        type: 'function_call',
-        call_id: 'call_list_zenn_articles',
-        name: 'list_trending_zenn_articles',
-        arguments: JSON.stringify({}),
-        status: 'completed',
-      },
-    ];
-
-    expect(formatLogOutput(output)).toBe('*list_trending_zenn_articles*');
-  });
-
-  it('list_trending_zenn_articles with articleType', () => {
-    const output: ResponseOutputItem[] = [
-      {
-        type: 'function_call',
-        call_id: 'call_list_idea_zenn_articles',
-        name: 'list_trending_zenn_articles',
-        arguments: JSON.stringify({
-          articleType: 'idea',
-        }),
-        status: 'completed',
-      },
-    ];
-
-    expect(formatLogOutput(output)).toBe(
-      '*list_trending_zenn_articles [idea]*'
-    );
-  });
-
-  it('get_zenn_article without maxCharacters', () => {
-    const output: ResponseOutputItem[] = [
-      {
-        type: 'function_call',
-        call_id: 'call_get_zenn_article',
-        name: 'get_zenn_article',
-        arguments: JSON.stringify({
-          slug: 'dummy-zenn-article',
-        }),
-        status: 'completed',
-      },
-    ];
-
-    expect(formatLogOutput(output)).toBe(
-      '*get_zenn_article: dummy-zenn-article*'
-    );
-  });
-
-  it('get_zenn_article with maxCharacters', () => {
-    const output: ResponseOutputItem[] = [
-      {
-        type: 'function_call',
-        call_id: 'call_get_zenn_article_truncated',
-        name: 'get_zenn_article',
-        arguments: JSON.stringify({
-          slug: 'dummy-zenn-article',
-          maxCharacters: 1200,
-        }),
-        status: 'completed',
-      },
-    ];
-
-    expect(formatLogOutput(output)).toBe(
-      '*get_zenn_article: dummy-zenn-article (maxCharacters: 1200)*'
-    );
-  });
-
-  it('get_zenn_article は slug の前後空白を除去して表示する', () => {
-    const output: ResponseOutputItem[] = [
-      {
-        type: 'function_call',
-        call_id: 'call_get_zenn_article_trimmed_slug',
-        name: 'get_zenn_article',
-        arguments: JSON.stringify({
-          slug: '  dummy-zenn-article  ',
-        }),
-        status: 'completed',
-      },
-    ];
-
-    expect(formatLogOutput(output)).toBe(
-      '*get_zenn_article: dummy-zenn-article*'
-    );
-  });
-
-  it('finish_thinking', () => {
-    const output: ResponseOutputItem[] = [
-      {
-        type: 'function_call',
-        call_id: 'call_finish',
-        name: 'finish_thinking',
-        arguments: JSON.stringify({
-          reason: 'No further action needed',
-          next_wake_at: '2026-03-20T08:00:00.000Z',
-          session_record: {
-            content:
-              'Replied to unread messages and left a concise session recap.',
-            emotion: {
-              valence: 0.4,
-              arousal: 0.2,
-              labels: ['calm', 'satisfied'],
-            },
-          },
-        }),
-        status: 'completed',
-      },
-    ];
-
-    expect(formatLogOutput(output)).toBe(
-      '*finish_thinking: No further action needed(next_wake_at: 2026-03-20T08:00:00.000Z)\nsession_record: Replied to unread messages and left a concise session recap.\n(0.4, 0.2) [calm, satisfied]*'
-    );
-  });
-
-  it('デフォルトの function_call', () => {
-    const output: ResponseOutputItem[] = [
-      {
-        type: 'function_call',
-        call_id: 'call_default',
-        name: 'default_function',
-        arguments: JSON.stringify({ param: 'value' }),
-        status: 'completed',
-      },
-    ];
-
-    expect(formatLogOutput(output)).toBe('*default_function*');
-  });
-
-  it('function の引数が不正な型でもエラーにならない', () => {
-    const output: ResponseOutputItem[] = [
-      {
-        type: 'function_call',
-        call_id: 'call_invalid_arg_type',
-        name: 'read_chat_messages',
-        arguments: JSON.stringify({ param: 123 }),
-        status: 'completed',
-      },
-    ];
-
-    expect(formatLogOutput(output)).toBe('*read_chat_messages: undefined*');
-  });
-
-  it('複数のoutputアイテム', () => {
-    const output: ResponseOutputItem[] = [
-      {
-        type: 'message',
-        role: 'assistant',
-        id: 'msg_1',
-        status: 'completed',
-        content: [
-          {
-            type: 'output_text',
-            text: 'First message',
-            annotations: [],
-          },
-        ],
-      },
-      {
-        type: 'function_call',
-        call_id: 'call_think',
-        name: 'think_deeply',
-        arguments: JSON.stringify({ thought: 'Some thought' }),
-        status: 'completed',
-      },
-    ];
-
-    expect(formatLogOutput(output)).toBe(
-      '*thinking: First message*\n\n*think_deeply: Some thought*'
-    );
-  });
-
-  it('複数のcontentを持つメッセージ', () => {
-    const output: ResponseOutputItem[] = [
-      {
-        type: 'message',
-        role: 'assistant',
-        id: 'msg_multi',
-        status: 'completed',
-        content: [
-          {
-            type: 'output_text',
-            text: 'First part',
-            annotations: [],
-          },
-          {
-            type: 'output_text',
-            text: 'Second part',
-            annotations: [],
-          },
-        ],
-      },
-    ];
-
-    expect(formatLogOutput(output)).toBe(
-      '*thinking: First part*\n\n*thinking: Second part*'
-    );
-  });
-
-  it('空の出力アイテム', () => {
-    const output: ResponseOutputItem[] = [];
-    expect(formatLogOutput(output)).toBe('');
-  });
-
-  it('空になるログ出力', () => {
-    const output: ResponseOutputItem[] = [
-      {
-        type: 'unknown_type',
-      } as unknown as ResponseOutputItem,
-    ];
-    expect(formatLogOutput(output)).toBe('');
-  });
-
-  it('予期しないcontentTypeでエラーが投げられる', () => {
-    const output: ResponseOutputItem[] = [
-      {
-        type: 'message',
-        role: 'assistant',
-        id: 'msg_error',
-        status: 'completed',
-        content: [
-          {
-            type: 'unknown_content_type',
-          },
-        ] as unknown as ResponseOutputMessage['content'],
-      },
-    ];
-
-    expect(() => formatLogOutput(output)).toThrowError(
-      'Unexpected contentType: unknown_content_type'
+    expect(formatModelOutputContent(output)).toBe(
+      '*reasoning: Need a note.*\n\n*thinking: I will create it.*'
     );
   });
 });

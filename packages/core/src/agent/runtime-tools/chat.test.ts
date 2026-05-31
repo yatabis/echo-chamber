@@ -129,6 +129,9 @@ describe('checkNotificationsTool', () => {
     expect(result).toEqual({
       success: false,
       error: 'Failed to fetch notifications',
+      diagnostics: {
+        error: CHAT_API_ERROR,
+      },
     });
   });
 });
@@ -218,6 +221,9 @@ describe('readChatMessagesTool', () => {
     expect(result).toEqual({
       success: false,
       error: 'Failed to read messages',
+      diagnostics: {
+        error: CHAT_API_ERROR,
+      },
     });
   });
 });
@@ -248,6 +254,9 @@ describe('sendChatMessageTool', () => {
     expect(result).toEqual({
       success: false,
       error: 'Failed to send message',
+      diagnostics: {
+        error: CHAT_API_ERROR,
+      },
     });
   });
 });
@@ -288,6 +297,9 @@ describe('addReactionToChatMessageTool', () => {
     expect(result).toEqual({
       success: false,
       error: 'Failed to add reaction',
+      diagnostics: {
+        error: CHAT_API_ERROR,
+      },
     });
   });
 });

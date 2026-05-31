@@ -144,6 +144,9 @@ describe('listTrendingZennArticlesTool', () => {
     expect(result).toEqual({
       success: false,
       error: 'Failed to list Zenn trending articles',
+      diagnostics: {
+        error: ZENN_API_ERROR,
+      },
     });
   });
 });
@@ -206,6 +209,9 @@ describe('getZennArticleTool', () => {
     expect(result).toEqual({
       success: false,
       error: 'Failed to fetch Zenn article',
+      diagnostics: {
+        error: ZENN_API_ERROR,
+      },
     });
   });
 });

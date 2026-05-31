@@ -1,5 +1,4 @@
 import type { Note } from '@echo-chamber/core/echo/types';
-import type { LoggerPort } from '@echo-chamber/core/ports/logger';
 
 import {
   getMaxNoteSequence,
@@ -32,19 +31,14 @@ interface UpdateNoteInput {
  */
 export class NoteSystem {
   private readonly storage: DurableObjectStorage;
-  private readonly logger: Pick<LoggerPort, 'info'>;
 
   /**
    * Durable Object storage 上で動く note runtime を構築する。
    *
-   * @param options storage と logger
+   * @param options storage
    */
-  constructor(options: {
-    storage: DurableObjectStorage;
-    logger: Pick<LoggerPort, 'info'>;
-  }) {
+  constructor(options: { storage: DurableObjectStorage }) {
     this.storage = options.storage;
-    this.logger = options.logger;
   }
 
   /**
@@ -121,7 +115,6 @@ export class NoteSystem {
     };
 
     await this.storage.put(getNoteStorageKey(newNote.id), newNote);
-    await this.logger.info(`Note created: ${newNote.id}`);
 
     return newNote;
   }
@@ -163,7 +156,6 @@ export class NoteSystem {
     };
 
     await this.storage.put(storageKey, updatedNote);
-    await this.logger.info(`Note updated: ${updatedNote.id}`);
 
     return updatedNote;
   }
@@ -180,12 +172,7 @@ export class NoteSystem {
       throw new Error('Note ID is required');
     }
 
-    const deleted = await this.storage.delete(getNoteStorageKey(noteId));
-    if (deleted) {
-      await this.logger.info(`Note deleted: ${noteId}`);
-    }
-
-    return deleted;
+    return await this.storage.delete(getNoteStorageKey(noteId));
   }
 
   private async readNotes(): Promise<Note[]> {

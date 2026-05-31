@@ -10,8 +10,6 @@ import { createZennPort } from '../zenn/create-zenn-port';
 
 import { createToolExecutionContext } from './tool-context';
 
-import type { Logger } from '../utils/logger';
-
 vi.mock('@echo-chamber/discord-adapter/chat-port', () => ({
   createDiscordChatPort: vi.fn(),
 }));
@@ -74,15 +72,6 @@ function createNoteSystemMock(): NoteSystem {
   } as unknown as NoteSystem;
 }
 
-function createLoggerMock(): Logger {
-  return {
-    debug: vi.fn(async () => Promise.resolve()),
-    info: vi.fn(async () => Promise.resolve()),
-    warn: vi.fn(async () => Promise.resolve()),
-    error: vi.fn(async () => Promise.resolve()),
-  } as unknown as Logger;
-}
-
 describe('createToolExecutionContext', () => {
   beforeEach(() => {
     vi.mocked(createDiscordChatPort).mockReturnValue(mockChatPort);
@@ -95,7 +84,6 @@ describe('createToolExecutionContext', () => {
   it('chat 用 runtime bindings だけで Discord ports を構築する', async () => {
     const { memorySystem, storeMemory } = createMemorySystemMock();
     const noteSystem = createNoteSystemMock();
-    const logger = createLoggerMock();
     const emotion: Emotion = {
       valence: 0.3,
       arousal: 0.4,
@@ -121,7 +109,6 @@ describe('createToolExecutionContext', () => {
       },
       memorySystem,
       noteSystem,
-      logger,
     });
 
     expect(createDiscordChatPort).toHaveBeenCalledWith({

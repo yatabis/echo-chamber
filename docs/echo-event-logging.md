@@ -50,17 +50,21 @@ Cloudflare Workers Observability などで、直近の挙動を追う用途。
 
 ## 現行の役割分担
 
-### `ThoughtLogPort`
+### `ThoughtLogPort` / `LoggerPort`
 
-人間が読むための思考ログを扱う。
+廃止済みの旧 port。
 
-現在は主に Discord の thought channel へ流れる。エージェントの流れを読むには重要だが、構造化分析の主データとしては扱いにくい。
+以前は `ThoughtLogPort` が Discord の thought channel へ思考ログを流し、`LoggerPort` が console と Discord log channel へ運用ログを流していた。
 
-### `LoggerPort`
+現行実装ではどちらも runtime path から外し、残す価値がある情報だけを semantic event として定義する。
 
-従来の運用ログを扱う。
+- model adapter が返した assistant message / reasoning は `model.output.emitted`
+- tool call は `tool.called` / `tool.completed` / `tool.failed`
+- usage は `usage.recorded`
+- memory search / rerank / re-embedding / embedding usage は `memory.*`
+- alarm、state、run decision は `system.*`
 
-Worker 実装では全レベルを `console.debug` / `console.info` / `console.warn` / `console.error` に出し、設定されたしきい値以上を Discord の log channel にも送る。人間向けの operational log として残す。
+`log.emitted` のような汎用 event は作らない。message 文字列をそのまま移すのではなく、後から集計・監査しやすい payload に分解する。
 
 ### `EchoEventPort`
 
@@ -76,7 +80,7 @@ Echo の運用・分析イベントを構造化して扱う。
 
 `EchoEvent` は「どこへ送るか」ではなく、「何が起きたか」を表す。
 
-発火元が Discord、dashboard、archive などの配送先を知り始めると、`ThoughtLog` / `Logger` と同じように表示・通知の都合が business logic 側へ混ざる。配送判断は sink policy に寄せる。
+発火元が Discord、dashboard、archive などの配送先を知り始めると、表示・通知の都合が business logic 側へ混ざる。配送判断は sink policy に寄せる。
 
 ### 発火元は最小情報だけを渡す
 
@@ -111,20 +115,45 @@ type EchoEventInput = {
 
 現在の event type と派生値は次のとおり。
 
-| type                      | category  | streams                         |
-| ------------------------- | --------- | ------------------------------- |
-| `session.started`         | `session` | `thought`, `system`, `analysis` |
-| `session.completed`       | `session` | `thought`, `system`, `analysis` |
-| `session.failed`          | `session` | `thought`, `system`, `analysis` |
-| `model.turn.started`      | `model`   | `analysis`                      |
-| `model.turn.completed`    | `model`   | `analysis`                      |
-| `tool.called`             | `tool`    | `thought`, `analysis`           |
-| `tool.completed`          | `tool`    | `system`, `analysis`            |
-| `tool.failed`             | `tool`    | `thought`, `system`, `analysis` |
-| `memory.search.started`   | `memory`  | `system`, `analysis`            |
-| `memory.search.completed` | `memory`  | `system`, `analysis`            |
-| `run_decision.evaluated`  | `control` | `system`, `analysis`            |
-| `usage.recorded`          | `usage`   | `system`, `analysis`            |
+| type                                       | category  | streams                         |
+| ------------------------------------------ | --------- | ------------------------------- |
+| `session.started`                          | `session` | `thought`, `system`, `analysis` |
+| `session.completed`                        | `session` | `thought`, `system`, `analysis` |
+| `session.failed`                           | `session` | `thought`, `system`, `analysis` |
+| `model.turn.started`                       | `model`   | `analysis`                      |
+| `model.turn.completed`                     | `model`   | `analysis`                      |
+| `model.output.emitted`                     | `model`   | `thought`, `analysis`           |
+| `model.exchange.recorded`                  | `model`   | `analysis`                      |
+| `model.provider.warning`                   | `model`   | `system`, `analysis`            |
+| `tool.called`                              | `tool`    | `thought`, `analysis`           |
+| `tool.completed`                           | `tool`    | `system`, `analysis`            |
+| `tool.failed`                              | `tool`    | `thought`, `system`, `analysis` |
+| `memory.evicted`                           | `memory`  | `system`, `analysis`            |
+| `memory.embedding.generated`               | `memory`  | `system`, `analysis`            |
+| `memory.search.started`                    | `memory`  | `system`, `analysis`            |
+| `memory.search.completed`                  | `memory`  | `system`, `analysis`            |
+| `memory.search.failed`                     | `memory`  | `system`, `analysis`            |
+| `memory.reembedding.skipped`               | `memory`  | `system`, `analysis`            |
+| `memory.reembedding.started`               | `memory`  | `system`, `analysis`            |
+| `memory.reembedding.item_failed`           | `memory`  | `system`, `analysis`            |
+| `memory.reembedding.completed`             | `memory`  | `system`, `analysis`            |
+| `memory.rerank.failed`                     | `memory`  | `system`, `analysis`            |
+| `memory.rerank.fallback`                   | `memory`  | `system`, `analysis`            |
+| `system.schedule.alarm_triggered`          | `system`  | `system`, `analysis`            |
+| `system.schedule.alarm_completed`          | `system`  | `system`, `analysis`            |
+| `system.schedule.alarm_scheduled`          | `system`  | `system`, `analysis`            |
+| `system.schedule.next_wake_at_updated`     | `system`  | `system`, `analysis`            |
+| `system.schedule.next_wake_at_cleared`     | `system`  | `system`, `analysis`            |
+| `system.schedule.next_wake_at_invalidated` | `system`  | `system`, `analysis`            |
+| `system.echo_state.changed`                | `system`  | `system`, `analysis`            |
+| `system.echo_state.change_rejected`        | `system`  | `system`, `analysis`            |
+| `system.echo_state.change_failed`          | `system`  | `system`, `analysis`            |
+| `system.run.failed`                        | `system`  | `system`, `analysis`            |
+| `system.run.precondition_failed`           | `system`  | `system`, `analysis`            |
+| `system.run_decision.evaluated`            | `system`  | `system`, `analysis`            |
+| `usage.recorded`                           | `usage`   | `system`, `analysis`            |
+
+`model.output.emitted` は assistant message / reasoning のみを扱い、tool call は含めない。tool handler 内部の詳細エラーは、model に返す tool output からは除き、`tool.failed` payload の `diagnostics` に載せる。API payload の裏取りが必要な場合は `model.exchange.recorded` を `debug` severity / `analysis` stream として出す。
 
 ## Sink policy の考え方
 
@@ -188,7 +217,6 @@ Dashboard は archive または observability から event を読み、`streams`
 
 ## 現時点の未決事項
 
-- `ThoughtLogPort` をどこまで残し、どこから `EchoEvent` sink に寄せるか
 - Discord に出す event の最小セット
 - `session.started` / `session.completed` を常に Discord に出すか、summary だけにするか
 - archive sink の保存先を D1 + R2 にするか、まずは R2 JSONL から始めるか

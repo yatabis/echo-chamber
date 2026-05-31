@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Emotion } from '@echo-chamber/core/echo/types';
 import type { EchoEventPort } from '@echo-chamber/core/ports/echo-event';
-import type { LoggerPort } from '@echo-chamber/core/ports/logger';
 
 import { MemorySystem } from './memory-system';
 
@@ -194,14 +193,6 @@ const mockRerankingService: RerankingService = {
 };
 const mockedRerank = vi.mocked(rerankMock);
 
-const mockLogger: Pick<LoggerPort, 'debug' | 'info' | 'error'> = {
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-  log: vi.fn(),
-} as unknown as LoggerPort;
-
 /**
  * Float32ArrayをArrayBufferに変換（テスト用）
  */
@@ -259,7 +250,6 @@ describe('MemorySystem', () => {
       sql: mockSql as unknown as SqlStorage,
       embeddingService: mockEmbeddingService,
       rerankingService: mockRerankingService,
-      logger: mockLogger,
     });
   });
 
@@ -316,6 +306,13 @@ describe('MemorySystem', () => {
     });
 
     it('容量上限到達時は最も古いメモリを削除してから保存する', async () => {
+      const emit = vi.fn<EchoEventPort['emit']>().mockResolvedValue(undefined);
+      memorySystem = new MemorySystem({
+        sql: mockSql as unknown as SqlStorage,
+        embeddingService: mockEmbeddingService,
+        rerankingService: mockRerankingService,
+        events: { emit },
+      });
       mockSql._tables.memories = Array.from({ length: 500 }, (_, index) =>
         createMockMemoryRow({
           id: `memory-${index}`,
@@ -347,9 +344,18 @@ describe('MemorySystem', () => {
           (memory) => memory.content === 'Newest memory'
         )
       ).toBe(true);
-      expect(mockLogger.info).toHaveBeenCalledWith(
-        'Memory capacity reached. Removed oldest memory: Oldest memory'
-      );
+      expect(emit).toHaveBeenCalledWith({
+        type: 'memory.evicted',
+        category: 'memory',
+        severity: 'warn',
+        streams: ['system', 'analysis'],
+        summary: 'memory capacity reached; removed oldest memory',
+        payload: {
+          id: 'oldest-memory',
+          content: 'Oldest memory',
+          maxMemoryCount: 500,
+        },
+      });
     });
   });
 
@@ -440,7 +446,6 @@ describe('MemorySystem', () => {
         sql: mockSql as unknown as SqlStorage,
         embeddingService: mockEmbeddingService,
         rerankingService: mockRerankingService,
-        logger: mockLogger,
         events: { emit },
       });
       const embedding = new Float32Array(1536).fill(0.5);
@@ -646,12 +651,16 @@ describe('MemorySystem', () => {
       expect(results.some((result) => result.content === 'Memory 21')).toBe(
         false
       );
-      expect(mockLogger.info).toHaveBeenCalledWith(
-        expect.stringContaining('[all] sorted query')
-      );
     });
 
     it('rerank に失敗した場合はベクトル順位へフォールバックする', async () => {
+      const emit = vi.fn<EchoEventPort['emit']>().mockResolvedValue(undefined);
+      memorySystem = new MemorySystem({
+        sql: mockSql as unknown as SqlStorage,
+        embeddingService: mockEmbeddingService,
+        rerankingService: mockRerankingService,
+        events: { emit },
+      });
       (
         mockEmbeddingService.embed as ReturnType<typeof vi.fn>
       ).mockResolvedValue([1, 0]);
@@ -676,14 +685,30 @@ describe('MemorySystem', () => {
       ]);
       expect(results[0]?.similarity).toBeCloseTo(1, 5);
       expect(results[1]?.similarity).toBeCloseTo(0.9938837346736189, 5);
-      expect(mockLogger.error).toHaveBeenCalledWith(
-        'Failed to rerank memory search results: rerank failed'
-      );
+      expect(emit).toHaveBeenCalledWith({
+        type: 'memory.rerank.failed',
+        category: 'memory',
+        severity: 'warn',
+        streams: ['system', 'analysis'],
+        summary: 'failed to rerank memory search results: rerank failed',
+        payload: {
+          query: 'fallback query',
+          candidateCount: 2,
+          error: 'rerank failed',
+        },
+      });
     });
   });
 
   describe('reEmbedStaleMemories', () => {
     it('現在のモデルと同じ場合は何もしない', async () => {
+      const emit = vi.fn<EchoEventPort['emit']>().mockResolvedValue(undefined);
+      memorySystem = new MemorySystem({
+        sql: mockSql as unknown as SqlStorage,
+        embeddingService: mockEmbeddingService,
+        rerankingService: mockRerankingService,
+        events: { emit },
+      });
       mockSql._tables.memories = [
         createMockMemoryRow({
           embedding_model: 'test/mock-embedding-model',
@@ -693,12 +718,26 @@ describe('MemorySystem', () => {
       await memorySystem.reEmbedStaleMemories();
 
       expect(mockEmbeddingService.embed).not.toHaveBeenCalled(); // eslint-disable-line @typescript-eslint/unbound-method
-      expect(mockLogger.debug).toHaveBeenCalledWith(
-        'No stale memories to re-embed (model: test/mock-embedding-model)'
-      );
+      expect(emit).toHaveBeenCalledWith({
+        type: 'memory.reembedding.skipped',
+        category: 'memory',
+        severity: 'debug',
+        streams: ['system', 'analysis'],
+        summary: 'no stale memories to re-embed',
+        payload: {
+          currentModel: 'test/mock-embedding-model',
+        },
+      });
     });
 
     it('古いモデルの memory を再 embedding する', async () => {
+      const emit = vi.fn<EchoEventPort['emit']>().mockResolvedValue(undefined);
+      memorySystem = new MemorySystem({
+        sql: mockSql as unknown as SqlStorage,
+        embeddingService: mockEmbeddingService,
+        rerankingService: mockRerankingService,
+        events: { emit },
+      });
       const newEmbedding = new Array<number>(2048).fill(0.5);
       // eslint-disable-next-line @typescript-eslint/unbound-method
       vi.mocked(mockEmbeddingService.embed).mockResolvedValue(newEmbedding);
@@ -716,14 +755,30 @@ describe('MemorySystem', () => {
       expect(mockSql._tables.memories[0]?.embedding_model).toBe(
         'test/mock-embedding-model'
       );
-      expect(mockLogger.info).toHaveBeenNthCalledWith(
-        1,
-        'Re-embedding 1 memories with test/mock-embedding-model...'
-      );
-      expect(mockLogger.info).toHaveBeenNthCalledWith(
-        2,
-        'Re-embedding complete.'
-      );
+      expect(emit).toHaveBeenCalledWith({
+        type: 'memory.reembedding.started',
+        category: 'memory',
+        severity: 'info',
+        streams: ['system', 'analysis'],
+        summary: 're-embedding 1 memories',
+        payload: {
+          currentModel: 'test/mock-embedding-model',
+          staleCount: 1,
+        },
+      });
+      expect(emit).toHaveBeenCalledWith({
+        type: 'memory.reembedding.completed',
+        category: 'memory',
+        severity: 'info',
+        streams: ['system', 'analysis'],
+        summary: 're-embedding completed',
+        payload: {
+          currentModel: 'test/mock-embedding-model',
+          staleCount: 1,
+          successCount: 1,
+          failedCount: 0,
+        },
+      });
     });
 
     it('複数の stale memory を順に再 embedding する', async () => {
@@ -754,6 +809,13 @@ describe('MemorySystem', () => {
     });
 
     it('embed に失敗した memory はスキップして続行する', async () => {
+      const emit = vi.fn<EchoEventPort['emit']>().mockResolvedValue(undefined);
+      memorySystem = new MemorySystem({
+        sql: mockSql as unknown as SqlStorage,
+        embeddingService: mockEmbeddingService,
+        rerankingService: mockRerankingService,
+        events: { emit },
+      });
       // eslint-disable-next-line @typescript-eslint/unbound-method
       vi.mocked(mockEmbeddingService.embed)
         .mockRejectedValueOnce(new Error('API error'))
@@ -781,9 +843,25 @@ describe('MemorySystem', () => {
       expect(mockSql._tables.memories[1]?.embedding_model).toBe(
         'test/mock-embedding-model'
       );
-      expect(mockLogger.error).toHaveBeenCalledWith(
-        expect.stringContaining('Failed to re-embed memory')
-      );
+      const failedEvent = emit.mock.calls.find(
+        ([event]) => event.type === 'memory.reembedding.item_failed'
+      )?.[0];
+      expect(failedEvent).toMatchObject({
+        payload: {
+          currentModel: 'test/mock-embedding-model',
+          error: 'API error',
+        },
+      });
+      const completedEvent = emit.mock.calls.find(
+        ([event]) => event.type === 'memory.reembedding.completed'
+      )?.[0];
+      expect(completedEvent).toMatchObject({
+        severity: 'warn',
+        payload: {
+          successCount: 1,
+          failedCount: 1,
+        },
+      });
     });
   });
 });

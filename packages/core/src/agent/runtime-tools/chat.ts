@@ -1,4 +1,3 @@
-import { getErrorMessage } from '../../utils/error';
 import {
   addReactionToChatMessageToolSpec,
   checkNotificationsToolSpec,
@@ -6,7 +5,7 @@ import {
   sendChatMessageToolSpec,
 } from '../tools/chat';
 
-import { Tool } from './tool';
+import { createToolErrorResult, Tool } from './tool';
 
 export const checkNotificationsTool = new Tool(
   checkNotificationsToolSpec,
@@ -34,13 +33,7 @@ export const checkNotificationsTool = new Tool(
         })),
       };
     } catch (error) {
-      await ctx.logger.error(
-        `Error checking notifications: ${getErrorMessage(error)}`
-      );
-      return {
-        success: false,
-        error: 'Failed to fetch notifications',
-      };
+      return createToolErrorResult('Failed to fetch notifications', error);
     }
   }
 );
@@ -63,13 +56,7 @@ export const readChatMessagesTool = new Tool(
         })),
       };
     } catch (error) {
-      await ctx.logger.error(
-        `Error reading chat messages: ${getErrorMessage(error)}`
-      );
-      return {
-        success: false,
-        error: 'Failed to read messages',
-      };
+      return createToolErrorResult('Failed to read messages', error);
     }
   }
 );
@@ -84,13 +71,7 @@ export const sendChatMessageTool = new Tool(
         success: true,
       };
     } catch (error) {
-      await ctx.logger.error(
-        `Error sending chat message: ${getErrorMessage(error)}`
-      );
-      return {
-        success: false,
-        error: 'Failed to send message',
-      };
+      return createToolErrorResult('Failed to send message', error);
     }
   }
 );
@@ -105,13 +86,7 @@ export const addReactionToChatMessageTool = new Tool(
         success: true,
       };
     } catch (error) {
-      await ctx.logger.error(
-        `Error adding reaction to chat message: ${getErrorMessage(error)}`
-      );
-      return {
-        success: false,
-        error: 'Failed to add reaction',
-      };
+      return createToolErrorResult('Failed to add reaction', error);
     }
   }
 );

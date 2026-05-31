@@ -8,7 +8,7 @@ import {
   updateNoteToolSpec,
 } from '../tools/note';
 
-import { Tool } from './tool';
+import { createToolErrorResult, Tool } from './tool';
 
 import type { Note } from '../../echo/types';
 
@@ -25,10 +25,10 @@ export const createNoteTool = new Tool(
       };
     } catch (error) {
       const message = getErrorMessage(error);
-      await ctx.logger.error(`Error creating note: ${message}`);
       return {
         success: false,
         error: message,
+        diagnostics: { error: message },
       };
     }
   }
@@ -49,10 +49,10 @@ export const listNotesTool = new Tool(listNotesToolSpec, async (_, ctx) => {
     };
   } catch (error) {
     const message = getErrorMessage(error);
-    await ctx.logger.error(`Error listing notes: ${message}`);
     return {
       success: false,
       error: message,
+      diagnostics: { error: message },
     };
   }
 });
@@ -72,10 +72,10 @@ export const getNoteTool = new Tool(getNoteToolSpec, async ({ id }, ctx) => {
     };
   } catch (error) {
     const message = getErrorMessage(error);
-    await ctx.logger.error(`Error getting note: ${message}`);
     return {
       success: false,
       error: message,
+      diagnostics: { error: message },
     };
   }
 });
@@ -91,10 +91,10 @@ export const searchNotesTool = new Tool(
       };
     } catch (error) {
       const message = getErrorMessage(error);
-      await ctx.logger.error(`Error searching notes: ${message}`);
       return {
         success: false,
         error: message,
+        diagnostics: { error: message },
       };
     }
   }
@@ -124,10 +124,10 @@ export const updateNoteTool = new Tool(
       };
     } catch (error) {
       const message = getErrorMessage(error);
-      await ctx.logger.error(`Error updating note: ${message}`);
       return {
         success: false,
         error: message,
+        diagnostics: { error: message },
       };
     }
   }
@@ -148,12 +148,7 @@ export const deleteNoteTool = new Tool(
         success: true,
       };
     } catch (error) {
-      const message = getErrorMessage(error);
-      await ctx.logger.error(`Error deleting note: ${message}`);
-      return {
-        success: false,
-        error: message,
-      };
+      return createToolErrorResult(getErrorMessage(error), error);
     }
   }
 );

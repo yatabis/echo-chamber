@@ -97,6 +97,9 @@ describe('Memory Functions', () => {
         expect(result).toEqual({
           success: false,
           error: 'Failed to store memory',
+          diagnostics: {
+            error: 'Memory System Error',
+          },
         });
       });
     });
@@ -187,6 +190,9 @@ describe('Memory Functions', () => {
         expect(result).toEqual({
           success: false,
           error: 'Failed to search memory',
+          diagnostics: {
+            error: 'Memory System Error',
+          },
         });
       });
 
