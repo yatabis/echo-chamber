@@ -186,6 +186,37 @@ describe('OpenAIResponsesModel', () => {
     );
   });
 
+  it('constructor で指定した reasoning effort を Responses API に渡す', async () => {
+    const model = new OpenAIResponsesModel({
+      apiKey: 'test-key',
+      reasoningEffort: 'low',
+    });
+
+    mockCreateResponse.mockResolvedValue({
+      output: [],
+      usage: {
+        input_tokens: 0,
+        input_tokens_details: { cached_tokens: 0 },
+        output_tokens: 0,
+        output_tokens_details: { reasoning_tokens: 0 },
+        total_tokens: 0,
+      },
+    });
+
+    await model.createResponse({
+      input: [],
+      tools: [],
+    });
+
+    expect(mockCreateResponse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reasoning: {
+          effort: 'low',
+        },
+      })
+    );
+  });
+
   it('generate は OpenAI response を core model response へ変換する', async () => {
     const model = new OpenAIResponsesModel({
       apiKey: 'test-key',

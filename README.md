@@ -84,6 +84,7 @@ MARIE_HARD_TOKEN_LIMIT_BUFFER_FACTOR=1.5
 
 prefix は `RIN_` / `MARIE_` を使います。prefix なしの `MAIN_LLM_*` や `DAILY_*_TOKEN_LIMIT` は、instance 定義に該当項目が無い場合の global fallback です。
 `*_MAIN_LLM_MODEL` は LM Studio でロードしたモデルの identifier に合わせてください。
+OpenAI Responses API の reasoning effort は `*_MAIN_LLM_REASONING_EFFORT` または `MAIN_LLM_REASONING_EFFORT` で一時上書きできます。値は `none` / `minimal` / `low` / `medium` / `high` / `xhigh` です。
 LM Studio では `*_MAIN_LLM_BASE_URL` と `*_MAIN_LLM_API_KEY` も必須です。LM Studio 側で認証を無効にしている場合でも、OpenAI client 用に任意の API key 文字列を設定してください。
 Chat Completions API 利用時は、prompt template が user message を必須とするモデル向けに `developer` message を `user` role として渡します。
 LM Studio には `max_tokens: 32768`、`temperature: 0.7`、`top_p: 0.8`、`presence_penalty: 1.5`、`top_k: 20`、`chat_template_kwargs: { enable_thinking: false }` を固定で指定します。

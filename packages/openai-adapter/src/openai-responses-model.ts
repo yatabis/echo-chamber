@@ -25,11 +25,13 @@ import type {
   ResponseOutputItem,
   ResponseOutputMessage,
 } from 'openai/resources/responses/responses';
+import type { ReasoningEffort } from 'openai/resources/shared';
 
 export interface OpenAIResponsesModelOptions {
   apiKey: string;
   model?: string;
   events?: EchoEventPort;
+  reasoningEffort?: ReasoningEffort;
 }
 
 /**
@@ -40,6 +42,7 @@ export class OpenAIResponsesModel implements ModelPort {
   private readonly client: OpenAI;
   private readonly model: string;
   private readonly events: EchoEventPort | undefined;
+  private readonly reasoningEffort: ReasoningEffort;
 
   /**
    * OpenAI Responses API を使う `ModelPort` adapter を構築する。
@@ -52,6 +55,7 @@ export class OpenAIResponsesModel implements ModelPort {
     });
     this.model = options.model ?? 'gpt-5.5';
     this.events = options.events;
+    this.reasoningEffort = options.reasoningEffort ?? 'none';
   }
 
   /**
@@ -90,7 +94,7 @@ export class OpenAIResponsesModel implements ModelPort {
       parallel_tool_calls: true,
       previous_response_id: request.previousResponseToken,
       reasoning: {
-        effort: 'none',
+        effort: this.reasoningEffort,
       },
       store: true,
       stream: false,

@@ -23,6 +23,7 @@ const expectedInstanceRuntimeSettings = {
     mainLlm: {
       provider: 'openai',
       model: 'gpt-5.4-mini',
+      reasoningEffort: 'low',
     },
     tokenLimits: {
       dailyHardLimit: 2_500_000,

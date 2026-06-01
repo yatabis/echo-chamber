@@ -45,16 +45,28 @@ describe('resolveMainLLMConfig', () => {
       apiKey: 'openai-key',
       model: DEFAULT_OPENAI_RESPONSES_MODEL,
       baseURL: undefined,
+      reasoningEffort: undefined,
     });
   });
 
-  it('OpenAI のモデルと API key を instance 環境変数で上書きできる', () => {
+  it('instance definition の OpenAI reasoning effort を返す', () => {
+    expect(
+      resolveMainLLMConfig(createEnv(), getEchoInstanceDefinition('marie'))
+    ).toMatchObject({
+      provider: 'openai',
+      api: 'responses',
+      reasoningEffort: 'low',
+    });
+  });
+
+  it('OpenAI のモデル、API key、reasoning effort を instance 環境変数で上書きできる', () => {
     expect(
       resolveMainLLMConfig(
         createEnv({
           RIN_MAIN_LLM_PROVIDER: 'openai',
           RIN_MAIN_LLM_API_KEY: 'main-Key',
           RIN_MAIN_LLM_MODEL: 'GPT-5.4',
+          RIN_MAIN_LLM_REASONING_EFFORT: 'HIGH',
         }),
         getEchoInstanceDefinition('rin')
       )
@@ -64,6 +76,7 @@ describe('resolveMainLLMConfig', () => {
       apiKey: 'main-Key',
       model: 'GPT-5.4',
       baseURL: undefined,
+      reasoningEffort: 'high',
     });
   });
 
@@ -73,6 +86,7 @@ describe('resolveMainLLMConfig', () => {
         createEnv({
           MAIN_LLM_PROVIDER: 'openai',
           MAIN_LLM_MODEL: 'GPT-5.2',
+          MAIN_LLM_REASONING_EFFORT: 'medium',
         }),
         createDefinition({
           mainLlm: {},
@@ -81,6 +95,7 @@ describe('resolveMainLLMConfig', () => {
     ).toMatchObject({
       provider: 'openai',
       model: 'GPT-5.2',
+      reasoningEffort: 'medium',
     });
   });
 
@@ -166,6 +181,7 @@ describe('resolveMainLLMConfig', () => {
           RIN_MAIN_LLM_BASE_URL: 'http://localhost:1234/v1',
           RIN_MAIN_LLM_API_KEY: 'local-key',
           MAIN_LLM_MODEL: 'local-global-model',
+          RIN_MAIN_LLM_REASONING_EFFORT: 'deep',
         }),
         getEchoInstanceDefinition('rin')
       )
@@ -230,6 +246,19 @@ describe('resolveMainLLMConfig', () => {
       )
     ).toThrow(
       'Unsupported MAIN_LLM_PROVIDER: anthropic. Use "openai" or "lmstudio".'
+    );
+  });
+
+  it('未対応 reasoning effort はエラーにする', () => {
+    expect(() =>
+      resolveMainLLMConfig(
+        createEnv({
+          RIN_MAIN_LLM_REASONING_EFFORT: 'deep',
+        }),
+        getEchoInstanceDefinition('rin')
+      )
+    ).toThrow(
+      'Unsupported MAIN_LLM_REASONING_EFFORT: deep. Use "none", "minimal", "low", "medium", "high", or "xhigh".'
     );
   });
 });

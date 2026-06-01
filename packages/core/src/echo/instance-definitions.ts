@@ -6,11 +6,19 @@ import { TOKEN_LIMITS } from './constants';
 import type { EchoInstanceId } from '../types/echo-config';
 
 export type EchoMainLLMProvider = 'openai' | 'lmstudio';
+export type EchoMainLLMReasoningEffort =
+  | 'none'
+  | 'minimal'
+  | 'low'
+  | 'medium'
+  | 'high'
+  | 'xhigh';
 
 export interface EchoMainLLMDefinition {
   provider?: EchoMainLLMProvider;
   model?: string;
   baseURL?: string;
+  reasoningEffort?: EchoMainLLMReasoningEffort;
 }
 
 export interface EchoTokenLimitDefinition {
@@ -49,6 +57,7 @@ export const ECHO_INSTANCE_DEFINITIONS = {
     mainLlm: {
       provider: 'openai',
       model: 'gpt-5.4-mini',
+      reasoningEffort: 'low',
     },
     tokenLimits: {
       dailyHardLimit: TOKEN_LIMITS.DAILY_HARD_LIMIT * 5,

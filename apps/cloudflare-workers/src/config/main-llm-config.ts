@@ -1,6 +1,7 @@
 import type {
   EchoInstanceDefinition,
   EchoMainLLMProvider,
+  EchoMainLLMReasoningEffort,
 } from '@echo-chamber/core/echo/instance-definitions';
 
 export const MAX_TOKENS = 32768;
@@ -14,14 +15,29 @@ export type MainLLMProvider = EchoMainLLMProvider;
 export type MainLLMApi = 'responses' | 'chat_completions';
 export type MainLLMExtraBody = Record<string, unknown>;
 
-type MainLLMConfigKey = 'provider' | 'model' | 'baseURL' | 'apiKey';
+type MainLLMConfigKey =
+  | 'provider'
+  | 'model'
+  | 'baseURL'
+  | 'apiKey'
+  | 'reasoningEffort';
 
 const MAIN_LLM_ENV_KEYS = {
   provider: 'PROVIDER',
   model: 'MODEL',
   baseURL: 'BASE_URL',
   apiKey: 'API_KEY',
+  reasoningEffort: 'REASONING_EFFORT',
 } as const satisfies Record<MainLLMConfigKey, string>;
+
+const REASONING_EFFORTS = [
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+] as const satisfies readonly EchoMainLLMReasoningEffort[];
 
 interface ResolveMainLLMValueOptions {
   skipDefinition?: boolean;
@@ -37,6 +53,7 @@ export interface MainLLMConfig {
   temperature?: number;
   topP?: number;
   presencePenalty?: number;
+  reasoningEffort?: EchoMainLLMReasoningEffort;
   extraBody?: MainLLMExtraBody;
 }
 
@@ -52,6 +69,7 @@ export interface MainLLMEnv {
   MAIN_LLM_MODEL?: string;
   MAIN_LLM_BASE_URL?: string;
   MAIN_LLM_API_KEY?: string;
+  MAIN_LLM_REASONING_EFFORT?: string;
 }
 
 /**
@@ -102,6 +120,30 @@ function resolveMainLLMDefinitionValue(
   }
 
   return definition.mainLlm[key];
+}
+
+/**
+ * main LLM reasoning effort を OpenAI が受け取れる値へ正規化する。
+ *
+ * @param reasoningEffort instance 定義または環境変数から解決した値
+ * @returns 正規化済み reasoning effort。未設定なら `undefined`
+ */
+function resolveReasoningEffort(
+  reasoningEffort: string | undefined
+): EchoMainLLMReasoningEffort | undefined {
+  const normalized = normalizeOptionalEnv(reasoningEffort)?.toLowerCase();
+
+  if (normalized === undefined) {
+    return undefined;
+  }
+
+  if (REASONING_EFFORTS.includes(normalized as EchoMainLLMReasoningEffort)) {
+    return normalized as EchoMainLLMReasoningEffort;
+  }
+
+  throw new Error(
+    `Unsupported MAIN_LLM_REASONING_EFFORT: ${reasoningEffort}. Use "none", "minimal", "low", "medium", "high", or "xhigh".`
+  );
 }
 
 /**
@@ -213,12 +255,19 @@ export function resolveMainLLMConfig(
   const providerApiKey = resolveMainLLMValue(env, definition, 'apiKey');
 
   if (provider === 'openai') {
+    const reasoningEffort = resolveReasoningEffort(
+      resolveMainLLMValue(env, definition, 'reasoningEffort', {
+        skipDefinition: skipDefinitionProviderDetails,
+      })
+    );
+
     return {
       provider,
       api: 'responses',
       apiKey: providerApiKey ?? env.OPENAI_API_KEY,
       model: model ?? DEFAULT_OPENAI_RESPONSES_MODEL,
       baseURL,
+      reasoningEffort,
     };
   }
 

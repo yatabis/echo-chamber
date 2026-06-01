@@ -1231,6 +1231,7 @@ export class Echo extends DurableObject<Env> {
       apiKey: config.apiKey,
       model: config.model,
       events: this.events,
+      reasoningEffort: config.reasoningEffort,
     });
   }
 
