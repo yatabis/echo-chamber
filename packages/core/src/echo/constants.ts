@@ -28,4 +28,8 @@ export const SCHEDULING_CONFIG = {
 export const ALARM_CONFIG = {
   /** アラーム間隔（分） */
   INTERVAL_MINUTES: 1,
+  /** JST 03:00 の UTC hour。日次 sleep / maintenance の開始時刻 */
+  DAILY_SLEEP_START_UTC_HOUR: 18,
+  /** JST 07:00 の UTC hour。日次 sleep の終了時刻 */
+  DAILY_SLEEP_END_UTC_HOUR: 22,
 } as const;

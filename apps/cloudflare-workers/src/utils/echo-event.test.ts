@@ -8,6 +8,7 @@ import type {
 import {
   CompositeEchoEventPort,
   ConsoleEchoEventPort,
+  createCloudflareEchoEventPort,
   type DiscordEchoEventConfig,
   DiscordEchoEventPort,
   shouldNotifyDiscord,
@@ -257,6 +258,76 @@ describe('CompositeEchoEventPort', () => {
 
     expect(first.emit).toHaveBeenCalledWith(event);
     expect(second.emit).toHaveBeenCalledWith(event);
+  });
+
+  it('途中の port が失敗しても残りの port へ event を流す', async () => {
+    const firstError = new Error('first failed');
+    const first = {
+      emit: vi.fn(async () => Promise.reject(firstError)),
+    };
+    const second = {
+      emit: vi.fn(async () => Promise.resolve()),
+    };
+    const event: EchoEvent = {
+      type: 'session.completed',
+      category: 'session',
+      severity: 'info',
+      streams: ['thought', 'system', 'analysis'],
+      summary: 'thinking session completed',
+    };
+    const events = new CompositeEchoEventPort([first, second]);
+
+    await expect(events.emit(event)).rejects.toThrow(firstError);
+
+    expect(first.emit).toHaveBeenCalledWith(event);
+    expect(second.emit).toHaveBeenCalledWith(event);
+  });
+});
+
+describe('createCloudflareEchoEventPort', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-21T00:00:00.000Z'));
+    mockSendChannelMessage.mockResolvedValue({});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('console / archive / Discord へ event を配送する', async () => {
+    const eventArchive = {
+      recordEvent: vi.fn(async () => Promise.resolve()),
+    };
+    const logSpy = vi
+      .spyOn(console, 'info')
+      .mockImplementation(() => undefined);
+    const events = createCloudflareEchoEventPort({
+      source: 'test-source',
+      getInstanceId: (): string => 'rin',
+      getSessionId: (): string => 'session-1',
+      eventArchive,
+      getDiscordConfig: (): DiscordEchoEventConfig => ({
+        token: 'discord-token',
+        channelId: 'thinking-channel',
+      }),
+    });
+    const event: EchoEvent = {
+      type: 'session.started',
+      category: 'session',
+      severity: 'info',
+      streams: ['thought', 'system', 'analysis'],
+      summary: 'thinking session started',
+    };
+
+    await events.emit(event);
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(eventArchive.recordEvent).toHaveBeenCalledWith(event, {
+      sessionId: 'session-1',
+    });
+    expect(mockSendChannelMessage).toHaveBeenCalledTimes(1);
   });
 });
 

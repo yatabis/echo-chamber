@@ -27,6 +27,12 @@
       "id": "bdc8412da3cf40228ccf23e5997a73be",
     },
   ],
+  "r2_buckets": [
+    {
+      "binding": "ECHO_EVENT_ARCHIVE",
+      "bucket_name": "echo-event-archive",
+    },
+  ],
   "observability": {
     "enabled": true,
   },

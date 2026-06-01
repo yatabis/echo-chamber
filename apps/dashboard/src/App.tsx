@@ -9,10 +9,15 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 
 import {
+  parseDashboardEchoEventsResponse,
   parseDashboardInstancesResponse,
   parseEchoStatus,
 } from '@echo-chamber/contracts/dashboard/schemas';
 import type {
+  DashboardEchoEvent,
+  DashboardEchoEventsResponse,
+  DashboardEchoEventSeverity,
+  DashboardEchoEventStream,
   DashboardInstanceSummary,
   DashboardInstancesResponse,
   DashboardRuntimeConfig,
@@ -39,6 +44,9 @@ import type { JSX } from 'react';
 
 const MEMORY_PAGE_SIZE = 20;
 
+type EventSeverityFilter = 'all' | DashboardEchoEventSeverity;
+type EventStreamFilter = 'all' | DashboardEchoEventStream;
+
 interface SignalItem {
   title: string;
   body: string;
@@ -60,7 +68,7 @@ interface UsageAnalysis {
   totals30: DashboardUsageBreakdownTotals | null;
 }
 
-type DetailTab = 'overview' | 'notes' | 'memories';
+type DetailTab = 'overview' | 'events' | 'notes' | 'memories';
 
 const DETAIL_TABS: {
   id: DetailTab;
@@ -71,6 +79,10 @@ const DETAIL_TABS: {
     label: 'Overview',
   },
   {
+    id: 'events',
+    label: 'Events',
+  },
+  {
     id: 'notes',
     label: 'Notes',
   },
@@ -78,6 +90,27 @@ const DETAIL_TABS: {
     id: 'memories',
     label: 'Memories',
   },
+];
+
+const EVENT_SEVERITY_FILTERS: {
+  id: EventSeverityFilter;
+  label: string;
+}[] = [
+  { id: 'all', label: 'All severities' },
+  { id: 'error', label: 'Error' },
+  { id: 'warn', label: 'Warn' },
+  { id: 'info', label: 'Info' },
+  { id: 'debug', label: 'Debug' },
+];
+
+const EVENT_STREAM_FILTERS: {
+  id: EventStreamFilter;
+  label: string;
+}[] = [
+  { id: 'all', label: 'All streams' },
+  { id: 'system', label: 'System' },
+  { id: 'thought', label: 'Thought' },
+  { id: 'analysis', label: 'Analysis' },
 ];
 
 /**
@@ -173,6 +206,33 @@ function formatDateTime(value: string | null): string {
     minute: '2-digit',
     second: '2-digit',
   }).format(date);
+}
+
+/**
+ * event payload を details 内で読める JSON 文字列へ整形する。
+ */
+function formatEventPayload(payload: Record<string, unknown>): string {
+  return JSON.stringify(payload, null, 2);
+}
+
+/**
+ * dashboard event を stream / severity filter で絞り込む。
+ */
+function filterDashboardEvents(
+  events: readonly DashboardEchoEvent[],
+  filters: {
+    severity: EventSeverityFilter;
+    stream: EventStreamFilter;
+  }
+): DashboardEchoEvent[] {
+  return events.filter((event) => {
+    const severityMatches =
+      filters.severity === 'all' || event.severity === filters.severity;
+    const streamMatches =
+      filters.stream === 'all' || event.streams.includes(filters.stream);
+
+    return severityMatches && streamMatches;
+  });
 }
 
 /**
@@ -1359,6 +1419,124 @@ function NotesSection(props: {
 }
 
 /**
+ * 現在の archive day の event timeline を描画する。
+ */
+function EventsSection(props: {
+  eventsResponse: DashboardEchoEventsResponse;
+}): JSX.Element {
+  const { eventsResponse } = props;
+  const [severityFilter, setSeverityFilter] =
+    useState<EventSeverityFilter>('all');
+  const [streamFilter, setStreamFilter] = useState<EventStreamFilter>('all');
+  const filteredEvents = useMemo(() => {
+    return filterDashboardEvents(eventsResponse.events, {
+      severity: severityFilter,
+      stream: streamFilter,
+    });
+  }, [eventsResponse.events, severityFilter, streamFilter]);
+
+  return (
+    <section className="card">
+      <div className="section-header">
+        <div>
+          <h2>Events</h2>
+          <p>
+            Archive day {eventsResponse.archiveDay} /{' '}
+            {formatNumber(filteredEvents.length)} of{' '}
+            {formatNumber(eventsResponse.events.length)}
+          </p>
+        </div>
+      </div>
+
+      <div className="event-filter-row">
+        <div className="usage-toggle">
+          {EVENT_STREAM_FILTERS.map((filter) => {
+            const active = streamFilter === filter.id;
+
+            return (
+              <button
+                key={filter.id}
+                type="button"
+                className={active ? 'primary' : 'secondary'}
+                onClick={() => {
+                  setStreamFilter(filter.id);
+                }}
+              >
+                {filter.label}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="usage-toggle">
+          {EVENT_SEVERITY_FILTERS.map((filter) => {
+            const active = severityFilter === filter.id;
+
+            return (
+              <button
+                key={filter.id}
+                type="button"
+                className={active ? 'primary' : 'secondary'}
+                onClick={() => {
+                  setSeverityFilter(filter.id);
+                }}
+              >
+                {filter.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {filteredEvents.length === 0 ? (
+        <p className="muted">No events for this archive day.</p>
+      ) : (
+        <div className="item-list event-list">
+          {filteredEvents.map((event) => {
+            return (
+              <article
+                key={event.id}
+                className={`item-card event-card event-card-${event.severity}`}
+              >
+                <div className="item-meta">
+                  <span
+                    className={`pill event-severity-pill event-severity-${event.severity}`}
+                  >
+                    {event.severity}
+                  </span>
+                  <span>{event.type}</span>
+                  <span>{formatDateTime(event.createdAt)}</span>
+                </div>
+                <p className="item-content">{event.summary}</p>
+                <div className="tag-list">
+                  <span className="tag">{event.category}</span>
+                  {event.streams.map((stream) => {
+                    return (
+                      <span key={stream} className="tag">
+                        {stream}
+                      </span>
+                    );
+                  })}
+                  {event.sessionId === null ? null : (
+                    <span className="tag">session {event.sessionId}</span>
+                  )}
+                </div>
+                {event.payload === null ? null : (
+                  <details className="event-payload">
+                    <summary>Payload</summary>
+                    <pre>{formatEventPayload(event.payload)}</pre>
+                  </details>
+                )}
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/**
  * 選択中の usage 期間に対応する解析結果を取り出す。
  */
 function selectUsagePeriod(
@@ -1598,8 +1776,11 @@ function DashboardDetailHeader(props: {
  */
 function getDetailTabCount(
   tab: DetailTab,
-  counts: { memoryCount: number; noteCount: number }
+  counts: { eventCount: number; memoryCount: number; noteCount: number }
 ): number | null {
+  if (tab === 'events') {
+    return counts.eventCount;
+  }
   if (tab === 'notes') {
     return counts.noteCount;
   }
@@ -1615,6 +1796,7 @@ function getDetailTabCount(
  */
 function DetailTabs(props: {
   activeTab: DetailTab;
+  eventCount: number;
   memoryCount: number;
   noteCount: number;
   onChange(tab: DetailTab): void;
@@ -1624,6 +1806,7 @@ function DetailTabs(props: {
       {DETAIL_TABS.map((tab) => {
         const active = props.activeTab === tab.id;
         const count = getDetailTabCount(tab.id, {
+          eventCount: props.eventCount,
           memoryCount: props.memoryCount,
           noteCount: props.noteCount,
         });
@@ -1655,6 +1838,7 @@ function DetailTabs(props: {
  */
 function DetailTabPanel(props: {
   activeTab: DetailTab;
+  eventsResponse: DashboardEchoEventsResponse;
   noteQuery: string;
   notes: EchoStatus['notes'];
   setNoteQuery(value: string): void;
@@ -1677,6 +1861,12 @@ function DetailTabPanel(props: {
             }}
           />
           <KnowledgeInventory status={props.status} />
+        </div>
+      );
+    case 'events':
+      return (
+        <div className="stack" role="tabpanel">
+          <EventsSection eventsResponse={props.eventsResponse} />
         </div>
       );
     case 'notes':
@@ -1705,6 +1895,7 @@ function DetailTabPanel(props: {
  * 詳細画面の読み込み完了後の情報セクション群を描画する。
  */
 function DashboardDetailContent(props: {
+  eventsResponse: DashboardEchoEventsResponse;
   noteQuery: string;
   setNoteQuery(value: string): void;
   setUsageDays(days: DashboardUsageDays): void;
@@ -1723,6 +1914,7 @@ function DashboardDetailContent(props: {
     <section className="stack">
       <DetailTabs
         activeTab={activeTab}
+        eventCount={props.eventsResponse.events.length}
         noteCount={props.status.notes.length}
         memoryCount={props.status.memories.length}
         onChange={(tab): void => {
@@ -1731,6 +1923,7 @@ function DashboardDetailContent(props: {
       />
       <DetailTabPanel
         activeTab={activeTab}
+        eventsResponse={props.eventsResponse}
         status={props.status}
         usageAnalysis={usageAnalysis}
         usageDays={props.usageDays}
@@ -1753,6 +1946,8 @@ function DashboardDetailContent(props: {
 function DashboardDetailPage(): JSX.Element {
   const { instanceId } = useParams({ from: '/$instanceId' });
   const [status, setStatus] = useState<EchoStatus | null>(null);
+  const [eventsResponse, setEventsResponse] =
+    useState<DashboardEchoEventsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [noteQuery, setNoteQuery] = useState('');
@@ -1769,22 +1964,27 @@ function DashboardDetailPage(): JSX.Element {
 
       if (!isValidInstanceId(instanceId)) {
         setStatus(null);
+        setEventsResponse(null);
         setError(`Invalid instance ID: ${instanceId}`);
         setLoading(false);
         return;
       }
 
       try {
-        const payload = await fetchDashboardJson(
-          `/${instanceId}`,
-          parseEchoStatus
-        );
+        const [statusPayload, eventPayload] = await Promise.all([
+          fetchDashboardJson(`/${instanceId}`, parseEchoStatus),
+          fetchDashboardJson(
+            `/${instanceId}/events`,
+            parseDashboardEchoEventsResponse
+          ),
+        ]);
 
         if (!active) {
           return;
         }
 
-        setStatus(payload);
+        setStatus(statusPayload);
+        setEventsResponse(eventPayload);
         setLastLoadedAt(new Date());
       } catch (loadError) {
         if (!active) {
@@ -1792,6 +1992,7 @@ function DashboardDetailPage(): JSX.Element {
         }
 
         setStatus(null);
+        setEventsResponse(null);
         setError(formatLoadError(loadError, 'Failed to load instance'));
       } finally {
         if (active) {
@@ -1826,9 +2027,10 @@ function DashboardDetailPage(): JSX.Element {
         </div>
       ) : null}
 
-      {status !== null ? (
+      {status !== null && eventsResponse !== null ? (
         <DashboardDetailContent
           status={status}
+          eventsResponse={eventsResponse}
           noteQuery={noteQuery}
           setNoteQuery={(value): void => {
             setNoteQuery(value);

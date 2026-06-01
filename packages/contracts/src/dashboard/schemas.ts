@@ -91,6 +91,53 @@ export const dashboardRuntimeConfigSchema = z
   .strict();
 
 /**
+ * dashboard event timeline が扱う severity。
+ */
+export const dashboardEchoEventSeveritySchema = z.enum([
+  'debug',
+  'info',
+  'warn',
+  'error',
+]);
+
+/**
+ * dashboard event timeline が扱う stream。
+ */
+export const dashboardEchoEventStreamSchema = z.enum([
+  'thought',
+  'system',
+  'analysis',
+]);
+
+/**
+ * Dashboard に返す Echo event payload。
+ */
+export const dashboardEchoEventSchema = z
+  .object({
+    id: z.string(),
+    createdAt: z.string(),
+    archiveDay: z.string(),
+    sessionId: z.string().nullable(),
+    type: z.string(),
+    category: z.string(),
+    severity: dashboardEchoEventSeveritySchema,
+    streams: z.array(dashboardEchoEventStreamSchema),
+    summary: z.string(),
+    payload: z.record(z.string(), z.unknown()).nullable(),
+  })
+  .strict();
+
+/**
+ * `/\:instanceId/events` の payload。
+ */
+export const dashboardEchoEventsResponseSchema = z
+  .object({
+    archiveDay: z.string(),
+    events: z.array(dashboardEchoEventSchema),
+  })
+  .strict();
+
+/**
  * Dashboard に返す note payload。
  */
 export const noteSchema = z
@@ -161,6 +208,15 @@ export const dashboardInstancesResponseSchema = z
     instances: z.array(dashboardInstanceSummarySchema),
   })
   .strict();
+
+/**
+ * `/\:instanceId/events` の unknown payload を契約型へ変換する。
+ */
+export function parseDashboardEchoEventsResponse(
+  value: unknown
+): z.infer<typeof dashboardEchoEventsResponseSchema> {
+  return dashboardEchoEventsResponseSchema.parse(value);
+}
 
 /**
  * `/\:instanceId/summary` の unknown payload を契約型へ変換する。

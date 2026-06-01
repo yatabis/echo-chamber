@@ -1,6 +1,6 @@
 # Echo Event Logging
 
-> Status: 議論のベース。現行の `EchoEventPort` 実装を説明しつつ、未実装の archive / Discord sink / dashboard については設計方針として整理する。
+> Status: 現行設計メモ。`EchoEventPort` を中心に、console / Discord / DO SQLite archive / dashboard の役割分担を整理する。
 
 ## 背景
 
@@ -72,7 +72,7 @@ Echo の運用・分析イベントを構造化して扱う。
 
 発火元は「何が起きたか」だけを渡す。`category` や `streams` は event type から中央で派生する。配送先は event に持たせず、sink policy 側で決める。
 
-現在の Worker 実装では、`kind: "echo_event"` の JSON として Cloudflare Workers の console log に出す。severity に応じて `console.debug` / `console.info` / `console.warn` / `console.error` を使い分ける。
+現在の Worker 実装では、console、Discord、DO SQLite archive に配送する。console では `kind: "echo_event"` の JSON として Cloudflare Workers の console log に出す。severity に応じて `console.debug` / `console.info` / `console.warn` / `console.error` を使い分ける。
 
 ## 設計原則
 
@@ -199,34 +199,71 @@ Discord の配送先は event に直接持たせない。現行 Worker では in
 
 ### Archive
 
-未実装の将来 sink。
+実装済みの dashboard / 後追い確認用 sink。
 
-長期保存と分析の正本にする。D1 と R2 を併用する案が有力である。
+保存先は instance ごとの DO SQLite である。DO SQLite は長期履歴の正本ではなく、未アーカイブ event の staging buffer として扱う。
 
-- D1: event type、instance id、session id、tool name、created at、duration、success、token count などの index
-- R2: raw payload、LLM input / output、thought text、memory search candidate 全文などの大きいデータ
+`echo_events` は次の情報だけを持つ。
 
-D1 だけに全文を入れると肥大化しやすい。R2 だけだと検索・集計が難しい。D1 は index、R2 は raw archive と分ける。
+- `id`
+- `created_at_ms`
+- `archive_day`
+- `session_id`
+- `type`
+- `category`
+- `severity`
+- `streams_json`
+- `summary`
+- `payload_json`
+
+`instance_id` は持たない。DO 自体が instance 単位だからである。
+
+人間が活動日として読む operational day の境界は JST 07:00 である。一方、event archive の保存区切りは日次 sleep 開始時刻に合わせて JST 03:00 とする。これは activity の意味境界ではなく、R2 退避と SQLite staging buffer の管理を単純にするための archive day である。
+
+日次 sleep window 中に、完了済み archive day を R2 に NDJSON として退避し、R2 退避後に DO SQLite から削除する。R2 key は deterministic に作る。
+
+```text
+echo-events/instance=<instanceId>/day=<archiveDay>/events.ndjson
+```
+
+日次ローテーションの再実行制御には `event_archive_runs` を使う。
+
+```sql
+CREATE TABLE event_archive_runs (
+  archive_day TEXT PRIMARY KEY,
+  status TEXT NOT NULL
+);
+```
+
+status は次だけを使う。
+
+- row なし: 未退避
+- `uploaded`: R2 put 済み、DO SQLite delete 未完了
+- `deleted`: R2 put 済み、DO SQLite delete 済み
+
+R2 put と SQLite delete は atomic ではない。そのため、`uploaded` の行は次回 rotation で delete を再試行する。`deleted` 済みの管理行と対応する R2 object は 90 日を超えた日次 rotation で削除する。
 
 ### Dashboard
 
 Dashboard は channel ではなく consumer である。
 
-Dashboard は archive または observability から event を読み、`streams` / `type` / `category` を使って thought view、system view、analysis view を構成する。
+現行 dashboard は `/:instanceId/events` から現在の archive day の event だけを読む。過去ログは基本的に dashboard では扱わない。必要になった場合は R2 の日次 NDJSON を別の分析基盤へ載せる。
+
+Dashboard は `streams` / `type` / `category` / `severity` を使って現在の archive day timeline を構成する。
 
 ## 現時点の未決事項
 
 - Discord 通知を thought / system など複数チャンネルへ分けるか
-- archive sink の保存先を D1 + R2 にするか、まずは R2 JSONL から始めるか
 - raw payload の redaction 方針
 - payload が大きい event の分割・圧縮・sampling 方針
 - Cloudflare Observability の retention を前提に、どこまで console sink に頼るか
 - `model.turn.*` を `analysis` 専用のままにするか、system stream にも出すか
+- R2 lifecycle rule も併用するか
 
 ## 実装上の境界
 
 `packages/core` は `EchoEventPort` と event type / category / stream の定義だけを持つ。Cloudflare、Discord、D1、R2 などの具体 sink には依存しない。
 
-`apps/cloudflare-workers` は composition root として、当面は `ConsoleEchoEventPort` を差し込む。将来 Discord sink や archive sink を追加する場合も、core から具体 runtime へ逆依存させない。
+`apps/cloudflare-workers` は composition root として、console / Discord / DO SQLite archive sink を差し込む。core から具体 runtime へ逆依存させない。
 
 `emitEchoEvent()` は best-effort とし、event 配送の失敗で agent 本体を落とさない。

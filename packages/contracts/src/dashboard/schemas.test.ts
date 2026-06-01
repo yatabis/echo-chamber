@@ -1,13 +1,60 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  dashboardEchoEventsResponseSchema,
   dashboardInstancesResponseSchema,
+  parseDashboardEchoEventsResponse,
   echoStatusSchema,
   parseDashboardInstancesResponse,
   parseEchoStatus,
 } from './schemas';
 
 describe('dashboard contract schemas', () => {
+  it('parses /:instanceId/events payload', () => {
+    const payload = parseDashboardEchoEventsResponse({
+      archiveDay: '2026-06-01',
+      events: [
+        {
+          id: 'event-1',
+          createdAt: '2026-06-01T12:00:00.000Z',
+          archiveDay: '2026-06-01',
+          sessionId: 'session-1',
+          type: 'session.started',
+          category: 'session',
+          severity: 'info',
+          streams: ['thought', 'system', 'analysis'],
+          summary: 'thinking session started',
+          payload: null,
+        },
+      ],
+    });
+
+    expect(payload.archiveDay).toBe('2026-06-01');
+    expect(payload.events[0]?.severity).toBe('info');
+  });
+
+  it('rejects invalid /:instanceId/events payload', () => {
+    expect(() => {
+      dashboardEchoEventsResponseSchema.parse({
+        archiveDay: '2026-06-01',
+        events: [
+          {
+            id: 'event-1',
+            createdAt: '2026-06-01T12:00:00.000Z',
+            archiveDay: '2026-06-01',
+            sessionId: null,
+            type: 'session.started',
+            category: 'session',
+            severity: 'fatal',
+            streams: ['system'],
+            summary: 'thinking session started',
+            payload: null,
+          },
+        ],
+      });
+    }).toThrow();
+  });
+
   it('parses /instances payload', () => {
     const payload = parseDashboardInstancesResponse({
       instances: [

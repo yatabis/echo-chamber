@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import { MemorySystem } from '@echo-chamber/cloudflare-runtime/memory-system';
 import { NoteSystem } from '@echo-chamber/cloudflare-runtime/note-system';
 import {
+  parseDashboardEchoEventsResponse,
   parseDashboardInstanceSummary,
   parseEchoStatus,
 } from '@echo-chamber/contracts/dashboard/schemas';
@@ -68,6 +69,7 @@ import { createEmbeddingService } from '../embedding/create-embedding-service';
 import { createRerankingService } from '../reranking/create-reranking-service';
 import { createCloudflareEchoEventPort } from '../utils/echo-event';
 
+import { SqliteEchoEventArchive } from './event-archive';
 import { createToolExecutionContext } from './tool-context';
 
 async function fetchUnreadMessageCounts(
@@ -113,10 +115,20 @@ interface RunExecutionResult {
   thinkMs: number;
 }
 
+type EventArchiveRotationResult =
+  | {
+      status: 'completed';
+    }
+  | {
+      status: 'failed';
+      error: string;
+    };
+
 export class Echo extends DurableObject<Env> {
   private readonly store: KVNamespace;
   private readonly storage: DurableObjectStorage;
   private readonly router: Hono;
+  private readonly eventArchive: SqliteEchoEventArchive;
   private readonly events: EchoEventPort;
   private readonly _env: Env;
   private readonly noteSystem: NoteSystem;
@@ -147,10 +159,14 @@ export class Echo extends DurableObject<Env> {
     super(ctx, env);
     this.store = env.ECHO_KV;
     this.storage = ctx.storage;
+    this.eventArchive = new SqliteEchoEventArchive({
+      sql: this.ctx.storage.sql,
+    });
     this.events = createCloudflareEchoEventPort({
       source: 'cloudflare-workers',
       getInstanceId: (): string | null => this.instanceDefinition?.id ?? null,
       getSessionId: (): string | null => this.currentSessionId,
+      eventArchive: this.eventArchive,
       getDiscordConfig: (): { token: string; channelId: string } | null => {
         if (this.runtimeBindings === null) {
           return null;
@@ -182,6 +198,11 @@ export class Echo extends DurableObject<Env> {
       })
       .get('/summary', async (c) => {
         return c.json(await this.getSummary());
+      })
+      .get('/events', (c) => {
+        return c.json(
+          parseDashboardEchoEventsResponse(this.eventArchive.getTodayEvents())
+        );
       })
       .post('/wake', async (c) => {
         await this.wake(true);
@@ -293,7 +314,9 @@ export class Echo extends DurableObject<Env> {
       thinkMs: 0,
     };
     let alarmStatus: 'completed' | 'failed' | 'sleep_scheduled' = 'completed';
+    let alarmSeverity: 'debug' | 'warn' | 'error' = 'debug';
     let alarmReason: string | undefined;
+    let archiveRotation: EventArchiveRotationResult | undefined;
 
     try {
       await emitEchoEvent(this.events, {
@@ -309,6 +332,7 @@ export class Echo extends DurableObject<Env> {
       const storedId = await this.storage.get<string>('id');
       if (storedId == null || !isValidInstanceId(storedId)) {
         alarmStatus = 'failed';
+        alarmSeverity = 'error';
         alarmReason = 'invalid_instance_id';
         await this.emitRunPreconditionFailed({
           reason: 'invalid_instance_id',
@@ -322,32 +346,34 @@ export class Echo extends DurableObject<Env> {
 
       const now = new Date();
       const state = await this.getState();
-      if (now.getHours() === 18 && state === 'Idling') {
-        await this.sleep();
-        const nextAlarm = new Date();
-        nextAlarm.setHours(22, 0, 0, 0);
-        await this.setNextAlarm(nextAlarm, 'daily_sleep_wake');
+      if (
+        now.getUTCHours() === ALARM_CONFIG.DAILY_SLEEP_START_UTC_HOUR &&
+        state === 'Idling'
+      ) {
+        const dailySleepResult =
+          await this.scheduleDailySleepWakeAndRotateArchive(now);
         alarmStatus = 'sleep_scheduled';
+        alarmSeverity = dailySleepResult.alarmSeverity;
         alarmReason = 'daily_sleep_window';
+        archiveRotation = dailySleepResult.archiveRotation;
         return;
       }
-      if (now.getHours() === 22 && state === 'Sleeping') {
+      if (
+        now.getUTCHours() === ALARM_CONFIG.DAILY_SLEEP_END_UTC_HOUR &&
+        state === 'Sleeping'
+      ) {
         await this.wake(true);
       }
       runResult = await this.run();
       await this.setNextAlarm();
     } finally {
-      await emitEchoEvent(this.events, {
-        type: 'system.schedule.alarm_completed',
-        severity: alarmStatus === 'failed' ? 'error' : 'debug',
-        summary: `alarm ${alarmStatus}`,
-        payload: {
-          status: alarmStatus,
-          reason: alarmReason,
-          alarmTotalMs: Date.now() - alarmStartedAt,
-          unreadCheckMs: runResult.unreadCheckMs,
-          thinkMs: runResult.thinkMs,
-        },
+      await this.emitAlarmCompleted({
+        status: alarmStatus,
+        severity: alarmSeverity,
+        reason: alarmReason,
+        archiveRotation,
+        alarmStartedAt,
+        runResult,
       });
     }
   }
@@ -358,6 +384,89 @@ export class Echo extends DurableObject<Env> {
       return null;
     }
     return formatDatetime(new Date(nextAlarm));
+  }
+
+  /**
+   * 完了済み archive day の event を R2 へ退避する。
+   *
+   * 日次 sleep alarm からだけ呼び、手動 sleep の副作用にはしない。
+   */
+  private async rotateEventArchive(now: Date): Promise<void> {
+    const instanceDefinition = this.getInstanceDefinitionOrThrow();
+
+    await this.eventArchive.rotateCompletedDays({
+      bucket: this._env.ECHO_EVENT_ARCHIVE,
+      instanceId: instanceDefinition.id,
+      now,
+    });
+  }
+
+  /**
+   * 日次 sleep へ入り、wake alarm を確定したうえで archive rotation を試みる。
+   *
+   * wake alarm は archive より重要な制御面なので、R2 / SQLite の失敗から隔離する。
+   *
+   * @param now daily sleep alarm の発火時刻
+   * @returns archive rotation の成否と alarm completed event の severity
+   */
+  private async scheduleDailySleepWakeAndRotateArchive(now: Date): Promise<{
+    alarmSeverity: 'debug' | 'warn';
+    archiveRotation: EventArchiveRotationResult;
+  }> {
+    await this.sleep();
+    const nextAlarm = new Date(now);
+    nextAlarm.setUTCHours(ALARM_CONFIG.DAILY_SLEEP_END_UTC_HOUR, 0, 0, 0);
+    await this.setNextAlarm(nextAlarm, 'daily_sleep_wake');
+
+    try {
+      await this.rotateEventArchive(now);
+
+      return {
+        alarmSeverity: 'debug',
+        archiveRotation: {
+          status: 'completed',
+        },
+      };
+    } catch (error) {
+      return {
+        alarmSeverity: 'warn',
+        archiveRotation: {
+          status: 'failed',
+          error: getErrorMessage(error),
+        },
+      };
+    }
+  }
+
+  /**
+   * alarm handler の完了 event を配送する。
+   *
+   * @param input alarm 実行結果と計測情報
+   */
+  private async emitAlarmCompleted(input: {
+    status: 'completed' | 'failed' | 'sleep_scheduled';
+    severity: 'debug' | 'warn' | 'error';
+    reason: string | undefined;
+    archiveRotation: EventArchiveRotationResult | undefined;
+    alarmStartedAt: number;
+    runResult: RunExecutionResult;
+  }): Promise<void> {
+    await emitEchoEvent(this.events, {
+      type: 'system.schedule.alarm_completed',
+      severity: input.severity,
+      summary:
+        input.archiveRotation?.status === 'failed'
+          ? `alarm ${input.status}: event archive rotation failed`
+          : `alarm ${input.status}`,
+      payload: {
+        status: input.status,
+        reason: input.reason,
+        archiveRotation: input.archiveRotation,
+        alarmTotalMs: Date.now() - input.alarmStartedAt,
+        unreadCheckMs: input.runResult.unreadCheckMs,
+        thinkMs: input.runResult.thinkMs,
+      },
+    });
   }
 
   async setNextAlarm(

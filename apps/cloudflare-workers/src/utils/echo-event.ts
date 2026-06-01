@@ -20,6 +20,24 @@ export interface DiscordEchoEventPortOptions
   getDiscordConfig(): DiscordEchoEventConfig | null;
 }
 
+export interface EchoEventArchive {
+  recordEvent(
+    event: EchoEvent,
+    context: {
+      sessionId: string | null;
+    }
+  ): Promise<void>;
+}
+
+export interface ArchiveEchoEventPortOptions
+  extends ConsoleEchoEventPortOptions {
+  eventArchive: EchoEventArchive;
+}
+
+export interface CloudflareEchoEventPortOptions
+  extends DiscordEchoEventPortOptions,
+    ArchiveEchoEventPortOptions {}
+
 const DISCORD_MESSAGE_MAX_LENGTH = 2000;
 
 /**
@@ -115,6 +133,31 @@ export class DiscordEchoEventPort implements EchoEventPort {
 }
 
 /**
+ * Echo event を dashboard / R2 archive 用の保存層へ送る port。
+ */
+export class ArchiveEchoEventPort implements EchoEventPort {
+  private readonly options: ArchiveEchoEventPortOptions;
+
+  /**
+   * @param options archive 保存先と実行時 context の取得 callback
+   */
+  constructor(options: ArchiveEchoEventPortOptions) {
+    this.options = options;
+  }
+
+  /**
+   * Echo event を archive 保存層へ記録する。
+   *
+   * @param event 保存する Echo event
+   */
+  async emit(event: EchoEvent): Promise<void> {
+    await this.options.eventArchive.recordEvent(event, {
+      sessionId: this.options.getSessionId(),
+    });
+  }
+}
+
+/**
  * 複数の EchoEventPort へ同じ event を配送する。
  */
 export class CompositeEchoEventPort implements EchoEventPort {
@@ -134,10 +177,21 @@ export class CompositeEchoEventPort implements EchoEventPort {
    * @returns 出力完了
    */
   async emit(event: EchoEvent): Promise<void> {
+    let firstError: Error | undefined;
+
     for (const port of this.ports) {
-      // Observability sinks should preserve order for the same event.
-      // eslint-disable-next-line no-await-in-loop
-      await port.emit(event);
+      try {
+        // Observability sinks should preserve order for the same event.
+        // eslint-disable-next-line no-await-in-loop
+        await port.emit(event);
+      } catch (error) {
+        firstError ??=
+          error instanceof Error ? error : new Error('Echo event port failed');
+      }
+    }
+
+    if (firstError !== undefined) {
+      throw firstError;
     }
   }
 }
@@ -235,14 +289,17 @@ export function createConsoleEchoEventPort(
 /**
  * Cloudflare runtime 用の EchoEventPort を作る。
  *
- * @param options 出力元名、実行時 context、Discord 送信先の取得 callback
- * @returns console と Discord へ配送する EchoEventPort
+ * @param options 出力元名、実行時 context、archive 保存先、Discord 送信先の取得 callback
+ * @returns console、archive、Discord へ配送する EchoEventPort
  */
 export function createCloudflareEchoEventPort(
-  options: DiscordEchoEventPortOptions
+  options: CloudflareEchoEventPortOptions
 ): EchoEventPort {
-  return new CompositeEchoEventPort([
+  const ports: EchoEventPort[] = [
     new ConsoleEchoEventPort(options),
+    new ArchiveEchoEventPort(options),
     new DiscordEchoEventPort(options),
-  ]);
+  ];
+
+  return new CompositeEchoEventPort(ports);
 }

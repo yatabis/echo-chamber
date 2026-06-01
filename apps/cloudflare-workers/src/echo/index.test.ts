@@ -164,6 +164,15 @@ function findEmittedEvent(type: EchoEventType): EchoEvent | undefined {
     .find((event) => event.type === type);
 }
 
+function getFirstInvocationCallOrder(callOrders: readonly number[]): number {
+  const [callOrder] = callOrders;
+  if (callOrder === undefined) {
+    throw new Error('missing invocation call order');
+  }
+
+  return callOrder;
+}
+
 function createMockState(storage: DurableObjectStorage): DurableObjectState {
   return {
     storage,
@@ -947,5 +956,136 @@ describe('Echo run metrics', () => {
       },
     });
     expect(typeof completedEvent?.payload?.alarmTotalMs).toBe('number');
+  });
+
+  it('JST 03:00 の daily sleep alarm で archive rotation を実行する', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-21T18:00:00.000Z'));
+
+    const env = createMockEnv();
+    const { storage, getFn } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+    getFn.mockResolvedValue('rin');
+
+    vi.spyOn(
+      echo as unknown as {
+        ensureInitialized(instanceId: 'rin' | 'marie'): Promise<void>;
+      },
+      'ensureInitialized'
+    ).mockResolvedValue(undefined);
+    vi.spyOn(
+      echo as unknown as { getState(): Promise<string> },
+      'getState'
+    ).mockResolvedValue('Idling');
+    const sleep = vi
+      .spyOn(echo as unknown as { sleep(): Promise<void> }, 'sleep')
+      .mockResolvedValue(undefined);
+    const rotateEventArchive = vi
+      .spyOn(
+        echo as unknown as { rotateEventArchive(now: Date): Promise<void> },
+        'rotateEventArchive'
+      )
+      .mockResolvedValue(undefined);
+    const setNextAlarm = vi
+      .spyOn(
+        echo as unknown as {
+          setNextAlarm(nextAlarm?: Date, reason?: string): Promise<void>;
+        },
+        'setNextAlarm'
+      )
+      .mockResolvedValue(undefined);
+    const run = vi.spyOn(echo, 'run').mockResolvedValue({
+      unreadCheckMs: 0,
+      thinkMs: 0,
+    });
+
+    await echo.alarm();
+
+    expect(sleep).toHaveBeenCalledTimes(1);
+    expect(rotateEventArchive).toHaveBeenCalledWith(
+      new Date('2026-03-21T18:00:00.000Z')
+    );
+    expect(setNextAlarm).toHaveBeenCalledWith(
+      new Date('2026-03-21T22:00:00.000Z'),
+      'daily_sleep_wake'
+    );
+    expect(run).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+  });
+
+  it('archive rotation が失敗しても daily wake alarm を維持する', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-21T18:00:00.000Z'));
+
+    const env = createMockEnv();
+    const { storage, getFn } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+    getFn.mockResolvedValue('rin');
+
+    vi.spyOn(
+      echo as unknown as {
+        ensureInitialized(instanceId: 'rin' | 'marie'): Promise<void>;
+      },
+      'ensureInitialized'
+    ).mockResolvedValue(undefined);
+    vi.spyOn(
+      echo as unknown as { getState(): Promise<string> },
+      'getState'
+    ).mockResolvedValue('Idling');
+    const sleep = vi
+      .spyOn(echo as unknown as { sleep(): Promise<void> }, 'sleep')
+      .mockResolvedValue(undefined);
+    const rotateEventArchive = vi
+      .spyOn(
+        echo as unknown as { rotateEventArchive(now: Date): Promise<void> },
+        'rotateEventArchive'
+      )
+      .mockRejectedValue(new Error('R2 put failed'));
+    const setNextAlarm = vi
+      .spyOn(
+        echo as unknown as {
+          setNextAlarm(nextAlarm?: Date, reason?: string): Promise<void>;
+        },
+        'setNextAlarm'
+      )
+      .mockResolvedValue(undefined);
+    const run = vi.spyOn(echo, 'run').mockResolvedValue({
+      unreadCheckMs: 0,
+      thinkMs: 0,
+    });
+
+    await expect(echo.alarm()).resolves.toBeUndefined();
+
+    expect(sleep).toHaveBeenCalledTimes(1);
+    expect(setNextAlarm).toHaveBeenCalledWith(
+      new Date('2026-03-21T22:00:00.000Z'),
+      'daily_sleep_wake'
+    );
+    expect(rotateEventArchive).toHaveBeenCalledWith(
+      new Date('2026-03-21T18:00:00.000Z')
+    );
+    expect(
+      getFirstInvocationCallOrder(setNextAlarm.mock.invocationCallOrder)
+    ).toBeLessThan(
+      getFirstInvocationCallOrder(rotateEventArchive.mock.invocationCallOrder)
+    );
+    expect(run).not.toHaveBeenCalled();
+
+    const completedEvent = findEmittedEvent('system.schedule.alarm_completed');
+    expect(completedEvent).toMatchObject({
+      severity: 'warn',
+      summary: 'alarm sleep_scheduled: event archive rotation failed',
+      payload: {
+        status: 'sleep_scheduled',
+        reason: 'daily_sleep_window',
+        archiveRotation: {
+          status: 'failed',
+          error: 'R2 put failed',
+        },
+      },
+    });
+
+    vi.useRealTimers();
   });
 });
