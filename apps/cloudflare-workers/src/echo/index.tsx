@@ -542,6 +542,8 @@ export class Echo extends DurableObject<Env> {
     const definition = this.getInstanceDefinitionOrThrow();
     const state = await this.getState();
     const nextAlarm = await this.getNextAlarm();
+    const nextWakeAt = await this.loadNextWakeAt();
+    const context = await this.loadContext();
     const usage = await this.getAllUsage();
 
     const memories = this.getMemorySystemOrThrow()
@@ -565,6 +567,8 @@ export class Echo extends DurableObject<Env> {
       name: definition.name,
       state,
       nextAlarm,
+      nextWakeAt,
+      context,
       runtime: this.getDashboardRuntimeConfig(),
       memories,
       notes,
@@ -599,6 +603,7 @@ export class Echo extends DurableObject<Env> {
       name: definition.name,
       state: await this.getState(),
       nextAlarm: await this.getNextAlarm(),
+      nextWakeAt: await this.loadNextWakeAt(),
       runtime: this.getDashboardRuntimeConfig(),
       noteCount: notes.length,
       memoryCount: memories.length,

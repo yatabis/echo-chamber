@@ -30,6 +30,7 @@ function createUnknownDashboardInstanceSummary(
     name: instanceId,
     state: 'Unknown',
     nextAlarm: null,
+    nextWakeAt: null,
     noteCount: 0,
     memoryCount: 0,
     todayUsageTokens: 0,

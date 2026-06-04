@@ -261,6 +261,26 @@ function findLatestDateTime(values: readonly (string | null)[]): string | null {
 }
 
 /**
+ * 日時文字列を新しい順に並べるための比較関数。
+ */
+function compareDateTimeDescending(left: string, right: string): number {
+  const leftTime = new Date(left).getTime();
+  const rightTime = new Date(right).getTime();
+
+  if (!Number.isNaN(leftTime) && !Number.isNaN(rightTime)) {
+    return rightTime - leftTime;
+  }
+  if (Number.isNaN(leftTime) && !Number.isNaN(rightTime)) {
+    return 1;
+  }
+  if (!Number.isNaN(leftTime) && Number.isNaN(rightTime)) {
+    return -1;
+  }
+
+  return right.localeCompare(left);
+}
+
+/**
  * 文字列配列を出現回数順の上位リストへ集計する。
  */
 function buildTopEntries(
@@ -353,6 +373,7 @@ function createUnknownInstanceSummary(
     name: id,
     state: 'Unknown',
     nextAlarm: null,
+    nextWakeAt: null,
     noteCount: 0,
     memoryCount: 0,
     todayUsageTokens: 0,
@@ -659,11 +680,42 @@ function DashboardListHeader(props: {
 }
 
 /**
+ * 未来の日時を持つ instance のうち最も近いものを返す。
+ */
+function findNextFutureInstance(
+  instances: readonly DashboardInstanceSummary[],
+  getDateTime: (instance: DashboardInstanceSummary) => string | null
+): DashboardInstanceSummary | null {
+  const now = Date.now();
+
+  return instances.reduce<DashboardInstanceSummary | null>((next, instance) => {
+    const value = getDateTime(instance);
+    if (value === null) {
+      return next;
+    }
+
+    const valueTime = new Date(value).getTime();
+    if (Number.isNaN(valueTime) || valueTime < now) {
+      return next;
+    }
+
+    const nextValue = next === null ? null : getDateTime(next);
+    const nextTime =
+      nextValue === null
+        ? Number.POSITIVE_INFINITY
+        : new Date(nextValue).getTime();
+
+    return valueTime < nextTime ? instance : next;
+  }, null);
+}
+
+/**
  * 一覧画面の状態件数と横断メトリクスを集計する。
  */
 function buildFleetSummary(instances: DashboardInstanceSummary[]): {
   latestActivityAt: string | null;
   nextInstance: DashboardInstanceSummary | null;
+  nextWakeInstance: DashboardInstanceSummary | null;
   stateCounts: Record<DashboardSummaryState, number>;
   totalMemoryCount: number;
   totalNoteCount: number;
@@ -675,25 +727,9 @@ function buildFleetSummary(instances: DashboardInstanceSummary[]): {
     Sleeping: 0,
     Unknown: 0,
   };
-  let nextInstance: DashboardInstanceSummary | null = null;
 
   for (const instance of instances) {
     stateCounts[instance.state] += 1;
-
-    if (instance.nextAlarm !== null) {
-      const nextTime = new Date(instance.nextAlarm).getTime();
-      const currentNextTime =
-        nextInstance?.nextAlarm === undefined || nextInstance.nextAlarm === null
-          ? Number.POSITIVE_INFINITY
-          : new Date(nextInstance.nextAlarm).getTime();
-      if (
-        !Number.isNaN(nextTime) &&
-        nextTime >= Date.now() &&
-        nextTime < currentNextTime
-      ) {
-        nextInstance = instance;
-      }
-    }
   }
 
   return {
@@ -703,7 +739,12 @@ function buildFleetSummary(instances: DashboardInstanceSummary[]): {
         instance.latestMemoryUpdatedAt,
       ])
     ),
-    nextInstance,
+    nextInstance: findNextFutureInstance(instances, (instance) => {
+      return instance.nextAlarm;
+    }),
+    nextWakeInstance: findNextFutureInstance(instances, (instance) => {
+      return instance.nextWakeAt;
+    }),
     stateCounts,
     totalMemoryCount: instances.reduce(
       (sum, item) => sum + item.memoryCount,
@@ -773,6 +814,14 @@ function FleetSummary(props: {
             {summary.nextInstance === null
               ? 'None'
               : `${summary.nextInstance.name} (${formatRelativeDateTime(summary.nextInstance.nextAlarm)})`}
+          </strong>
+        </div>
+        <div className="summary-metric">
+          <span>Next wake</span>
+          <strong>
+            {summary.nextWakeInstance === null
+              ? 'None'
+              : `${summary.nextWakeInstance.name} (${formatRelativeDateTime(summary.nextWakeInstance.nextWakeAt)})`}
           </strong>
         </div>
         <div className="summary-metric">
@@ -910,6 +959,10 @@ function InstanceStatusCard(props: {
         <p>
           <span>Next alarm</span>
           <strong>{formatRelativeDateTime(instance.nextAlarm)}</strong>
+        </p>
+        <p>
+          <span>Next wake</span>
+          <strong>{formatRelativeDateTime(instance.nextWakeAt)}</strong>
         </p>
         <p>
           <span>Today usage</span>
@@ -1068,18 +1121,29 @@ function MemorySection(props: { memories: EchoMemory[] }): JSX.Element {
 
   const filteredMemories = useMemo(() => {
     const normalizedQuery = memoryQuery.trim().toLowerCase();
-    if (normalizedQuery.length === 0) {
-      return memories;
-    }
+    const matchingMemories =
+      normalizedQuery.length === 0
+        ? memories
+        : memories.filter((memory) => {
+            return (
+              memory.content.toLowerCase().includes(normalizedQuery) ||
+              memory.type.toLowerCase().includes(normalizedQuery) ||
+              memory.emotion.labels.some((label) => {
+                return label.toLowerCase().includes(normalizedQuery);
+              })
+            );
+          });
 
-    return memories.filter((memory) => {
-      return (
-        memory.content.toLowerCase().includes(normalizedQuery) ||
-        memory.type.toLowerCase().includes(normalizedQuery) ||
-        memory.emotion.labels.some((label) => {
-          return label.toLowerCase().includes(normalizedQuery);
-        })
+    return [...matchingMemories].sort((left, right) => {
+      const updatedAtCompare = compareDateTimeDescending(
+        left.updatedAt,
+        right.updatedAt
       );
+      if (updatedAtCompare !== 0) {
+        return updatedAtCompare;
+      }
+
+      return left.content.localeCompare(right.content);
     });
   }, [memories, memoryQuery]);
 
@@ -1188,6 +1252,10 @@ function InstanceSnapshot(props: {
         <div className="summary-metric">
           <span>Next alarm</span>
           <strong>{formatRelativeDateTime(status.nextAlarm)}</strong>
+        </div>
+        <div className="summary-metric">
+          <span>Next wake</span>
+          <strong>{formatRelativeDateTime(status.nextWakeAt)}</strong>
         </div>
         <div className="summary-metric">
           <span>Main LLM</span>
@@ -1695,6 +1763,63 @@ function KnowledgeInventory(props: { status: EchoStatus }): JSX.Element {
 }
 
 /**
+ * 次回起動へ引き継ぐ runtime context を表示する。
+ */
+function RuntimeContextPanel(props: {
+  context: EchoStatus['context'];
+}): JSX.Element {
+  const { context } = props;
+
+  return (
+    <section className="card">
+      <div className="section-header">
+        <div>
+          <h2>Runtime Context</h2>
+          <p>Persisted context for the next thinking session</p>
+        </div>
+      </div>
+
+      {context === null ? (
+        <p className="muted">No persisted context.</p>
+      ) : (
+        <>
+          <div className="summary-grid">
+            <div className="summary-metric">
+              <span>Updated</span>
+              <strong>{formatRelativeDateTime(context.updatedAt)}</strong>
+            </div>
+            <div className="summary-metric">
+              <span>Created</span>
+              <strong>{formatRelativeDateTime(context.createdAt)}</strong>
+            </div>
+            <div className="summary-metric">
+              <span>Valence</span>
+              <strong>{formatNumber(context.emotion.valence)}</strong>
+            </div>
+            <div className="summary-metric">
+              <span>Arousal</span>
+              <strong>{formatNumber(context.emotion.arousal)}</strong>
+            </div>
+          </div>
+          {context.emotion.labels.length === 0 ? null : (
+            <div className="tag-list">
+              {context.emotion.labels.map((label) => {
+                return (
+                  <span key={label} className="tag">
+                    {label}
+                  </span>
+                );
+              })}
+            </div>
+          )}
+          <p className="context-content">{context.content}</p>
+        </>
+      )}
+    </section>
+  );
+}
+
+/**
  * 詳細画面のタイトル、戻るリンク、手動更新ボタンを描画する。
  */
 function DashboardDetailHeader(props: {
@@ -1821,6 +1946,7 @@ function DetailTabPanel(props: {
             }}
           />
           <KnowledgeInventory status={props.status} />
+          <RuntimeContextPanel context={props.status.context} />
         </div>
       );
     case 'activity':

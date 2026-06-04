@@ -403,6 +403,87 @@ describe('Echo session logs route', () => {
   });
 });
 
+describe('Echo dashboard status payload', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('保存済み context と next_wake_at を詳細 status に含める', async () => {
+    const env = createMockEnv();
+    const { storage, getFn } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+    const context: ContextSnapshot = {
+      content: 'Latest context for dashboard display.',
+      createdAt: '2026-03-22T10:00:00.000Z',
+      updatedAt: '2026-03-22T11:00:00.000Z',
+      emotion: {
+        valence: 0.4,
+        arousal: 0.3,
+        labels: ['focused'],
+      },
+    };
+    const nextWakeAt = '2026-03-22T12:00:00.000Z';
+    setInitializedDefinition(echo);
+    getFn.mockImplementation(async (key: unknown) => {
+      await Promise.resolve();
+      if (key === 'context') {
+        return context;
+      }
+      if (key === 'next_wake_at') {
+        return nextWakeAt;
+      }
+      return undefined;
+    });
+    vi.spyOn(
+      echo as unknown as {
+        getMemorySystemOrThrow(): { getAllMemories(): [] };
+      },
+      'getMemorySystemOrThrow'
+    ).mockReturnValue({
+      getAllMemories: () => [],
+    });
+    vi.spyOn(echo, 'getNextAlarm').mockResolvedValue(null);
+    vi.spyOn(echo, 'getNotes').mockResolvedValue([]);
+    vi.spyOn(echo, 'getAllUsage').mockResolvedValue({});
+
+    const status = await echo.getStatus();
+
+    expect(status.context).toEqual(context);
+    expect(status.nextWakeAt).toBe(nextWakeAt);
+  });
+
+  it('保存済み next_wake_at を一覧 summary に含める', async () => {
+    const env = createMockEnv();
+    const { storage, getFn } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+    const nextWakeAt = '2026-03-22T12:00:00.000Z';
+    setInitializedDefinition(echo);
+    getFn.mockImplementation(async (key: unknown) => {
+      await Promise.resolve();
+      if (key === 'next_wake_at') {
+        return nextWakeAt;
+      }
+      return undefined;
+    });
+    vi.spyOn(
+      echo as unknown as {
+        getMemorySystemOrThrow(): { getAllMemories(): [] };
+      },
+      'getMemorySystemOrThrow'
+    ).mockReturnValue({
+      getAllMemories: () => [],
+    });
+    vi.spyOn(echo, 'getNextAlarm').mockResolvedValue(null);
+    vi.spyOn(echo, 'getNotes').mockResolvedValue([]);
+    vi.spyOn(echo, 'getAllUsage').mockResolvedValue({});
+    vi.spyOn(echo, 'getTodayUsage').mockResolvedValue(null);
+
+    const summary = await echo.getSummary();
+
+    expect(summary.nextWakeAt).toBe(nextWakeAt);
+  });
+});
+
 describe('Echo context storage', () => {
   beforeEach(() => {
     vi.clearAllMocks();

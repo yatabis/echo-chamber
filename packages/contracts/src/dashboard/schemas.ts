@@ -223,6 +223,18 @@ export const echoMemorySchema = z
   .strict();
 
 /**
+ * Dashboard に返す最新 runtime context snapshot。
+ */
+export const dashboardContextSnapshotSchema = z
+  .object({
+    content: z.string(),
+    emotion: coreEmotionSchema.strict(),
+    createdAt: z.string(),
+    updatedAt: z.string(),
+  })
+  .strict();
+
+/**
  * `/\:instanceId` 詳細 API の payload。
  */
 export const echoStatusSchema = z
@@ -231,6 +243,8 @@ export const echoStatusSchema = z
     name: z.string(),
     state: echoStateSchema,
     nextAlarm: z.string().nullable(),
+    nextWakeAt: z.string().nullable(),
+    context: dashboardContextSnapshotSchema.nullable(),
     runtime: dashboardRuntimeConfigSchema,
     memories: z.array(echoMemorySchema),
     notes: z.array(noteSchema),
@@ -247,6 +261,7 @@ export const dashboardInstanceSummarySchema = z
     name: z.string(),
     state: dashboardSummaryStateSchema,
     nextAlarm: z.string().nullable(),
+    nextWakeAt: z.string().nullable(),
     noteCount: z.number().int().nonnegative(),
     memoryCount: z.number().int().nonnegative(),
     todayUsageTokens: finiteNumber,

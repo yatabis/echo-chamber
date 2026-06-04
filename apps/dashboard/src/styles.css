@@ -353,6 +353,20 @@ h3 {
   word-break: break-word;
 }
 
+.context-content {
+  margin: 0;
+  border: 1px solid #c2cfef;
+  border-radius: 8px;
+  padding: 10px;
+  background: #f5f8ff;
+  color: #1f2d4d;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .activity-panel {
   gap: 14px;
 }

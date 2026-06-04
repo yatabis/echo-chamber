@@ -116,6 +116,7 @@ describe('dashboard contract schemas', () => {
           name: 'リン',
           state: 'Idling',
           nextAlarm: '2026-03-19T12:00:00.000Z',
+          nextWakeAt: '2026-03-19T13:00:00.000Z',
           noteCount: 4,
           memoryCount: 8,
           todayUsageTokens: 1200,
@@ -140,6 +141,7 @@ describe('dashboard contract schemas', () => {
           name: 'marie',
           state: 'Unknown',
           nextAlarm: null,
+          nextWakeAt: null,
           noteCount: 0,
           memoryCount: 0,
           todayUsageTokens: 0,
@@ -175,6 +177,7 @@ describe('dashboard contract schemas', () => {
             name: 'リン',
             state: 'Broken',
             nextAlarm: null,
+            nextWakeAt: null,
             noteCount: 0,
             memoryCount: 0,
             todayUsageTokens: 0,
@@ -205,6 +208,17 @@ describe('dashboard contract schemas', () => {
       name: 'リン',
       state: 'Idling',
       nextAlarm: null,
+      nextWakeAt: '2026-03-19T13:00:00.000Z',
+      context: {
+        content: 'Continue from the latest dashboard work.',
+        emotion: {
+          valence: 0.3,
+          arousal: 0.4,
+          labels: ['focused'],
+        },
+        createdAt: '2026-03-19T11:00:00.000Z',
+        updatedAt: '2026-03-19T12:00:00.000Z',
+      },
       runtime: {
         mainLlm: {
           provider: 'openai',
@@ -265,6 +279,9 @@ describe('dashboard contract schemas', () => {
 
     expect(payload.memories[0]?.type).toBe('semantic');
     expect(payload.notes[0]?.id).toBe('note-1');
+    expect(payload.context?.content).toBe(
+      'Continue from the latest dashboard work.'
+    );
   });
 
   it('rejects invalid /:instanceId payload', () => {
@@ -274,6 +291,8 @@ describe('dashboard contract schemas', () => {
         name: 'リン',
         state: 'Idling',
         nextAlarm: null,
+        nextWakeAt: null,
+        context: null,
         runtime: {
           mainLlm: {
             provider: 'openai',
