@@ -1,54 +1,107 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  dashboardEchoEventsResponseSchema,
   dashboardInstancesResponseSchema,
-  parseDashboardEchoEventsResponse,
   echoStatusSchema,
   parseDashboardInstancesResponse,
+  parseDashboardSessionLogsResponse,
   parseEchoStatus,
+  dashboardSessionLogsResponseSchema,
 } from './schemas';
 
 describe('dashboard contract schemas', () => {
-  it('parses /:instanceId/events payload', () => {
-    const payload = parseDashboardEchoEventsResponse({
+  it('parses /:instanceId/session-logs payload', () => {
+    const payload = parseDashboardSessionLogsResponse({
       archiveDay: '2026-06-01',
-      events: [
+      sessionLogs: [
         {
-          id: 'event-1',
-          createdAt: '2026-06-01T12:00:00.000Z',
-          archiveDay: '2026-06-01',
+          id: 'session:session-1',
+          activities: [
+            {
+              id: 'activity-1',
+              body: 'A thinking session started.',
+              createdAt: '2026-06-01T12:00:00.000Z',
+              details: null,
+              kind: 'session',
+              meta: ['2026/06/01 21:00:00'],
+              tone: 'positive',
+              title: 'Started thinking',
+            },
+          ],
+          activityCount: 1,
+          latestActivityAt: '2026-06-01T12:00:00.000Z',
+          meta: ['2026/06/01 21:00:00', '1 activity'],
           sessionId: 'session-1',
-          type: 'session.started',
-          category: 'session',
-          severity: 'info',
-          streams: ['thought', 'system', 'analysis'],
-          summary: 'thinking session started',
-          payload: null,
+          startedAt: '2026-06-01T12:00:00.000Z',
+          title: 'Session session-1',
+          warningCount: 0,
         },
       ],
     });
 
     expect(payload.archiveDay).toBe('2026-06-01');
-    expect(payload.events[0]?.severity).toBe('info');
+    expect(payload.sessionLogs[0]?.activities[0]?.kind).toBe('session');
   });
 
-  it('rejects invalid /:instanceId/events payload', () => {
+  it('rejects invalid /:instanceId/session-logs payload', () => {
     expect(() => {
-      dashboardEchoEventsResponseSchema.parse({
+      dashboardSessionLogsResponseSchema.parse({
         archiveDay: '2026-06-01',
-        events: [
+        sessionLogs: [
           {
-            id: 'event-1',
-            createdAt: '2026-06-01T12:00:00.000Z',
-            archiveDay: '2026-06-01',
-            sessionId: null,
-            type: 'session.started',
-            category: 'session',
-            severity: 'fatal',
-            streams: ['system'],
-            summary: 'thinking session started',
-            payload: null,
+            id: 'session:session-1',
+            activities: [
+              {
+                id: 'activity-1',
+                body: 'A thinking session started.',
+                createdAt: '2026-06-01T12:00:00.000Z',
+                details: null,
+                kind: 'raw_event',
+                meta: [],
+                tone: 'positive',
+                title: 'Started thinking',
+              },
+            ],
+            activityCount: 1,
+            latestActivityAt: '2026-06-01T12:00:00.000Z',
+            meta: [],
+            sessionId: 'session-1',
+            startedAt: '2026-06-01T12:00:00.000Z',
+            title: 'Session session-1',
+            warningCount: 0,
+          },
+        ],
+      });
+    }).toThrow();
+  });
+
+  it('rejects /:instanceId/session-logs activity with duplicated sessionId', () => {
+    expect(() => {
+      dashboardSessionLogsResponseSchema.parse({
+        archiveDay: '2026-06-01',
+        sessionLogs: [
+          {
+            id: 'session:session-1',
+            activities: [
+              {
+                id: 'activity-1',
+                body: 'A thinking session started.',
+                createdAt: '2026-06-01T12:00:00.000Z',
+                details: null,
+                kind: 'session',
+                meta: [],
+                sessionId: 'session-1',
+                tone: 'positive',
+                title: 'Started thinking',
+              },
+            ],
+            activityCount: 1,
+            latestActivityAt: '2026-06-01T12:00:00.000Z',
+            meta: [],
+            sessionId: 'session-1',
+            startedAt: '2026-06-01T12:00:00.000Z',
+            title: 'Session session-1',
+            warningCount: 0,
           },
         ],
       });

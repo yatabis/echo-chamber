@@ -247,9 +247,92 @@ R2 put と SQLite delete は atomic ではない。そのため、`uploaded` の
 
 Dashboard は channel ではなく consumer である。
 
-現行 dashboard は `/:instanceId/events` から現在の archive day の event だけを読む。過去ログは基本的に dashboard では扱わない。必要になった場合は R2 の日次 NDJSON を別の分析基盤へ載せる。
+現行 dashboard は `/:instanceId/session-logs` から現在の archive day の session log だけを読む。過去ログは基本的に dashboard では扱わない。必要になった場合は R2 の日次 NDJSON を別の分析基盤へ載せる。
 
-Dashboard は `streams` / `type` / `category` / `severity` を使って現在の archive day timeline を構成する。
+Dashboard は Cloudflare Observability の代替ではない。raw event stream をそのまま読む用途は Observability に寄せる。
+
+Dashboard API の `/:instanceId/session-logs` は raw event を返さない。Worker 側で保存済み event から session log view model を組み立てて `sessionLogs` として返す。Dashboard は session log を新しい順に並べ、各 session log を折りたためる activity として描画する。
+
+#### Dashboard session log の責務
+
+Dashboard session log は event stream の見た目を変えたものではない。Echo の 1 session を人間が読み返すための read model である。
+
+そのため、変換の起点は「event type ごとの表示可否」ではなく「session 中に Echo が何を考え、何を実行し、どう終わったか」である。raw event は材料であり、1 raw event が必ず 1 activity になるとは限らない。
+
+Dashboard session log は次の問いに答える。
+
+- いつ session が始まり、いつ終わったか
+- Echo がどんな自然言語出力をしたか
+- どの tool を、どんな入力で、どんな結果として使ったか
+- session 中に重要な異常や欠落があったか
+- 最終的に session が正常終了、警告終了、失敗のどれだったか
+
+Dashboard session log は次の問いには答えない。
+
+- alarm / schedule / run decision が内部的にどう評価されたか
+- raw API request / response payload がどうだったか
+- archive / Discord / console sink に何が配送されたか
+- session 外の状態遷移や運用イベントがどう発生したか
+
+これらは R2 NDJSON、Cloudflare Observability、または将来の分析基盤で見る。
+
+#### 変換方針
+
+変換は次の順で行う。
+
+1. 現在の archive day の raw event を読む
+2. `sessionId` を持つ event だけを session ごとに束ねる
+3. session 内の raw event から session log activity を組み立てる
+4. tool event は `callId` 単位で畳み込む
+5. activity が 1 件もない session は dashboard response に出さない
+6. session log は最新 activity の時刻で新しい順に並べる
+7. session log 内の activity は時系列順に並べる
+
+`sessionId` を持たない event は session log の材料ではない。これは dashboard response で後から落とす filter ではなく、read model の入力境界である。
+
+#### 採用する event
+
+Session log に採用する raw event は allowlist とする。unknown event や「warn/error だから」という理由だけで activity 化しない。
+
+主に次を採用する。
+
+- `session.*`: 思考 session の開始・終了・失敗
+- `model.output.emitted`: Echo の自然言語出力
+- `model.provider.warning`: session 中の provider 警告
+- `tool.called` / `tool.completed` / `tool.failed`: tool 実行の開始と結果。ただし同じ `callId` の開始・完了は dashboard 上では 1 つの行動として扱う
+- `memory.search.completed` / `memory.search.failed`: session 中の関連 memory 参照
+- `model.turn.completed` の `no_tool_calls`: 確実に気づけるよう activity log に出す
+- session log として意味を持つ warning / error: 活動ログ上の issue として表示する
+
+Tool activity は `tool.completed` / `tool.failed` を主行とする。対応する `tool.called` があれば input を補助情報として吸収する。対応する completion / failure がない `tool.called` だけ、未完了 tool call として activity 化する。これにより同じ tool call が dashboard 上で重複して見えない。
+
+#### 採用しない event
+
+次は session log の材料にしない。
+
+- `model.exchange.recorded`: raw API payload であり、session の読み物ではない
+- `model.turn.started`: 通常は activity として読む情報がない
+- `system.run_decision.*`: session 開始前の運用判断であり、session log ではなく observability の対象
+- `system.echo_state.*`: instance 状態遷移であり、session log ではなく observability の対象
+- `system.schedule.*`: alarm / sleep / wake の運用イベントであり、session log ではなく observability の対象
+- `usage.recorded`: session 結果の集計値は `session.completed` から読めるため、別 activity にしない
+- `memory.embedding.*` / `memory.reembedding.*` / `memory.evicted` / `memory.rerank.*`: memory subsystem の運用イベントであり、session log ではなく observability の対象
+- `sessionId` を持たない event: session log の入力境界外
+
+#### 実装方針
+
+実装は `event type -> activity creator` の汎用 registry にしない。registry は event stream projection に見えやすく、event type を足せば dashboard に出る構造になりやすい。
+
+代わりに、session log builder として実装する。
+
+- `buildSessionLogs`: archive day の raw event を session 単位へ束ねる
+- `buildSessionLog`: 1 session 分の activity log を作る
+- `createSessionLifecycleActivity`: session の開始・終了・失敗を扱う
+- `createModelActivity`: natural language output / provider warning / no tool calls を扱う
+- `createToolActivity`: `callId` 単位で tool call を畳み込む
+- `createMemoryActivity`: session 中の memory search 結果を扱う
+
+この構造なら、review 時に「これは session log の構成要素か」という問いで判断できる。event type を増やす場合も、まず採用理由を docs に追加してから実装する。
 
 ## 現時点の未決事項
 

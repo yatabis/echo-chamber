@@ -1,7 +1,4 @@
-import type {
-  DashboardEchoEvent,
-  DashboardEchoEventsResponse,
-} from '@echo-chamber/contracts/dashboard/types';
+import type { DashboardEchoEvent } from '@echo-chamber/contracts/dashboard/types';
 import type { EchoEvent } from '@echo-chamber/core/ports/echo-event';
 import { formatDate } from '@echo-chamber/core/utils/datetime';
 
@@ -31,6 +28,11 @@ interface StoredEchoEventRow extends Record<string, SqlStorageValue> {
 interface ArchiveRunRow extends Record<string, SqlStorageValue> {
   archive_day: string;
   status: ArchiveRunStatus;
+}
+
+export interface EchoEventArchiveDay {
+  archiveDay: string;
+  events: DashboardEchoEvent[];
 }
 
 /**
@@ -118,12 +120,12 @@ export class SqliteEchoEventArchive implements EchoEventArchive {
   }
 
   /**
-   * dashboard に表示する現在 archive day の event 一覧を返す。
+   * 現在 archive day の raw event 一覧を返す。
    *
    * @param now archive day 判定の基準時刻
-   * @returns dashboard event response
+   * @returns archive day と raw event list
    */
-  getTodayEvents(now = new Date()): DashboardEchoEventsResponse {
+  getTodayEvents(now = new Date()): EchoEventArchiveDay {
     const archiveDay = getEventArchiveDay(now);
 
     return {

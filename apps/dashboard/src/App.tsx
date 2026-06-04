@@ -9,18 +9,16 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 
 import {
-  parseDashboardEchoEventsResponse,
   parseDashboardInstancesResponse,
+  parseDashboardSessionLogsResponse,
   parseEchoStatus,
 } from '@echo-chamber/contracts/dashboard/schemas';
 import type {
-  DashboardEchoEvent,
-  DashboardEchoEventsResponse,
-  DashboardEchoEventSeverity,
-  DashboardEchoEventStream,
   DashboardInstanceSummary,
   DashboardInstancesResponse,
   DashboardRuntimeConfig,
+  DashboardSessionLogsResponse,
+  DashboardSessionLog,
   DashboardSummaryState,
   DashboardUsageBreakdownTotals,
   DashboardUsageDays,
@@ -44,9 +42,6 @@ import type { JSX } from 'react';
 
 const MEMORY_PAGE_SIZE = 20;
 
-type EventSeverityFilter = 'all' | DashboardEchoEventSeverity;
-type EventStreamFilter = 'all' | DashboardEchoEventStream;
-
 interface SignalItem {
   title: string;
   body: string;
@@ -68,7 +63,7 @@ interface UsageAnalysis {
   totals30: DashboardUsageBreakdownTotals | null;
 }
 
-type DetailTab = 'overview' | 'events' | 'notes' | 'memories';
+type DetailTab = 'overview' | 'activity' | 'notes' | 'memories';
 
 const DETAIL_TABS: {
   id: DetailTab;
@@ -79,8 +74,8 @@ const DETAIL_TABS: {
     label: 'Overview',
   },
   {
-    id: 'events',
-    label: 'Events',
+    id: 'activity',
+    label: 'Activity',
   },
   {
     id: 'notes',
@@ -90,27 +85,6 @@ const DETAIL_TABS: {
     id: 'memories',
     label: 'Memories',
   },
-];
-
-const EVENT_SEVERITY_FILTERS: {
-  id: EventSeverityFilter;
-  label: string;
-}[] = [
-  { id: 'all', label: 'All severities' },
-  { id: 'error', label: 'Error' },
-  { id: 'warn', label: 'Warn' },
-  { id: 'info', label: 'Info' },
-  { id: 'debug', label: 'Debug' },
-];
-
-const EVENT_STREAM_FILTERS: {
-  id: EventStreamFilter;
-  label: string;
-}[] = [
-  { id: 'all', label: 'All streams' },
-  { id: 'system', label: 'System' },
-  { id: 'thought', label: 'Thought' },
-  { id: 'analysis', label: 'Analysis' },
 ];
 
 /**
@@ -205,34 +179,15 @@ function formatDateTime(value: string | null): string {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
+    timeZone: 'Asia/Tokyo',
   }).format(date);
 }
 
 /**
- * event payload を details 内で読める JSON 文字列へ整形する。
+ * activity details を details 内で読める JSON 文字列へ整形する。
  */
-function formatEventPayload(payload: Record<string, unknown>): string {
-  return JSON.stringify(payload, null, 2);
-}
-
-/**
- * dashboard event を stream / severity filter で絞り込む。
- */
-function filterDashboardEvents(
-  events: readonly DashboardEchoEvent[],
-  filters: {
-    severity: EventSeverityFilter;
-    stream: EventStreamFilter;
-  }
-): DashboardEchoEvent[] {
-  return events.filter((event) => {
-    const severityMatches =
-      filters.severity === 'all' || event.severity === filters.severity;
-    const streamMatches =
-      filters.stream === 'all' || event.streams.includes(filters.stream);
-
-    return severityMatches && streamMatches;
-  });
+function formatActivityDetails(details: Record<string, unknown>): string {
+  return JSON.stringify(details, null, 2);
 }
 
 /**
@@ -1419,115 +1374,119 @@ function NotesSection(props: {
 }
 
 /**
- * 現在の archive day の event timeline を描画する。
+ * 現在日の Echo activity log を描画する。
  */
-function EventsSection(props: {
-  eventsResponse: DashboardEchoEventsResponse;
+function ActivitySection(props: {
+  sessionLogs: DashboardSessionLog[];
+  archiveDay: string;
 }): JSX.Element {
-  const { eventsResponse } = props;
-  const [severityFilter, setSeverityFilter] =
-    useState<EventSeverityFilter>('all');
-  const [streamFilter, setStreamFilter] = useState<EventStreamFilter>('all');
-  const filteredEvents = useMemo(() => {
-    return filterDashboardEvents(eventsResponse.events, {
-      severity: severityFilter,
-      stream: streamFilter,
-    });
-  }, [eventsResponse.events, severityFilter, streamFilter]);
+  const activities = useMemo(() => {
+    return props.sessionLogs.flatMap((sessionLog) => sessionLog.activities);
+  }, [props.sessionLogs]);
+  const summary = useMemo(() => {
+    return {
+      actions: activities.filter((entry) => entry.kind === 'action').length,
+      sessions: props.sessionLogs.length,
+      thoughts: activities.filter((entry) => entry.kind === 'thought').length,
+      warnings: activities.filter(
+        (entry) => entry.tone === 'warning' || entry.tone === 'critical'
+      ).length,
+    };
+  }, [activities, props.sessionLogs]);
 
   return (
-    <section className="card">
+    <section className="card activity-panel">
       <div className="section-header">
         <div>
-          <h2>Events</h2>
-          <p>
-            Archive day {eventsResponse.archiveDay} /{' '}
-            {formatNumber(filteredEvents.length)} of{' '}
-            {formatNumber(eventsResponse.events.length)}
-          </p>
+          <h2>Activity</h2>
+          <p>Log day {props.archiveDay}</p>
         </div>
       </div>
 
-      <div className="event-filter-row">
-        <div className="usage-toggle">
-          {EVENT_STREAM_FILTERS.map((filter) => {
-            const active = streamFilter === filter.id;
-
-            return (
-              <button
-                key={filter.id}
-                type="button"
-                className={active ? 'primary' : 'secondary'}
-                onClick={() => {
-                  setStreamFilter(filter.id);
-                }}
-              >
-                {filter.label}
-              </button>
-            );
-          })}
+      <div className="activity-summary">
+        <div className="summary-metric">
+          <span>Sessions</span>
+          <strong>{formatNumber(summary.sessions)}</strong>
         </div>
-
-        <div className="usage-toggle">
-          {EVENT_SEVERITY_FILTERS.map((filter) => {
-            const active = severityFilter === filter.id;
-
-            return (
-              <button
-                key={filter.id}
-                type="button"
-                className={active ? 'primary' : 'secondary'}
-                onClick={() => {
-                  setSeverityFilter(filter.id);
-                }}
-              >
-                {filter.label}
-              </button>
-            );
-          })}
+        <div className="summary-metric">
+          <span>Thoughts</span>
+          <strong>{formatNumber(summary.thoughts)}</strong>
+        </div>
+        <div className="summary-metric">
+          <span>Actions</span>
+          <strong>{formatNumber(summary.actions)}</strong>
+        </div>
+        <div className="summary-metric">
+          <span>Warnings</span>
+          <strong>{formatNumber(summary.warnings)}</strong>
         </div>
       </div>
 
-      {filteredEvents.length === 0 ? (
-        <p className="muted">No events for this archive day.</p>
+      {props.sessionLogs.length === 0 ? (
+        <p className="muted">No activity for this log day.</p>
       ) : (
-        <div className="item-list event-list">
-          {filteredEvents.map((event) => {
+        <div className="activity-session-list">
+          {props.sessionLogs.map((sessionLog, sessionIndex) => {
             return (
-              <article
-                key={event.id}
-                className={`item-card event-card event-card-${event.severity}`}
+              <details
+                key={sessionLog.id}
+                className="activity-session"
+                open={sessionIndex === 0}
               >
-                <div className="item-meta">
-                  <span
-                    className={`pill event-severity-pill event-severity-${event.severity}`}
-                  >
-                    {event.severity}
-                  </span>
-                  <span>{event.type}</span>
-                  <span>{formatDateTime(event.createdAt)}</span>
-                </div>
-                <p className="item-content">{event.summary}</p>
-                <div className="tag-list">
-                  <span className="tag">{event.category}</span>
-                  {event.streams.map((stream) => {
+                <summary className="activity-session-summary">
+                  <div className="activity-session-heading">
+                    <h3>{sessionLog.title}</h3>
+                    <div className="activity-meta">
+                      {sessionLog.meta.map((item) => {
+                        return <span key={item}>{item}</span>;
+                      })}
+                    </div>
+                  </div>
+                  <div className="activity-session-stats">
+                    <span>{formatNumber(sessionLog.activityCount)}</span>
+                    {sessionLog.warningCount === 0 ? null : (
+                      <span>{formatNumber(sessionLog.warningCount)} warn</span>
+                    )}
+                  </div>
+                </summary>
+
+                <div className="activity-list activity-session-activities">
+                  {sessionLog.activities.map((activity) => {
                     return (
-                      <span key={stream} className="tag">
-                        {stream}
-                      </span>
+                      <article
+                        key={activity.id}
+                        className={`activity-item activity-item-${activity.tone} activity-type-${activity.kind}`}
+                      >
+                        <div className="activity-marker" aria-hidden="true" />
+                        <div className="activity-content">
+                          <div className="activity-heading">
+                            <h3>{activity.title}</h3>
+                            <span
+                              className={`activity-kind activity-kind-${activity.kind}`}
+                            >
+                              {activity.kind}
+                            </span>
+                          </div>
+                          <p className="activity-body">{activity.body}</p>
+                          <div className="activity-meta">
+                            {activity.meta.map((item) => {
+                              return <span key={item}>{item}</span>;
+                            })}
+                          </div>
+                          {activity.details === null ? null : (
+                            <details className="activity-details">
+                              <summary>Details</summary>
+                              <pre>
+                                {formatActivityDetails(activity.details)}
+                              </pre>
+                            </details>
+                          )}
+                        </div>
+                      </article>
                     );
                   })}
-                  {event.sessionId === null ? null : (
-                    <span className="tag">session {event.sessionId}</span>
-                  )}
                 </div>
-                {event.payload === null ? null : (
-                  <details className="event-payload">
-                    <summary>Payload</summary>
-                    <pre>{formatEventPayload(event.payload)}</pre>
-                  </details>
-                )}
-              </article>
+              </details>
             );
           })}
         </div>
@@ -1776,10 +1735,10 @@ function DashboardDetailHeader(props: {
  */
 function getDetailTabCount(
   tab: DetailTab,
-  counts: { eventCount: number; memoryCount: number; noteCount: number }
+  counts: { activityCount: number; memoryCount: number; noteCount: number }
 ): number | null {
-  if (tab === 'events') {
-    return counts.eventCount;
+  if (tab === 'activity') {
+    return counts.activityCount;
   }
   if (tab === 'notes') {
     return counts.noteCount;
@@ -1796,7 +1755,7 @@ function getDetailTabCount(
  */
 function DetailTabs(props: {
   activeTab: DetailTab;
-  eventCount: number;
+  activityCount: number;
   memoryCount: number;
   noteCount: number;
   onChange(tab: DetailTab): void;
@@ -1806,7 +1765,7 @@ function DetailTabs(props: {
       {DETAIL_TABS.map((tab) => {
         const active = props.activeTab === tab.id;
         const count = getDetailTabCount(tab.id, {
-          eventCount: props.eventCount,
+          activityCount: props.activityCount,
           memoryCount: props.memoryCount,
           noteCount: props.noteCount,
         });
@@ -1838,9 +1797,10 @@ function DetailTabs(props: {
  */
 function DetailTabPanel(props: {
   activeTab: DetailTab;
-  eventsResponse: DashboardEchoEventsResponse;
+  archiveDay: string;
   noteQuery: string;
   notes: EchoStatus['notes'];
+  sessionLogs: DashboardSessionLog[];
   setNoteQuery(value: string): void;
   setUsageDays(days: DashboardUsageDays): void;
   status: EchoStatus;
@@ -1863,10 +1823,13 @@ function DetailTabPanel(props: {
           <KnowledgeInventory status={props.status} />
         </div>
       );
-    case 'events':
+    case 'activity':
       return (
         <div className="stack" role="tabpanel">
-          <EventsSection eventsResponse={props.eventsResponse} />
+          <ActivitySection
+            archiveDay={props.archiveDay}
+            sessionLogs={props.sessionLogs}
+          />
         </div>
       );
     case 'notes':
@@ -1895,8 +1858,8 @@ function DetailTabPanel(props: {
  * 詳細画面の読み込み完了後の情報セクション群を描画する。
  */
 function DashboardDetailContent(props: {
-  eventsResponse: DashboardEchoEventsResponse;
   noteQuery: string;
+  sessionLogsResponse: DashboardSessionLogsResponse;
   setNoteQuery(value: string): void;
   setUsageDays(days: DashboardUsageDays): void;
   status: EchoStatus;
@@ -1909,12 +1872,16 @@ function DashboardDetailContent(props: {
   const usageAnalysis = useMemo(() => {
     return analyzeUsage(props.status.usage);
   }, [props.status.usage]);
+  const sessionLogs = props.sessionLogsResponse.sessionLogs;
+  const activityCount = sessionLogs.reduce((total, sessionLog) => {
+    return total + sessionLog.activityCount;
+  }, 0);
 
   return (
     <section className="stack">
       <DetailTabs
         activeTab={activeTab}
-        eventCount={props.eventsResponse.events.length}
+        activityCount={activityCount}
         noteCount={props.status.notes.length}
         memoryCount={props.status.memories.length}
         onChange={(tab): void => {
@@ -1923,7 +1890,8 @@ function DashboardDetailContent(props: {
       />
       <DetailTabPanel
         activeTab={activeTab}
-        eventsResponse={props.eventsResponse}
+        archiveDay={props.sessionLogsResponse.archiveDay}
+        sessionLogs={sessionLogs}
         status={props.status}
         usageAnalysis={usageAnalysis}
         usageDays={props.usageDays}
@@ -1946,8 +1914,8 @@ function DashboardDetailContent(props: {
 function DashboardDetailPage(): JSX.Element {
   const { instanceId } = useParams({ from: '/$instanceId' });
   const [status, setStatus] = useState<EchoStatus | null>(null);
-  const [eventsResponse, setEventsResponse] =
-    useState<DashboardEchoEventsResponse | null>(null);
+  const [sessionLogsResponse, setSessionLogsResponse] =
+    useState<DashboardSessionLogsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [noteQuery, setNoteQuery] = useState('');
@@ -1964,18 +1932,18 @@ function DashboardDetailPage(): JSX.Element {
 
       if (!isValidInstanceId(instanceId)) {
         setStatus(null);
-        setEventsResponse(null);
+        setSessionLogsResponse(null);
         setError(`Invalid instance ID: ${instanceId}`);
         setLoading(false);
         return;
       }
 
       try {
-        const [statusPayload, eventPayload] = await Promise.all([
+        const [statusPayload, sessionLogsPayload] = await Promise.all([
           fetchDashboardJson(`/${instanceId}`, parseEchoStatus),
           fetchDashboardJson(
-            `/${instanceId}/events`,
-            parseDashboardEchoEventsResponse
+            `/${instanceId}/session-logs`,
+            parseDashboardSessionLogsResponse
           ),
         ]);
 
@@ -1984,7 +1952,7 @@ function DashboardDetailPage(): JSX.Element {
         }
 
         setStatus(statusPayload);
-        setEventsResponse(eventPayload);
+        setSessionLogsResponse(sessionLogsPayload);
         setLastLoadedAt(new Date());
       } catch (loadError) {
         if (!active) {
@@ -1992,7 +1960,7 @@ function DashboardDetailPage(): JSX.Element {
         }
 
         setStatus(null);
-        setEventsResponse(null);
+        setSessionLogsResponse(null);
         setError(formatLoadError(loadError, 'Failed to load instance'));
       } finally {
         if (active) {
@@ -2027,10 +1995,10 @@ function DashboardDetailPage(): JSX.Element {
         </div>
       ) : null}
 
-      {status !== null && eventsResponse !== null ? (
+      {status !== null && sessionLogsResponse !== null ? (
         <DashboardDetailContent
           status={status}
-          eventsResponse={eventsResponse}
+          sessionLogsResponse={sessionLogsResponse}
           noteQuery={noteQuery}
           setNoteQuery={(value): void => {
             setNoteQuery(value);

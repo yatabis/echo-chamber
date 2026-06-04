@@ -1,12 +1,16 @@
 import type {
+  dashboardActivityKindSchema,
+  dashboardActivitySchema,
+  dashboardActivityToneSchema,
   dashboardInstanceSummarySchema,
   dashboardEchoEventSchema,
   dashboardEchoEventSeveritySchema,
   dashboardEchoEventStreamSchema,
-  dashboardEchoEventsResponseSchema,
   dashboardInstancesResponseSchema,
   dashboardMainLlmConfigSchema,
   dashboardRuntimeConfigSchema,
+  dashboardSessionLogsResponseSchema,
+  dashboardSessionLogSchema,
   dashboardSummaryStateSchema,
   dashboardTokenLimitConfigSchema,
   echoMemorySchema,
@@ -45,8 +49,12 @@ export type DashboardEchoEventStream = z.infer<
   typeof dashboardEchoEventStreamSchema
 >;
 export type DashboardEchoEvent = z.infer<typeof dashboardEchoEventSchema>;
-export type DashboardEchoEventsResponse = z.infer<
-  typeof dashboardEchoEventsResponseSchema
+export type DashboardActivityKind = z.infer<typeof dashboardActivityKindSchema>;
+export type DashboardActivityTone = z.infer<typeof dashboardActivityToneSchema>;
+export type DashboardActivity = z.infer<typeof dashboardActivitySchema>;
+export type DashboardSessionLog = z.infer<typeof dashboardSessionLogSchema>;
+export type DashboardSessionLogsResponse = z.infer<
+  typeof dashboardSessionLogsResponseSchema
 >;
 export type DashboardInstanceSummary = z.infer<
   typeof dashboardInstanceSummarySchema

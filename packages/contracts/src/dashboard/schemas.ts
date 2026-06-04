@@ -91,7 +91,7 @@ export const dashboardRuntimeConfigSchema = z
   .strict();
 
 /**
- * dashboard event timeline が扱う severity。
+ * Dashboard session log builder が archive から読む Echo event severity。
  */
 export const dashboardEchoEventSeveritySchema = z.enum([
   'debug',
@@ -101,7 +101,7 @@ export const dashboardEchoEventSeveritySchema = z.enum([
 ]);
 
 /**
- * dashboard event timeline が扱う stream。
+ * Dashboard session log builder が archive から読む Echo event stream。
  */
 export const dashboardEchoEventStreamSchema = z.enum([
   'thought',
@@ -110,7 +110,7 @@ export const dashboardEchoEventStreamSchema = z.enum([
 ]);
 
 /**
- * Dashboard に返す Echo event payload。
+ * Dashboard session log builder が archive から読む Echo event payload。
  */
 export const dashboardEchoEventSchema = z
   .object({
@@ -128,12 +128,70 @@ export const dashboardEchoEventSchema = z
   .strict();
 
 /**
- * `/\:instanceId/events` の payload。
+ * Dashboard activity log の分類。
  */
-export const dashboardEchoEventsResponseSchema = z
+export const dashboardActivityKindSchema = z.enum([
+  'session',
+  'thought',
+  'action',
+  'decision',
+  'knowledge',
+  'system',
+  'issue',
+]);
+
+/**
+ * Dashboard activity log の視覚的な強調度。
+ */
+export const dashboardActivityToneSchema = z.enum([
+  'critical',
+  'warning',
+  'neutral',
+  'positive',
+]);
+
+/**
+ * Dashboard に返す Echo activity payload。
+ *
+ * raw event stream ではなく、Dashboard がそのまま描画できる言動ログに射影済みの形。
+ */
+export const dashboardActivitySchema = z
+  .object({
+    id: z.string(),
+    body: z.string(),
+    createdAt: z.string(),
+    details: z.record(z.string(), z.unknown()).nullable(),
+    kind: dashboardActivityKindSchema,
+    meta: z.array(z.string()),
+    tone: dashboardActivityToneSchema,
+    title: z.string(),
+  })
+  .strict();
+
+/**
+ * Dashboard に返す session 単位の activity log。
+ */
+export const dashboardSessionLogSchema = z
+  .object({
+    id: z.string(),
+    activities: z.array(dashboardActivitySchema),
+    activityCount: z.number().int().nonnegative(),
+    latestActivityAt: z.string(),
+    meta: z.array(z.string()),
+    sessionId: z.string(),
+    startedAt: z.string(),
+    title: z.string(),
+    warningCount: z.number().int().nonnegative(),
+  })
+  .strict();
+
+/**
+ * `/\:instanceId/session-logs` の payload。
+ */
+export const dashboardSessionLogsResponseSchema = z
   .object({
     archiveDay: z.string(),
-    events: z.array(dashboardEchoEventSchema),
+    sessionLogs: z.array(dashboardSessionLogSchema),
   })
   .strict();
 
@@ -210,12 +268,12 @@ export const dashboardInstancesResponseSchema = z
   .strict();
 
 /**
- * `/\:instanceId/events` の unknown payload を契約型へ変換する。
+ * `/\:instanceId/session-logs` の unknown payload を契約型へ変換する。
  */
-export function parseDashboardEchoEventsResponse(
+export function parseDashboardSessionLogsResponse(
   value: unknown
-): z.infer<typeof dashboardEchoEventsResponseSchema> {
-  return dashboardEchoEventsResponseSchema.parse(value);
+): z.infer<typeof dashboardSessionLogsResponseSchema> {
+  return dashboardSessionLogsResponseSchema.parse(value);
 }
 
 /**

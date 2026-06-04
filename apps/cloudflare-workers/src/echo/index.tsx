@@ -4,8 +4,8 @@ import { Hono } from 'hono';
 import { MemorySystem } from '@echo-chamber/cloudflare-runtime/memory-system';
 import { NoteSystem } from '@echo-chamber/cloudflare-runtime/note-system';
 import {
-  parseDashboardEchoEventsResponse,
   parseDashboardInstanceSummary,
+  parseDashboardSessionLogsResponse,
   parseEchoStatus,
 } from '@echo-chamber/contracts/dashboard/schemas';
 import type {
@@ -69,6 +69,7 @@ import { createEmbeddingService } from '../embedding/create-embedding-service';
 import { createRerankingService } from '../reranking/create-reranking-service';
 import { createCloudflareEchoEventPort } from '../utils/echo-event';
 
+import { buildDashboardSessionLogsResponse } from './dashboard-activities';
 import { SqliteEchoEventArchive } from './event-archive';
 import { createToolExecutionContext } from './tool-context';
 
@@ -199,9 +200,13 @@ export class Echo extends DurableObject<Env> {
       .get('/summary', async (c) => {
         return c.json(await this.getSummary());
       })
-      .get('/events', (c) => {
+      .get('/session-logs', (c) => {
         return c.json(
-          parseDashboardEchoEventsResponse(this.eventArchive.getTodayEvents())
+          parseDashboardSessionLogsResponse(
+            buildDashboardSessionLogsResponse(
+              this.eventArchive.getTodayEvents()
+            )
+          )
         );
       })
       .post('/wake', async (c) => {

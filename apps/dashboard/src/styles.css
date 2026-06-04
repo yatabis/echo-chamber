@@ -353,77 +353,217 @@ h3 {
   word-break: break-word;
 }
 
-.event-filter-row {
+.activity-panel {
+  gap: 14px;
+}
+
+.activity-summary {
   display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
 
-.event-filter-row .usage-toggle {
-  flex-wrap: wrap;
+.activity-list {
+  position: relative;
+  display: grid;
+  gap: 0;
 }
 
-.event-list {
+.activity-session-list {
+  display: grid;
   gap: 10px;
 }
 
-.event-card {
-  border-left-width: 5px;
+.activity-session {
+  border: 1px solid #b4c2e8;
+  border-radius: 8px;
+  background: rgba(248, 251, 255, 0.9);
 }
 
-.event-card-debug {
-  border-left-color: #7a88a8;
+.activity-session[open] {
+  background: rgba(244, 248, 255, 0.96);
 }
 
-.event-card-info {
-  border-left-color: #3f72c7;
+.activity-session-summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px;
+  cursor: pointer;
 }
 
-.event-card-warn {
-  border-left-color: #d19700;
+.activity-session-heading {
+  min-width: 0;
 }
 
-.event-card-error {
-  border-left-color: #c81e45;
+.activity-session-heading h3 {
+  margin: 0;
+  font-size: 15px;
+  overflow-wrap: anywhere;
 }
 
-.event-severity-pill {
+.activity-session-stats {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.activity-session-stats span {
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: #eef2fb;
+  color: #52627f;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.activity-session-activities {
+  padding: 0 12px 12px;
+}
+
+.activity-list::before {
+  content: '';
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 10px;
+  width: 2px;
+  background: #c5d0ee;
+}
+
+.activity-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 10px;
+  padding: 0 0 14px;
+}
+
+.activity-session-activities .activity-item:last-child {
+  padding-bottom: 0;
+}
+
+.activity-marker {
+  position: relative;
+  z-index: 1;
+  width: 20px;
+  height: 20px;
+  margin-top: 4px;
+  border: 3px solid #f8fbff;
+  border-radius: 999px;
+  background: #667aa9;
+  box-shadow: 0 0 0 1px #b8c4e5;
+}
+
+.activity-content {
+  min-width: 0;
+  border: 1px solid #b4c2e8;
+  border-radius: 10px;
+  padding: 10px;
+  background: rgba(248, 251, 255, 0.9);
+}
+
+.activity-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.activity-heading h3 {
+  margin: 0;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.activity-kind {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 2px 7px;
+  background: #eef2fb;
+  color: #52627f;
+  font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
 }
 
-.event-severity-debug {
-  background: #eef2fb;
-  color: #52627f;
+.activity-body {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
-.event-severity-info {
-  background: #e5f0ff;
-  color: #245aa6;
+.activity-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  color: #5f6985;
+  font-size: 12px;
 }
 
-.event-severity-warn {
-  background: #fff5d1;
-  color: #735600;
+.activity-item-positive .activity-marker {
+  background: #23824d;
 }
 
-.event-severity-error {
+.activity-item-warning .activity-marker {
+  background: #d19700;
+}
+
+.activity-item-critical .activity-marker {
+  background: #c81e45;
+}
+
+.activity-kind-thought {
+  background: #e8edff;
+  color: #2748a7;
+}
+
+.activity-kind-action {
+  background: #e2f6e9;
+  color: #176137;
+}
+
+.activity-kind-issue {
   background: #ffe7ed;
   color: #a70a2f;
 }
 
-.event-payload {
+.activity-kind-session {
+  background: #f0eaff;
+  color: #5633a4;
+}
+
+.activity-kind-decision,
+.activity-kind-system {
+  background: #fff5d1;
+  color: #735600;
+}
+
+.activity-kind-knowledge {
+  background: #e0f4ff;
+  color: #1f6387;
+}
+
+.activity-details {
+  margin-top: 8px;
   border-top: 1px solid #d7e0f7;
   padding-top: 8px;
 }
 
-.event-payload summary {
+.activity-details summary {
   cursor: pointer;
   color: #30457d;
   font-size: 12px;
   font-weight: 700;
 }
 
-.event-payload pre {
+.activity-details pre {
   margin: 8px 0 0;
   max-height: 280px;
   overflow: auto;
@@ -719,6 +859,19 @@ input[type='search']:focus-visible,
 
   .summary-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .activity-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .activity-session-summary {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .activity-session-stats {
+    justify-content: flex-start;
   }
 
   .snapshot-grid {

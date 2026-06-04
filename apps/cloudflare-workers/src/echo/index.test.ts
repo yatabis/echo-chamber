@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MemorySystem } from '@echo-chamber/cloudflare-runtime/memory-system';
+import type { DashboardEchoEvent } from '@echo-chamber/contracts/dashboard/types';
 import { canonicalRuntimeTools } from '@echo-chamber/core/agent/runtime-tools/catalog';
 import { bindRuntimeTools } from '@echo-chamber/core/agent/runtime-tools/tool';
 import { TOKEN_LIMITS } from '@echo-chamber/core/echo/constants';
@@ -213,6 +214,24 @@ function createUsage(totalTokens: number): Usage {
   };
 }
 
+function getEventArchive(echo: Echo): {
+  getTodayEvents(): {
+    archiveDay: string;
+    events: DashboardEchoEvent[];
+  };
+} {
+  return (
+    echo as unknown as {
+      eventArchive: {
+        getTodayEvents(): {
+          archiveDay: string;
+          events: DashboardEchoEvent[];
+        };
+      };
+    }
+  ).eventArchive;
+}
+
 async function ensureInitialized(
   echo: Echo,
   id: 'rin' | 'marie'
@@ -318,6 +337,69 @@ describe('Echo.ensureInitialized', () => {
     expect(createToolExecutionContext).not.toHaveBeenCalled();
     expect(bindRuntimeTools).not.toHaveBeenCalled();
     expect(mockMemorySystem.reEmbedStaleMemories).not.toHaveBeenCalled();
+  });
+});
+
+describe('Echo session logs route', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('raw event ではなく dashboard activity を返す', async () => {
+    const env = createMockEnv();
+    const { storage } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+    vi.spyOn(
+      echo as unknown as {
+        ensureInitialized(instanceId: 'rin' | 'marie'): Promise<void>;
+      },
+      'ensureInitialized'
+    ).mockResolvedValue(undefined);
+    vi.spyOn(getEventArchive(echo), 'getTodayEvents').mockReturnValue({
+      archiveDay: '2026-06-01',
+      events: [
+        {
+          id: 'event-1',
+          archiveDay: '2026-06-01',
+          category: 'model',
+          createdAt: '2026-06-01T12:00:00.000Z',
+          payload: {
+            content: 'I will check the notes.',
+            model: 'gpt-5.5',
+            provider: 'openai.responses',
+            turnIndex: 1,
+          },
+          sessionId: 'session-1',
+          severity: 'info',
+          streams: ['thought', 'analysis'],
+          summary: 'model output emitted',
+          type: 'model.output.emitted',
+        },
+      ],
+    });
+
+    const response = await echo.fetch(
+      new Request('http://example.com/rin/session-logs')
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      archiveDay: '2026-06-01',
+      sessionLogs: [
+        {
+          id: 'session:session-1',
+          activities: [
+            {
+              body: 'I will check the notes.',
+              kind: 'thought',
+              title: 'Echo',
+            },
+          ],
+        },
+      ],
+    });
+    expect(body).not.toHaveProperty('events');
   });
 });
 
