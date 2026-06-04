@@ -133,7 +133,7 @@ export class DiscordEchoEventPort implements EchoEventPort {
 }
 
 /**
- * Echo event を dashboard / R2 archive 用の保存層へ送る port。
+ * Echo event を dashboard / archive 用の保存層へ送る port。
  */
 export class ArchiveEchoEventPort implements EchoEventPort {
   private readonly options: ArchiveEchoEventPortOptions;

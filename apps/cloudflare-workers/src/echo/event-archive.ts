@@ -5,12 +5,10 @@ import { formatDate } from '@echo-chamber/core/utils/datetime';
 import type { EchoEventArchive } from '../utils/echo-event';
 
 const EVENT_ARCHIVE_DAY_BOUNDARY_HOUR_JST = 3;
-const ARCHIVE_RETENTION_DAYS = 90;
+const EVENT_RETENTION_DAYS = 90;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const ECHO_EVENT_SEVERITIES = ['debug', 'info', 'warn', 'error'] as const;
 const ECHO_EVENT_STREAMS = ['thought', 'system', 'analysis'] as const;
-
-type ArchiveRunStatus = 'uploaded' | 'deleted';
 
 interface StoredEchoEventRow extends Record<string, SqlStorageValue> {
   id: string;
@@ -23,11 +21,6 @@ interface StoredEchoEventRow extends Record<string, SqlStorageValue> {
   streams_json: string;
   summary: string;
   payload_json: string;
-}
-
-interface ArchiveRunRow extends Record<string, SqlStorageValue> {
-  archive_day: string;
-  status: ArchiveRunStatus;
 }
 
 export interface EchoEventArchiveDay {
@@ -51,20 +44,7 @@ export function getEventArchiveDay(date: Date): string {
 }
 
 /**
- * R2 上の event archive object key を決定的に作る。
- *
- * @param input instance と archive day
- * @returns R2 object key
- */
-export function buildEventArchiveObjectKey(input: {
-  instanceId: string;
-  archiveDay: string;
-}): string {
-  return `echo-events/instance=${input.instanceId}/day=${input.archiveDay}/events.ndjson`;
-}
-
-/**
- * DO SQLite を event の staging buffer として扱う archive。
+ * DO SQLite を Echo event の永続保存層として扱う archive。
  */
 export class SqliteEchoEventArchive implements EchoEventArchive {
   private readonly sql: SqlStorage;
@@ -135,43 +115,23 @@ export class SqliteEchoEventArchive implements EchoEventArchive {
   }
 
   /**
-   * 完了済み archive day を R2 へ退避し、退避済み event を削除する。
+   * 保持期間を超えた Echo event を SQLite から削除する。
    *
-   * @param input R2 bucket、instance id、基準時刻
+   * @param input 基準時刻
    */
-  async rotateCompletedDays(input: {
-    bucket: R2Bucket;
-    instanceId: string;
-    now?: Date;
-  }): Promise<void> {
+  async deleteExpiredEvents(input: { now?: Date } = {}): Promise<void> {
     this.ensureSchema();
 
-    const currentArchiveDay = getEventArchiveDay(input.now ?? new Date());
-    const days = this.sql
-      .exec<{ archive_day: string }>(
-        `SELECT DISTINCT archive_day
-         FROM echo_events
-         WHERE archive_day < ?
-         ORDER BY archive_day ASC`,
-        currentArchiveDay
-      )
-      .toArray();
-
-    for (const { archive_day: archiveDay } of days) {
-      // Daily rotation must keep day order to preserve predictable retry behavior.
-      // eslint-disable-next-line no-await-in-loop
-      await this.rotateArchiveDay({
-        bucket: input.bucket,
-        instanceId: input.instanceId,
-        archiveDay,
-      });
-    }
-
-    await this.deleteExpiredArchives({
-      bucket: input.bucket,
-      instanceId: input.instanceId,
-      now: input.now ?? new Date(),
-    });
+    const now = input.now ?? new Date();
+    const cutoffDay = getEventArchiveDay(
+      new Date(now.getTime() - EVENT_RETENTION_DAYS * DAY_MS)
+    );
+    this.sql.exec(
+      `DELETE FROM echo_events
+       WHERE archive_day < ?`,
+      cutoffDay
+    );
+    await Promise.resolve();
   }
 
   /**
@@ -202,13 +162,6 @@ export class SqliteEchoEventArchive implements EchoEventArchive {
       ON echo_events(archive_day, created_at_ms)
     `);
 
-    this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS event_archive_runs (
-        archive_day TEXT PRIMARY KEY,
-        status TEXT NOT NULL CHECK (status IN ('uploaded', 'deleted'))
-      )
-    `);
-
     this.initialized = true;
   }
 
@@ -228,110 +181,6 @@ export class SqliteEchoEventArchive implements EchoEventArchive {
       )
       .toArray()
       .map(rowToDashboardEvent);
-  }
-
-  /**
-   * 指定 archive day を R2 へ退避し、SQLite から削除する。
-   */
-  private async rotateArchiveDay(input: {
-    bucket: R2Bucket;
-    instanceId: string;
-    archiveDay: string;
-  }): Promise<void> {
-    const currentRun = this.sql
-      .exec<ArchiveRunRow>(
-        `SELECT archive_day, status
-         FROM event_archive_runs
-         WHERE archive_day = ?`,
-        input.archiveDay
-      )
-      .toArray()[0];
-
-    if (currentRun?.status === 'deleted') {
-      return;
-    }
-
-    if (currentRun?.status !== 'uploaded') {
-      const events = this.getEventsByArchiveDay(input.archiveDay);
-      if (events.length === 0) {
-        return;
-      }
-
-      await input.bucket.put(
-        buildEventArchiveObjectKey(input),
-        `${events.map((event) => JSON.stringify(event)).join('\n')}\n`,
-        {
-          httpMetadata: {
-            contentType: 'application/x-ndjson; charset=utf-8',
-          },
-          customMetadata: {
-            archiveDay: input.archiveDay,
-            instanceId: input.instanceId,
-          },
-        }
-      );
-      this.upsertArchiveRun(input.archiveDay, 'uploaded');
-    }
-
-    this.sql.exec(
-      'DELETE FROM echo_events WHERE archive_day = ?',
-      input.archiveDay
-    );
-    this.upsertArchiveRun(input.archiveDay, 'deleted');
-  }
-
-  /**
-   * archive run の status を保存する。
-   */
-  private upsertArchiveRun(archiveDay: string, status: ArchiveRunStatus): void {
-    this.sql.exec(
-      `INSERT INTO event_archive_runs (archive_day, status)
-       VALUES (?, ?)
-       ON CONFLICT(archive_day) DO UPDATE SET status = excluded.status`,
-      archiveDay,
-      status
-    );
-  }
-
-  /**
-   * 90日を超えた R2 object と完了済み archive run を削除する。
-   */
-  private async deleteExpiredArchives(input: {
-    bucket: R2Bucket;
-    instanceId: string;
-    now: Date;
-  }): Promise<void> {
-    const cutoffDay = getEventArchiveDay(
-      new Date(input.now.getTime() - ARCHIVE_RETENTION_DAYS * DAY_MS)
-    );
-    const expiredRuns = this.sql
-      .exec<ArchiveRunRow>(
-        `SELECT archive_day, status
-         FROM event_archive_runs
-         WHERE status = 'deleted'
-           AND archive_day < ?
-         ORDER BY archive_day ASC`,
-        cutoffDay
-      )
-      .toArray();
-
-    for (const run of expiredRuns) {
-      // R2 cleanup is intentionally serialized so retry checkpoints stay simple.
-      // eslint-disable-next-line no-await-in-loop
-      await input.bucket.delete(
-        buildEventArchiveObjectKey({
-          instanceId: input.instanceId,
-          archiveDay: run.archive_day,
-        })
-      );
-    }
-
-    this.sql.exec(
-      `DELETE FROM event_archive_runs
-       WHERE status = 'deleted'
-         AND archive_day < ?`,
-      cutoffDay
-    );
   }
 }
 

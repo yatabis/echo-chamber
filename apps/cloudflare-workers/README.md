@@ -13,6 +13,7 @@ Cloudflare Worker / Durable Object の実装本体です。
   - `ALL /:instanceId`
   - `ALL /:instanceId/*`（Durable Object へフォワード）
 - Durable Object `Echo` 実装 (`src/echo`)
+- Echo event の DO SQLite archive と dashboard session log API
 - Cloudflare KV / Workers AI / OpenAI 連携 (`src/config`, `src/echo`, `src/embedding`, `src/utils`)
 - Echo の runtime bindings 解決 (`src/config/echo-runtime-bindings.ts`)
 - Cloudflare 依存テスト (`src/**/*.test.ts`, `test/**`)
@@ -52,3 +53,4 @@ Cloudflare Worker / Durable Object の実装本体です。
 - `wrangler.jsonc` 変更時は `pnpm cf-typegen` を実行してください。
 - Echo の persona 定義は `@echo-chamber/core/echo/instance-definitions` にあり、この workspace では runtime bindings だけを解決します。
 - DO を動かすには `ECHO_KV` に `thinking_channel_discord_*` を投入してください（ローカルは `wrangler kv key put --local`）。chat channels は `src/config/echo-runtime-bindings.ts` の固定定義を使います。
+- Echo event は instance ごとの Durable Object SQLite に 90 日分保持します。R2 binding は使いません。

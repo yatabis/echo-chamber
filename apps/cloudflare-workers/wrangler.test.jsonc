@@ -29,12 +29,6 @@
       "id": "test-echo-kv",
     },
   ],
-  "r2_buckets": [
-    {
-      "binding": "ECHO_EVENT_ARCHIVE",
-      "bucket_name": "test-echo-event-archive",
-    },
-  ],
   "observability": {
     "enabled": false,
   },

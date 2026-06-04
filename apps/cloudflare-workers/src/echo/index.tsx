@@ -116,7 +116,7 @@ interface RunExecutionResult {
   thinkMs: number;
 }
 
-type EventArchiveRotationResult =
+type EventRetentionCleanupResult =
   | {
       status: 'completed';
     }
@@ -321,7 +321,7 @@ export class Echo extends DurableObject<Env> {
     let alarmStatus: 'completed' | 'failed' | 'sleep_scheduled' = 'completed';
     let alarmSeverity: 'debug' | 'warn' | 'error' = 'debug';
     let alarmReason: string | undefined;
-    let archiveRotation: EventArchiveRotationResult | undefined;
+    let eventRetentionCleanup: EventRetentionCleanupResult | undefined;
 
     try {
       await emitEchoEvent(this.events, {
@@ -356,11 +356,11 @@ export class Echo extends DurableObject<Env> {
         state === 'Idling'
       ) {
         const dailySleepResult =
-          await this.scheduleDailySleepWakeAndRotateArchive(now);
+          await this.scheduleDailySleepWakeAndCleanUpEvents(now);
         alarmStatus = 'sleep_scheduled';
         alarmSeverity = dailySleepResult.alarmSeverity;
         alarmReason = 'daily_sleep_window';
-        archiveRotation = dailySleepResult.archiveRotation;
+        eventRetentionCleanup = dailySleepResult.eventRetentionCleanup;
         return;
       }
       if (
@@ -376,7 +376,7 @@ export class Echo extends DurableObject<Env> {
         status: alarmStatus,
         severity: alarmSeverity,
         reason: alarmReason,
-        archiveRotation,
+        eventRetentionCleanup,
         alarmStartedAt,
         runResult,
       });
@@ -392,31 +392,27 @@ export class Echo extends DurableObject<Env> {
   }
 
   /**
-   * 完了済み archive day の event を R2 へ退避する。
+   * 保持期間を超えた Echo event を削除する。
    *
    * 日次 sleep alarm からだけ呼び、手動 sleep の副作用にはしない。
    */
-  private async rotateEventArchive(now: Date): Promise<void> {
-    const instanceDefinition = this.getInstanceDefinitionOrThrow();
-
-    await this.eventArchive.rotateCompletedDays({
-      bucket: this._env.ECHO_EVENT_ARCHIVE,
-      instanceId: instanceDefinition.id,
+  private async cleanUpExpiredEvents(now: Date): Promise<void> {
+    await this.eventArchive.deleteExpiredEvents({
       now,
     });
   }
 
   /**
-   * 日次 sleep へ入り、wake alarm を確定したうえで archive rotation を試みる。
+   * 日次 sleep へ入り、wake alarm を確定したうえで event retention cleanup を試みる。
    *
-   * wake alarm は archive より重要な制御面なので、R2 / SQLite の失敗から隔離する。
+   * wake alarm は event retention より重要な制御面なので、SQLite の失敗から隔離する。
    *
    * @param now daily sleep alarm の発火時刻
-   * @returns archive rotation の成否と alarm completed event の severity
+   * @returns event retention cleanup の成否と alarm completed event の severity
    */
-  private async scheduleDailySleepWakeAndRotateArchive(now: Date): Promise<{
+  private async scheduleDailySleepWakeAndCleanUpEvents(now: Date): Promise<{
     alarmSeverity: 'debug' | 'warn';
-    archiveRotation: EventArchiveRotationResult;
+    eventRetentionCleanup: EventRetentionCleanupResult;
   }> {
     await this.sleep();
     const nextAlarm = new Date(now);
@@ -424,18 +420,18 @@ export class Echo extends DurableObject<Env> {
     await this.setNextAlarm(nextAlarm, 'daily_sleep_wake');
 
     try {
-      await this.rotateEventArchive(now);
+      await this.cleanUpExpiredEvents(now);
 
       return {
         alarmSeverity: 'debug',
-        archiveRotation: {
+        eventRetentionCleanup: {
           status: 'completed',
         },
       };
     } catch (error) {
       return {
         alarmSeverity: 'warn',
-        archiveRotation: {
+        eventRetentionCleanup: {
           status: 'failed',
           error: getErrorMessage(error),
         },
@@ -452,7 +448,7 @@ export class Echo extends DurableObject<Env> {
     status: 'completed' | 'failed' | 'sleep_scheduled';
     severity: 'debug' | 'warn' | 'error';
     reason: string | undefined;
-    archiveRotation: EventArchiveRotationResult | undefined;
+    eventRetentionCleanup: EventRetentionCleanupResult | undefined;
     alarmStartedAt: number;
     runResult: RunExecutionResult;
   }): Promise<void> {
@@ -460,13 +456,13 @@ export class Echo extends DurableObject<Env> {
       type: 'system.schedule.alarm_completed',
       severity: input.severity,
       summary:
-        input.archiveRotation?.status === 'failed'
-          ? `alarm ${input.status}: event archive rotation failed`
+        input.eventRetentionCleanup?.status === 'failed'
+          ? `alarm ${input.status}: event retention cleanup failed`
           : `alarm ${input.status}`,
       payload: {
         status: input.status,
         reason: input.reason,
-        archiveRotation: input.archiveRotation,
+        eventRetentionCleanup: input.eventRetentionCleanup,
         alarmTotalMs: Date.now() - input.alarmStartedAt,
         unreadCheckMs: input.runResult.unreadCheckMs,
         thinkMs: input.runResult.thinkMs,

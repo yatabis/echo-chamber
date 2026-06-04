@@ -2,11 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { EchoEvent } from '@echo-chamber/core/ports/echo-event';
 
-import {
-  SqliteEchoEventArchive,
-  buildEventArchiveObjectKey,
-  getEventArchiveDay,
-} from './event-archive';
+import { SqliteEchoEventArchive, getEventArchiveDay } from './event-archive';
 
 function createCursor<T extends Record<string, SqlStorageValue>>(
   rows: T[]
@@ -66,15 +62,6 @@ describe('event archive helpers', () => {
       '2026-06-02'
     );
   });
-
-  it('instance と archive day から R2 key を作る', () => {
-    expect(
-      buildEventArchiveObjectKey({
-        instanceId: 'rin',
-        archiveDay: '2026-06-01',
-      })
-    ).toBe('echo-events/instance=rin/day=2026-06-01/events.ndjson');
-  });
 });
 
 describe('SqliteEchoEventArchive', () => {
@@ -123,94 +110,18 @@ describe('SqliteEchoEventArchive', () => {
     ]);
   });
 
-  it('完了済み archive day を R2 に退避してから SQLite から削除する', async () => {
-    const archivedRow = {
-      id: 'event-1',
-      created_at_ms: new Date('2026-06-01T12:00:00.000Z').getTime(),
-      archive_day: '2026-06-01',
-      session_id: null,
-      type: 'session.completed',
-      category: 'session',
-      severity: 'info',
-      streams_json: '["system","analysis"]',
-      summary: 'thinking session completed',
-      payload_json: 'null',
-    };
-    const { exec, sql } = createMockSql((query) => {
-      if (query.includes('SELECT DISTINCT archive_day')) {
-        return createCursor([{ archive_day: '2026-06-01' }]);
-      }
-      if (query.includes('FROM event_archive_runs')) {
-        return createCursor([]);
-      }
-      if (query.includes('FROM echo_events')) {
-        return createCursor([archivedRow]);
-      }
-
-      return createCursor([]);
-    });
-    const put = vi.fn(async () => Promise.resolve({}));
+  it('90日を超えた Echo event を SQLite から削除する', async () => {
+    const { exec, sql } = createMockSql();
     const archive = new SqliteEchoEventArchive({
       sql,
     });
 
-    await archive.rotateCompletedDays({
-      bucket: {
-        put,
-      } as unknown as R2Bucket,
-      instanceId: 'rin',
+    await archive.deleteExpiredEvents({
       now: new Date('2026-06-02T18:00:00.000Z'),
     });
 
-    expect(put).toHaveBeenCalledWith(
-      'echo-events/instance=rin/day=2026-06-01/events.ndjson',
-      expect.stringContaining('"type":"session.completed"'),
-      expect.objectContaining({
-        httpMetadata: {
-          contentType: 'application/x-ndjson; charset=utf-8',
-        },
-      })
-    );
     expect(exec.mock.calls).toContainEqual([
-      'DELETE FROM echo_events WHERE archive_day = ?',
-      '2026-06-01',
-    ]);
-  });
-
-  it('90日を超えた R2 archive と archive run を削除する', async () => {
-    const { exec, sql } = createMockSql((query) => {
-      if (query.includes('SELECT DISTINCT archive_day')) {
-        return createCursor([]);
-      }
-      if (query.includes("WHERE status = 'deleted'")) {
-        return createCursor([
-          {
-            archive_day: '2026-02-01',
-            status: 'deleted',
-          },
-        ]);
-      }
-
-      return createCursor([]);
-    });
-    const deleteObject = vi.fn(async () => Promise.resolve());
-    const archive = new SqliteEchoEventArchive({
-      sql,
-    });
-
-    await archive.rotateCompletedDays({
-      bucket: {
-        delete: deleteObject,
-      } as unknown as R2Bucket,
-      instanceId: 'rin',
-      now: new Date('2026-06-02T18:00:00.000Z'),
-    });
-
-    expect(deleteObject).toHaveBeenCalledWith(
-      'echo-events/instance=rin/day=2026-02-01/events.ndjson'
-    );
-    expect(exec.mock.calls).toContainEqual([
-      expect.stringContaining('DELETE FROM event_archive_runs'),
+      expect.stringContaining('DELETE FROM echo_events'),
       '2026-03-05',
     ]);
   });

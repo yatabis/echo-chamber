@@ -148,13 +148,14 @@ pnpm --filter @echo-chamber/cloudflare-workers exec wrangler kv key put --bindin
 
 ### Echo Durable Object (`/{instanceId}` 配下)
 
-| Method | Path                    | 説明                                                   |
-| ------ | ----------------------- | ------------------------------------------------------ |
-| `GET`  | `/{instanceId}/`        | ステータス/メモリ/ノート/usage の JSON（`EchoStatus`） |
-| `GET`  | `/{instanceId}/summary` | 一覧用サマリー JSON                                    |
-| `POST` | `/{instanceId}/wake`    | 強制 wake                                              |
-| `POST` | `/{instanceId}/sleep`   | 強制 sleep                                             |
-| `POST` | `/{instanceId}/run`     | 手動実行（`ENVIRONMENT=local` のみ）                   |
+| Method | Path                         | 説明                                                   |
+| ------ | ---------------------------- | ------------------------------------------------------ |
+| `GET`  | `/{instanceId}/`             | ステータス/メモリ/ノート/usage の JSON（`EchoStatus`） |
+| `GET`  | `/{instanceId}/summary`      | 一覧用サマリー JSON                                    |
+| `GET`  | `/{instanceId}/session-logs` | Dashboard 用 session log JSON                          |
+| `POST` | `/{instanceId}/wake`         | 強制 wake                                              |
+| `POST` | `/{instanceId}/sleep`        | 強制 sleep                                             |
+| `POST` | `/{instanceId}/run`          | 手動実行（`ENVIRONMENT=local` のみ）                   |
 
 ## テスト方針（概要）
 
@@ -173,3 +174,4 @@ pnpm --filter @echo-chamber/cloudflare-workers exec wrangler kv key put --bindin
 - Worker 型定義: `apps/cloudflare-workers/worker-configuration.d.ts`
 - Dashboard build 出力先: `apps/cloudflare-workers/public/dashboard`
 - dashboard 系 API contract は `packages/contracts/src/dashboard/schemas.ts` を正とする
+- Echo event は instance ごとの Durable Object SQLite に 90 日分保持し、日次 sleep 中に保持期限切れの event を削除する

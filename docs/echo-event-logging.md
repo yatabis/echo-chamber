@@ -201,7 +201,9 @@ Discord の配送先は event に直接持たせない。現行 Worker では in
 
 実装済みの dashboard / 後追い確認用 sink。
 
-保存先は instance ごとの DO SQLite である。DO SQLite は長期履歴の正本ではなく、未アーカイブ event の staging buffer として扱う。
+保存先は instance ごとの DO SQLite である。各 Durable Object が自分の Echo event を所有し、90 日分の raw event を保持する。
+
+R2 / KV / D1 への日次退避は行わない。過去ログを外部分析基盤へ載せたくなった場合は、その時点で DO SQLite からの export 経路を別途設計する。
 
 `echo_events` は次の情報だけを持つ。
 
@@ -218,36 +220,24 @@ Discord の配送先は event に直接持たせない。現行 Worker では in
 
 `instance_id` は持たない。DO 自体が instance 単位だからである。
 
-人間が活動日として読む operational day の境界は JST 07:00 である。一方、event archive の保存区切りは日次 sleep 開始時刻に合わせて JST 03:00 とする。これは activity の意味境界ではなく、R2 退避と SQLite staging buffer の管理を単純にするための archive day である。
+人間が活動日として読む operational day の境界は JST 07:00 である。一方、event archive の保存区切りは日次 sleep 開始時刻に合わせて JST 03:00 とする。これは activity の意味境界ではなく、日次 sleep 中に保持期限 cleanup を行うための archive day である。
 
-日次 sleep window 中に、完了済み archive day を R2 に NDJSON として退避し、R2 退避後に DO SQLite から削除する。R2 key は deterministic に作る。
-
-```text
-echo-events/instance=<instanceId>/day=<archiveDay>/events.ndjson
-```
-
-日次ローテーションの再実行制御には `event_archive_runs` を使う。
+日次 sleep window 中に event retention cleanup を実行し、90 日を超えた `archive_day` の event を DO SQLite から削除する。
 
 ```sql
-CREATE TABLE event_archive_runs (
-  archive_day TEXT PRIMARY KEY,
-  status TEXT NOT NULL
-);
+DELETE FROM echo_events
+WHERE archive_day < :cutoffDay;
 ```
 
-status は次だけを使う。
+`cutoffDay` は cleanup 実行時刻から 90 日を引いた時刻を、JST 03:00 境界の archive day に変換して決める。現在の archive day と保持期間内の archive day は削除しない。
 
-- row なし: 未退避
-- `uploaded`: R2 put 済み、DO SQLite delete 未完了
-- `deleted`: R2 put 済み、DO SQLite delete 済み
-
-R2 put と SQLite delete は atomic ではない。そのため、`uploaded` の行は次回 rotation で delete を再試行する。`deleted` 済みの管理行と対応する R2 object は 90 日を超えた日次 rotation で削除する。
+cleanup は wake alarm より重要度が低い。日次 sleep では、まず wake alarm を設定してから cleanup を試みる。cleanup が失敗した場合は `system.schedule.alarm_completed` に `eventRetentionCleanup.status = "failed"` として記録し、severity は `warn` にする。ただし wake alarm は維持する。
 
 ### Dashboard
 
 Dashboard は channel ではなく consumer である。
 
-現行 dashboard は `/:instanceId/session-logs` から現在の archive day の session log だけを読む。過去ログは基本的に dashboard では扱わない。必要になった場合は R2 の日次 NDJSON を別の分析基盤へ載せる。
+現行 dashboard は `/:instanceId/session-logs` から現在の archive day の session log だけを読む。過去ログは基本的に dashboard では扱わない。必要になった場合は DO SQLite に保持されている raw event から別の export / 分析基盤を作る。
 
 Dashboard は Cloudflare Observability の代替ではない。raw event stream をそのまま読む用途は Observability に寄せる。
 
@@ -274,7 +264,7 @@ Dashboard session log は次の問いには答えない。
 - archive / Discord / console sink に何が配送されたか
 - session 外の状態遷移や運用イベントがどう発生したか
 
-これらは R2 NDJSON、Cloudflare Observability、または将来の分析基盤で見る。
+これらは Cloudflare Observability、DO SQLite に保持された raw event、または将来の分析基盤で見る。
 
 #### 変換方針
 
@@ -341,11 +331,11 @@ Tool activity は `tool.completed` / `tool.failed` を主行とする。対応�
 - payload が大きい event の分割・圧縮・sampling 方針
 - Cloudflare Observability の retention を前提に、どこまで console sink に頼るか
 - `model.turn.*` を `analysis` 専用のままにするか、system stream にも出すか
-- R2 lifecycle rule も併用するか
+- 90 日分の DO SQLite raw event を外部分析基盤へ export する経路を作るか
 
 ## 実装上の境界
 
-`packages/core` は `EchoEventPort` と event type / category / stream の定義だけを持つ。Cloudflare、Discord、D1、R2 などの具体 sink には依存しない。
+`packages/core` は `EchoEventPort` と event type / category / stream の定義だけを持つ。Cloudflare、Discord、D1、R2、DO SQLite などの具体 sink には依存しない。
 
 `apps/cloudflare-workers` は composition root として、console / Discord / DO SQLite archive sink を差し込む。core から具体 runtime へ逆依存させない。
 

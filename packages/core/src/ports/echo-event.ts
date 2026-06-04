@@ -138,7 +138,7 @@ export interface EchoEvent extends EchoEventInput {
 /**
  * Echo の運用・分析イベントを受け取る port。
  *
- * 実装側は Discord 通知、console 出力、D1/R2 archive などへ自由に配送できる。
+ * 実装側は Discord 通知、console 出力、runtime archive などへ自由に配送できる。
  */
 export interface EchoEventPort {
   emit(event: EchoEvent): Promise<void>;

@@ -1121,7 +1121,7 @@ describe('Echo run metrics', () => {
     expect(typeof completedEvent?.payload?.alarmTotalMs).toBe('number');
   });
 
-  it('JST 03:00 の daily sleep alarm で archive rotation を実行する', async () => {
+  it('JST 03:00 の daily sleep alarm で event retention cleanup を実行する', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-03-21T18:00:00.000Z'));
 
@@ -1143,10 +1143,10 @@ describe('Echo run metrics', () => {
     const sleep = vi
       .spyOn(echo as unknown as { sleep(): Promise<void> }, 'sleep')
       .mockResolvedValue(undefined);
-    const rotateEventArchive = vi
+    const cleanUpExpiredEvents = vi
       .spyOn(
-        echo as unknown as { rotateEventArchive(now: Date): Promise<void> },
-        'rotateEventArchive'
+        echo as unknown as { cleanUpExpiredEvents(now: Date): Promise<void> },
+        'cleanUpExpiredEvents'
       )
       .mockResolvedValue(undefined);
     const setNextAlarm = vi
@@ -1165,7 +1165,7 @@ describe('Echo run metrics', () => {
     await echo.alarm();
 
     expect(sleep).toHaveBeenCalledTimes(1);
-    expect(rotateEventArchive).toHaveBeenCalledWith(
+    expect(cleanUpExpiredEvents).toHaveBeenCalledWith(
       new Date('2026-03-21T18:00:00.000Z')
     );
     expect(setNextAlarm).toHaveBeenCalledWith(
@@ -1177,7 +1177,7 @@ describe('Echo run metrics', () => {
     vi.useRealTimers();
   });
 
-  it('archive rotation が失敗しても daily wake alarm を維持する', async () => {
+  it('event retention cleanup が失敗しても daily wake alarm を維持する', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-03-21T18:00:00.000Z'));
 
@@ -1199,12 +1199,12 @@ describe('Echo run metrics', () => {
     const sleep = vi
       .spyOn(echo as unknown as { sleep(): Promise<void> }, 'sleep')
       .mockResolvedValue(undefined);
-    const rotateEventArchive = vi
+    const cleanUpExpiredEvents = vi
       .spyOn(
-        echo as unknown as { rotateEventArchive(now: Date): Promise<void> },
-        'rotateEventArchive'
+        echo as unknown as { cleanUpExpiredEvents(now: Date): Promise<void> },
+        'cleanUpExpiredEvents'
       )
-      .mockRejectedValue(new Error('R2 put failed'));
+      .mockRejectedValue(new Error('SQLite cleanup failed'));
     const setNextAlarm = vi
       .spyOn(
         echo as unknown as {
@@ -1225,26 +1225,26 @@ describe('Echo run metrics', () => {
       new Date('2026-03-21T22:00:00.000Z'),
       'daily_sleep_wake'
     );
-    expect(rotateEventArchive).toHaveBeenCalledWith(
+    expect(cleanUpExpiredEvents).toHaveBeenCalledWith(
       new Date('2026-03-21T18:00:00.000Z')
     );
     expect(
       getFirstInvocationCallOrder(setNextAlarm.mock.invocationCallOrder)
     ).toBeLessThan(
-      getFirstInvocationCallOrder(rotateEventArchive.mock.invocationCallOrder)
+      getFirstInvocationCallOrder(cleanUpExpiredEvents.mock.invocationCallOrder)
     );
     expect(run).not.toHaveBeenCalled();
 
     const completedEvent = findEmittedEvent('system.schedule.alarm_completed');
     expect(completedEvent).toMatchObject({
       severity: 'warn',
-      summary: 'alarm sleep_scheduled: event archive rotation failed',
+      summary: 'alarm sleep_scheduled: event retention cleanup failed',
       payload: {
         status: 'sleep_scheduled',
         reason: 'daily_sleep_window',
-        archiveRotation: {
+        eventRetentionCleanup: {
           status: 'failed',
-          error: 'R2 put failed',
+          error: 'SQLite cleanup failed',
         },
       },
     });
