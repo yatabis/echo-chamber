@@ -10,6 +10,8 @@ import {
 import type { EchoEventPort } from '../ports/echo-event';
 import type {
   ModelInputItem,
+  ModelMessage,
+  ModelMessageContentPart,
   ModelPort,
   ModelResponse,
   ModelToolCall,
@@ -63,6 +65,20 @@ export const ZERO_MODEL_USAGE: ModelUsage = {
   reasoningTokens: 0,
   totalTokens: 0,
 };
+
+const MAX_TOOL_VISION_IMAGES = 20;
+
+interface ChatToolVisionImage {
+  messageId: string;
+  user: string;
+  createdAt: string;
+  url: string;
+  filename?: string | null;
+  contentType?: string | null;
+  width?: number | null;
+  height?: number | null;
+  description?: string | null;
+}
 
 /**
  * 各ターンの usage を session 全体の usage に加算する。
@@ -367,13 +383,240 @@ async function createNextInput(
     return [];
   }
 
-  return await Promise.all(
+  const nextInput: ModelInputItem[] = [];
+  const visionInputs: ModelMessage[] = [];
+  const toolResults = await Promise.all(
     toolCalls.map(async (toolCall) => ({
-      type: 'tool_result' as const,
-      callId: toolCall.callId,
+      toolCall,
       output: await executeAgentToolCall(toolCall, tools, events, turnIndex),
     }))
   );
+
+  for (const { toolCall, output } of toolResults) {
+    nextInput.push({
+      type: 'tool_result',
+      callId: toolCall.callId,
+      output,
+    });
+
+    const visionInput = createToolVisionInput(toolCall, output);
+    if (visionInput !== null) {
+      visionInputs.push(visionInput);
+    }
+  }
+
+  return [...nextInput, ...visionInputs];
+}
+
+/**
+ * tool output に含まれる画像参照を、モデルへ直接渡せる vision input に変換する。
+ * 現時点では Discord チャット取得結果だけを対象にする。
+ *
+ * @param toolCall 実行済み tool call
+ * @param output model へ返す sanitization 済み tool output
+ * @returns 画像があれば追加入力する user message。なければ `null`
+ */
+function createToolVisionInput(
+  toolCall: ModelToolCall,
+  output: string
+): ModelMessage | null {
+  if (toolCall.toolName !== 'read_chat_messages') {
+    return null;
+  }
+
+  const images = extractReadChatMessageImages(output);
+  if (images.length === 0) {
+    return null;
+  }
+
+  const selectedImages = images.slice(0, MAX_TOOL_VISION_IMAGES);
+  const content: ModelMessageContentPart[] = [
+    {
+      type: 'text',
+      text: `Discord image attachments from read_chat_messages (${selectedImages.length}/${images.length}).`,
+    },
+  ];
+
+  for (const [index, image] of selectedImages.entries()) {
+    content.push(
+      {
+        type: 'text',
+        text: formatVisionImageContext(image, index + 1),
+      },
+      {
+        type: 'image',
+        imageUrl: image.url,
+        detail: 'auto',
+      }
+    );
+  }
+
+  if (images.length > selectedImages.length) {
+    content.push({
+      type: 'text',
+      text: `${images.length - selectedImages.length} additional image attachment(s) were omitted from direct vision input to keep the model request bounded.`,
+    });
+  }
+
+  return {
+    role: 'user',
+    content,
+  };
+}
+
+/**
+ * read_chat_messages の JSON 結果から画像添付を抽出する。
+ *
+ * @param output tool output JSON
+ * @returns モデルへ画像入力として渡せる画像参照
+ */
+function extractReadChatMessageImages(output: string): ChatToolVisionImage[] {
+  const parsed = parseJsonObject(output);
+  if (parsed?.success !== true || !Array.isArray(parsed.messages)) {
+    return [];
+  }
+
+  return parsed.messages.flatMap((message): ChatToolVisionImage[] => {
+    if (!isRecord(message) || !Array.isArray(message.images)) {
+      return [];
+    }
+
+    const messageId = getStringProperty(message, 'messageId');
+    const user = getStringProperty(message, 'user');
+    const createdAt = getStringProperty(message, 'created_at');
+    if (
+      messageId === undefined ||
+      user === undefined ||
+      createdAt === undefined
+    ) {
+      return [];
+    }
+
+    return message.images.flatMap((image): ChatToolVisionImage[] => {
+      if (!isRecord(image)) {
+        return [];
+      }
+
+      const url = getStringProperty(image, 'url');
+      if (url === undefined) {
+        return [];
+      }
+
+      return [
+        {
+          messageId,
+          user,
+          createdAt,
+          url,
+          filename: getNullableStringProperty(image, 'filename'),
+          contentType: getNullableStringProperty(image, 'content_type'),
+          width: getNullableNumberProperty(image, 'width'),
+          height: getNullableNumberProperty(image, 'height'),
+          description: getNullableStringProperty(image, 'description'),
+        },
+      ];
+    });
+  });
+}
+
+/**
+ * 画像の出所をモデルへ伝えるための短い説明文を作る。
+ */
+function formatVisionImageContext(
+  image: ChatToolVisionImage,
+  index: number
+): string {
+  const metadata: string[] = [
+    `Image ${index}`,
+    `messageId=${image.messageId}`,
+    `user=${image.user}`,
+    `created_at=${image.createdAt}`,
+  ];
+  appendNullableMetadata(metadata, 'filename', image.filename);
+  appendNullableMetadata(metadata, 'content_type', image.contentType);
+  appendImageSizeMetadata(metadata, image);
+  appendNullableMetadata(metadata, 'description', image.description);
+
+  return metadata.join(', ');
+}
+
+/**
+ * nullable なメタデータを説明文配列へ追加する。
+ */
+function appendNullableMetadata(
+  metadata: string[],
+  key: string,
+  value: string | null | undefined
+): void {
+  if (value !== undefined && value !== null) {
+    metadata.push(`${key}=${value}`);
+  }
+}
+
+/**
+ * 画像の width / height が揃っている場合だけ size メタデータを追加する。
+ */
+function appendImageSizeMetadata(
+  metadata: string[],
+  image: Pick<ChatToolVisionImage, 'width' | 'height'>
+): void {
+  if (
+    image.width !== undefined &&
+    image.width !== null &&
+    image.height !== undefined &&
+    image.height !== null
+  ) {
+    metadata.push(`size=${image.width}x${image.height}`);
+  }
+}
+
+/**
+ * JSON 文字列を record として読む。失敗時は `null` を返す。
+ */
+function parseJsonObject(output: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(output);
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 値が object record かを判定する。
+ */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * nullable string property を取得する。
+ */
+function getNullableStringProperty(
+  record: Record<string, unknown>,
+  key: string
+): string | null | undefined {
+  const value = record[key];
+  if (value === null) {
+    return null;
+  }
+
+  return typeof value === 'string' ? value : undefined;
+}
+
+/**
+ * nullable number property を取得する。
+ */
+function getNullableNumberProperty(
+  record: Record<string, unknown>,
+  key: string
+): number | null | undefined {
+  const value = record[key];
+  if (value === null) {
+    return null;
+  }
+
+  return typeof value === 'number' ? value : undefined;
 }
 
 /**

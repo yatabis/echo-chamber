@@ -4,7 +4,10 @@ import { emitEchoEvent } from '@echo-chamber/core/ports/echo-event';
 import type { EchoEventPort } from '@echo-chamber/core/ports/echo-event';
 import type {
   ModelInputItem,
+  ModelImageDetail,
   ModelMessage,
+  ModelMessageContent,
+  ModelMessageContentPart,
   ModelOutputItem,
   ModelPort,
   ModelRequest,
@@ -19,6 +22,9 @@ import { toFunctionParameters } from './openai-response-mappers';
 import type {
   ChatCompletion,
   ChatCompletionAssistantMessageParam,
+  ChatCompletionContentPart,
+  ChatCompletionContentPartImage,
+  ChatCompletionContentPartText,
   ChatCompletionCreateParamsNonStreaming,
   ChatCompletionMessageFunctionToolCall,
   ChatCompletionMessageParam,
@@ -367,17 +373,121 @@ export function toModelOutput(
  * は常に `user` として渡す。
  */
 function toChatMessage(message: ModelMessage): ChatCompletionMessageParam {
+  const content = toChatMessageContent(message.content);
+
   if (message.role === 'developer') {
     return {
       role: 'user',
-      content: message.content,
+      content,
+    };
+  }
+
+  if (message.role === 'assistant' && hasImageContentPart(message.content)) {
+    throw new Error(
+      'Chat Completions API does not support assistant messages with image content'
+    );
+  }
+
+  if (message.role === 'system' && hasImageContentPart(message.content)) {
+    throw new Error(
+      'Chat Completions API does not support system messages with image content'
+    );
+  }
+
+  if (message.role === 'system') {
+    return {
+      role: 'system',
+      content: toChatTextOnlyContent(message.content),
+    };
+  }
+
+  if (message.role === 'assistant') {
+    return {
+      role: 'assistant',
+      content: toChatTextOnlyContent(message.content),
     };
   }
 
   return {
-    role: message.role,
-    content: message.content,
+    role: 'user',
+    content,
   };
+}
+
+/**
+ * provider-neutral content を Chat Completions の user message content へ変換する。
+ */
+function toChatMessageContent(
+  content: ModelMessageContent
+): string | ChatCompletionContentPart[] {
+  if (typeof content === 'string') {
+    return content;
+  }
+
+  return content.map((part) => {
+    if (part.type === 'text') {
+      return toChatTextContentPart(part);
+    }
+
+    return {
+      type: 'image_url',
+      image_url: {
+        url: part.imageUrl,
+        detail: toChatImageDetail(part.detail),
+      },
+    };
+  });
+}
+
+/**
+ * system / assistant message で許可される text-only content へ変換する。
+ */
+function toChatTextOnlyContent(
+  content: ModelMessageContent
+): string | ChatCompletionContentPartText[] {
+  if (typeof content === 'string') {
+    return content;
+  }
+
+  return content.map(toChatTextContentPart);
+}
+
+/**
+ * provider-neutral text part を Chat Completions の text part へ変換する。
+ */
+function toChatTextContentPart(
+  part: ModelMessageContentPart
+): ChatCompletionContentPartText {
+  if (part.type !== 'text') {
+    throw new Error('Expected text content part');
+  }
+
+  return {
+    type: 'text',
+    text: part.text,
+  };
+}
+
+/**
+ * Chat Completions API が対応していない `original` detail を `auto` に丸める。
+ */
+function toChatImageDetail(
+  detail: ModelImageDetail | undefined
+): ChatCompletionContentPartImage.ImageURL['detail'] {
+  if (detail === 'original' || detail === undefined) {
+    return 'auto';
+  }
+
+  return detail;
+}
+
+/**
+ * content に画像 part が含まれるかを判定する。
+ */
+function hasImageContentPart(content: ModelMessageContent): boolean {
+  return (
+    typeof content !== 'string' && content.some((part) => part.type === 'image')
+  );
 }
 
 /**

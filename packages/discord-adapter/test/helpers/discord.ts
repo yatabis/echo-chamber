@@ -11,6 +11,15 @@ interface MessageInput {
   user: string;
   userId?: string;
   timestamp: string;
+  attachments?: {
+    filename: string;
+    url: string;
+    contentType?: string;
+    size?: number;
+    width?: number | null;
+    height?: number | null;
+    description?: string;
+  }[];
   reactions?: {
     emoji: string;
     me: boolean;
@@ -63,7 +72,18 @@ export function createDiscordMessagesResponse(
       mentions: [],
       mention_roles: [],
       mention_channels: [],
-      attachments: [],
+      attachments:
+        message.attachments?.map((attachment, attachmentIndex) => ({
+          id: `attachment-${index + 1}-${attachmentIndex + 1}`,
+          filename: attachment.filename,
+          content_type: attachment.contentType,
+          size: attachment.size ?? 1024,
+          url: attachment.url,
+          proxy_url: attachment.url,
+          height: attachment.height,
+          width: attachment.width,
+          description: attachment.description,
+        })) ?? [],
       embeds: [],
       reactions,
       pinned: false,

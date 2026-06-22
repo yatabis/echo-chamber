@@ -354,6 +354,80 @@ describe('OpenAIChatCompletionsModel', () => {
     });
   });
 
+  it('画像付き message を Chat Completions content part に変換する', async () => {
+    const model = new OpenAIChatCompletionsModel({
+      apiKey: 'local-key',
+      model: 'gpt-5.5',
+    });
+
+    mockChatCreate.mockResolvedValue({
+      id: 'chatcmpl_vision',
+      choices: [
+        {
+          index: 0,
+          finish_reason: 'stop',
+          logprobs: null,
+          message: {
+            role: 'assistant',
+            content: 'done',
+            refusal: null,
+          },
+        },
+      ],
+      created: 0,
+      model: 'gpt-5.5',
+      object: 'chat.completion',
+      usage: {
+        prompt_tokens: 1,
+        completion_tokens: 1,
+        total_tokens: 2,
+      },
+    });
+
+    await model.createChatCompletion({
+      input: [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: 'Please inspect this image.',
+            },
+            {
+              type: 'image',
+              imageUrl: 'https://example.com/image.png',
+              detail: 'original',
+            },
+          ],
+        },
+      ],
+      tools: [],
+    });
+
+    expect(mockChatCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: 'Please inspect this image.',
+              },
+              {
+                type: 'image_url',
+                image_url: {
+                  url: 'https://example.com/image.png',
+                  detail: 'auto',
+                },
+              },
+            ],
+          },
+        ],
+      })
+    );
+  });
+
   it('usage がない response はゼロ usage として扱う', () => {
     expect(toChatModelUsage(undefined)).toEqual({
       cachedInputTokens: 0,

@@ -1,6 +1,7 @@
 import type {
   ModelInputItem,
   ModelMessage,
+  ModelMessageContentPart,
   ModelOutputItem,
   ModelToolContract,
   ModelUsage,
@@ -8,6 +9,7 @@ import type {
 
 import type {
   ResponseInputItem,
+  ResponseInputMessageContentList,
   ResponseOutputItem,
   ResponseOutputMessage,
   ResponseUsage,
@@ -75,9 +77,22 @@ export function toFunctionParameters(
  */
 export function toResponseInputItem(item: ModelInputItem): ResponseInputItem {
   if (isModelMessage(item)) {
+    if (typeof item.content === 'string') {
+      return {
+        role: item.role,
+        content: item.content,
+      };
+    }
+
+    if (item.role === 'assistant') {
+      throw new Error(
+        'Responses API does not support assistant messages with multimodal content'
+      );
+    }
+
     return {
       role: item.role,
-      content: item.content,
+      content: toResponseInputMessageContent(item.content),
     };
   }
 
@@ -95,6 +110,31 @@ export function toResponseInputItem(item: ModelInputItem): ResponseInputItem {
     call_id: item.callId,
     output: item.output,
   };
+}
+
+/**
+ * provider-neutral content part を Responses API の message content へ変換する。
+ *
+ * @param content provider 非依存の message content part
+ * @returns Responses API の input message content list
+ */
+function toResponseInputMessageContent(
+  content: readonly ModelMessageContentPart[]
+): ResponseInputMessageContentList {
+  return content.map((part) => {
+    if (part.type === 'text') {
+      return {
+        type: 'input_text',
+        text: part.text,
+      };
+    }
+
+    return {
+      type: 'input_image',
+      image_url: part.imageUrl,
+      detail: part.detail ?? 'auto',
+    };
+  });
 }
 
 /**

@@ -5,11 +5,48 @@
 export type ModelMessageRole = 'system' | 'developer' | 'user' | 'assistant';
 
 /**
- * モデルへそのまま渡せるテキストメッセージ。
+ * 画像入力の detail 指定。
+ * provider ごとの差異は adapter 側で吸収する。
+ */
+export type ModelImageDetail = 'low' | 'high' | 'auto' | 'original';
+
+/**
+ * モデルへ渡すテキスト part。
+ */
+export interface ModelTextContentPart {
+  type: 'text';
+  text: string;
+}
+
+/**
+ * モデルへ渡す画像 part。
+ * URL は provider が取得できる fully qualified URL または data URL を想定する。
+ */
+export interface ModelImageContentPart {
+  type: 'image';
+  imageUrl: string;
+  detail?: ModelImageDetail;
+}
+
+/**
+ * provider 非依存の message content part。
+ */
+export type ModelMessageContentPart =
+  | ModelTextContentPart
+  | ModelImageContentPart;
+
+/**
+ * モデルへそのまま渡せるメッセージ content。
+ * 既存のテキスト専用経路は string のまま扱い、画像を含む場合だけ part 配列にする。
+ */
+export type ModelMessageContent = string | readonly ModelMessageContentPart[];
+
+/**
+ * モデルへそのまま渡せる会話メッセージ。
  */
 export interface ModelMessage {
   role: ModelMessageRole;
-  content: string;
+  content: ModelMessageContent;
 }
 
 /**

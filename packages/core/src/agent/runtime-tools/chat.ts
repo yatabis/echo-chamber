@@ -52,6 +52,15 @@ export const readChatMessagesTool = new Tool(
           user: message.user,
           message: message.message,
           created_at: message.createdAt,
+          images: message.images.map((image) => ({
+            url: image.url,
+            filename: image.filename,
+            content_type: image.contentType,
+            width: image.width,
+            height: image.height,
+            size: image.size,
+            description: image.description,
+          })),
           reactions: message.reactions,
         })),
       };

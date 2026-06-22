@@ -148,6 +148,7 @@ describe('readChatMessagesTool', () => {
         user: 'user1',
         message: 'Hello',
         createdAt: '2日前 (2025年01月23日 13:56:07)',
+        images: [],
         reactions: [],
       },
     ]);
@@ -167,6 +168,60 @@ describe('readChatMessagesTool', () => {
           user: 'user1',
           message: 'Hello',
           created_at: '2日前 (2025年01月23日 13:56:07)',
+          images: [],
+          reactions: [],
+        },
+      ],
+    });
+  });
+
+  it('画像付きメッセージを返す', async () => {
+    mockedReadMessages.mockResolvedValue([
+      {
+        messageId: 'message-1',
+        user: 'user1',
+        message: 'Photo',
+        createdAt: '2日前 (2025年01月23日 13:56:07)',
+        images: [
+          {
+            url: 'https://cdn.discordapp.com/attachments/photo.png',
+            filename: 'photo.png',
+            contentType: 'image/png',
+            width: 640,
+            height: 480,
+            size: 2048,
+            description: 'whiteboard photo',
+          },
+        ],
+        reactions: [],
+      },
+    ]);
+
+    const result = await readChatMessagesTool.handler(
+      { channelKey: 'main', limit: 1 },
+      mockToolContext
+    );
+
+    expect(result).toEqual({
+      success: true,
+      channelKey: 'main',
+      messages: [
+        {
+          messageId: 'message-1',
+          user: 'user1',
+          message: 'Photo',
+          created_at: '2日前 (2025年01月23日 13:56:07)',
+          images: [
+            {
+              url: 'https://cdn.discordapp.com/attachments/photo.png',
+              filename: 'photo.png',
+              content_type: 'image/png',
+              width: 640,
+              height: 480,
+              size: 2048,
+              description: 'whiteboard photo',
+            },
+          ],
           reactions: [],
         },
       ],
@@ -180,6 +235,7 @@ describe('readChatMessagesTool', () => {
         user: 'user1',
         message: 'Hello with reactions',
         createdAt: '2日前 (2025年01月23日 13:56:07)',
+        images: [],
         reactions: [
           { emoji: '👍', me: false },
           { emoji: '😄', me: true },
@@ -201,6 +257,7 @@ describe('readChatMessagesTool', () => {
           user: 'user1',
           message: 'Hello with reactions',
           created_at: '2日前 (2025年01月23日 13:56:07)',
+          images: [],
           reactions: [
             { emoji: '👍', me: false },
             { emoji: '😄', me: true },

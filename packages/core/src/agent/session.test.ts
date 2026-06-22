@@ -571,6 +571,115 @@ describe('runAgentSession', () => {
     });
   });
 
+  it('read_chat_messages の画像添付を次ターンの vision input として渡す', async () => {
+    const toolOutput = JSON.stringify({
+      success: true,
+      channelKey: 'main',
+      messages: [
+        {
+          messageId: 'message-1',
+          user: 'alice',
+          message: 'Please check this.',
+          created_at: '2026年03月21日 10:00:00',
+          images: [
+            {
+              url: 'https://cdn.discordapp.com/attachments/photo.png',
+              filename: 'photo.png',
+              content_type: 'image/png',
+              width: 640,
+              height: 480,
+              size: 2048,
+              description: 'whiteboard photo',
+            },
+          ],
+          reactions: [],
+        },
+      ],
+    });
+    const generate = vi
+      .fn<ModelPort['generate']>()
+      .mockResolvedValueOnce({
+        output: [
+          {
+            type: 'tool_call',
+            callId: 'call-read',
+            toolName: 'read_chat_messages',
+            input: '{"channelKey":"main","limit":10}',
+          },
+        ],
+        usage: createUsage({ totalTokens: 10 }),
+        responseToken: 'resp-1',
+      })
+      .mockResolvedValueOnce({
+        output: [
+          {
+            type: 'tool_call',
+            callId: 'call-finish',
+            toolName: 'finish_thinking',
+            input: createFinishThinkingInput(),
+          },
+        ],
+        usage: createUsage({ totalTokens: 5 }),
+        responseToken: 'resp-2',
+      });
+
+    await runAgentSession({
+      model: { generate },
+      tools: [
+        {
+          name: 'read_chat_messages',
+          contract: createToolContract('read_chat_messages'),
+          execute: vi.fn().mockResolvedValue(toolOutput),
+        },
+        {
+          name: 'finish_thinking',
+          contract: createToolContract('finish_thinking'),
+          execute: vi.fn().mockResolvedValue('{"success":true}'),
+        },
+      ],
+      initialInput: [
+        {
+          role: 'developer',
+          content: 'test',
+        },
+      ],
+    });
+
+    expect(generate).toHaveBeenNthCalledWith(2, {
+      input: [
+        {
+          type: 'tool_result',
+          callId: 'call-read',
+          output: toolOutput,
+        },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: 'Discord image attachments from read_chat_messages (1/1).',
+            },
+            {
+              type: 'text',
+              text: 'Image 1, messageId=message-1, user=alice, created_at=2026年03月21日 10:00:00, filename=photo.png, content_type=image/png, size=640x480, description=whiteboard photo',
+            },
+            {
+              type: 'image',
+              imageUrl: 'https://cdn.discordapp.com/attachments/photo.png',
+              detail: 'auto',
+            },
+          ],
+        },
+      ],
+      tools: [
+        createToolContract('read_chat_messages'),
+        createToolContract('finish_thinking'),
+      ],
+      previousResponseToken: 'resp-1',
+      turnIndex: 2,
+    });
+  });
+
   it('finish_thinking を含む場合は tool 実行後に終了する', async () => {
     const generate = vi.fn<ModelPort['generate']>().mockResolvedValue({
       output: [

@@ -70,6 +70,7 @@ describe('createDiscordChatPort', () => {
         user: 'bob',
         message: 'older',
         createdAt: formatDatetimeForAgent(new Date('2025-01-25T23:59:00.000Z')),
+        images: [],
         reactions: [],
       },
       {
@@ -77,7 +78,74 @@ describe('createDiscordChatPort', () => {
         user: 'alice',
         message: 'latest',
         createdAt: formatDatetimeForAgent(new Date('2025-01-26T00:00:00.000Z')),
+        images: [],
         reactions: [{ emoji: '👍', me: true }],
+      },
+    ]);
+  });
+
+  it('Discord の画像添付を ChatPort の images に変換する', async () => {
+    vi.mocked(getChannelMessages).mockResolvedValue(
+      createDiscordMessagesResponse([
+        {
+          message: 'look',
+          user: 'alice',
+          timestamp: '2025-01-26T00:00:00.000Z',
+          attachments: [
+            {
+              filename: 'photo.png',
+              url: 'https://cdn.discordapp.com/attachments/photo.png',
+              contentType: 'image/png',
+              size: 2048,
+              width: 640,
+              height: 480,
+              description: 'whiteboard photo',
+            },
+            {
+              filename: 'notes.txt',
+              url: 'https://cdn.discordapp.com/attachments/notes.txt',
+              contentType: 'text/plain',
+            },
+            {
+              filename: 'unknown.bin',
+              url: 'https://cdn.discordapp.com/attachments/unknown.bin',
+              height: null,
+              width: null,
+            },
+          ],
+        },
+      ])
+    );
+
+    const port = createDiscordChatPort({
+      token: TOKEN,
+      channels: [
+        {
+          key: 'main',
+          displayName: 'メイン',
+          discordChannelId: CHANNEL_ID,
+        },
+      ],
+    });
+
+    await expect(port.readMessages('main', 1)).resolves.toEqual([
+      {
+        messageId: 'message-1',
+        user: 'alice',
+        message: 'look',
+        createdAt: formatDatetimeForAgent(new Date('2025-01-26T00:00:00.000Z')),
+        images: [
+          {
+            url: 'https://cdn.discordapp.com/attachments/photo.png',
+            filename: 'photo.png',
+            contentType: 'image/png',
+            width: 640,
+            height: 480,
+            size: 2048,
+            description: 'whiteboard photo',
+          },
+        ],
+        reactions: [],
       },
     ]);
   });

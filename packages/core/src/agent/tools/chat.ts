@@ -7,11 +7,22 @@ const chatMessageReactionSchema = z.object({
   me: z.boolean(),
 });
 
+const chatMessageImageSchema = z.object({
+  url: z.string(),
+  filename: z.string().nullable(),
+  content_type: z.string().nullable(),
+  width: z.number().nullable(),
+  height: z.number().nullable(),
+  size: z.number().nullable(),
+  description: z.string().nullable(),
+});
+
 const chatMessageSchema = z.object({
   messageId: z.string(),
   user: z.string(),
   message: z.string(),
   created_at: z.string(),
+  images: z.array(chatMessageImageSchema),
   reactions: z.array(chatMessageReactionSchema).optional(),
 });
 
@@ -43,7 +54,7 @@ export const checkNotificationsToolSpec = defineToolSpecification({
 export const readChatMessagesToolSpec = defineToolSpecification({
   name: 'read_chat_messages',
   description:
-    '指定したチャットチャンネルからチャットメッセージを読み取る。最新のメッセージをタイムスタンプの昇順で返す。会話の文脈を理解するために、十分な数のメッセージを取得するのが良い。取得したメッセージ数では状況を完全に把握できない場合は、より大きな制限値でこのツールを再度呼び出すことができる。',
+    '指定したチャットチャンネルからチャットメッセージを読み取る。最新のメッセージをタイムスタンプの昇順で返す。画像添付がある場合は images に画像メタデータを含め、画像そのものも次の model turn の vision input として接続される。会話の文脈を理解するために、十分な数のメッセージを取得するのが良い。取得したメッセージ数では状況を完全に把握できない場合は、より大きな制限値でこのツールを再度呼び出すことができる。',
   parameters: {
     channelKey: z
       .string()

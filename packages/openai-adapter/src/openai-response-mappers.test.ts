@@ -88,6 +88,38 @@ describe('toResponseInputItem', () => {
     });
   });
 
+  it('画像付き message を Responses API content part に変換する', () => {
+    const item: ModelInputItem = {
+      role: 'user',
+      content: [
+        {
+          type: 'text',
+          text: 'Please inspect this image.',
+        },
+        {
+          type: 'image',
+          imageUrl: 'https://example.com/image.png',
+          detail: 'high',
+        },
+      ],
+    };
+
+    expect(toResponseInputItem(item)).toEqual({
+      role: 'user',
+      content: [
+        {
+          type: 'input_text',
+          text: 'Please inspect this image.',
+        },
+        {
+          type: 'input_image',
+          image_url: 'https://example.com/image.png',
+          detail: 'high',
+        },
+      ],
+    });
+  });
+
   it('tool_call を function_call に変換する', () => {
     const item: ModelInputItem = {
       type: 'tool_call',

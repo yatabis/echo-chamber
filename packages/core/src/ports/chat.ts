@@ -9,12 +9,26 @@ export interface ChatMessageReaction {
   me: boolean;
 }
 
+/**
+ * チャットメッセージに添付された画像。
+ */
+export interface ChatMessageImage {
+  url: string;
+  filename: string | null;
+  contentType: string | null;
+  width: number | null;
+  height: number | null;
+  size: number | null;
+  description: string | null;
+}
+
 export interface ChatMessage {
   messageId: string;
   user: string;
   message: string;
   createdAt: string;
   reactions: ChatMessageReaction[];
+  images: ChatMessageImage[];
 }
 
 export interface ChatPort {
