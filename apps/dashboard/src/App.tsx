@@ -9,11 +9,15 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 
 import {
+  parseDashboardActionAnalysisResponse,
   parseDashboardInstancesResponse,
   parseDashboardSessionLogsResponse,
   parseEchoStatus,
 } from '@echo-chamber/contracts/dashboard/schemas';
 import type {
+  DashboardActionAnalysisPeriod,
+  DashboardActionAnalysisPeriodDays,
+  DashboardActionAnalysisResponse,
   DashboardInstanceSummary,
   DashboardInstancesResponse,
   DashboardRuntimeConfig,
@@ -63,7 +67,7 @@ interface UsageAnalysis {
   totals30: DashboardUsageBreakdownTotals | null;
 }
 
-type DetailTab = 'overview' | 'activity' | 'notes' | 'memories';
+type DetailTab = 'overview' | 'analysis' | 'activity' | 'notes' | 'memories';
 
 const DETAIL_TABS: {
   id: DetailTab;
@@ -72,6 +76,10 @@ const DETAIL_TABS: {
   {
     id: 'overview',
     label: 'Overview',
+  },
+  {
+    id: 'analysis',
+    label: 'Analysis',
   },
   {
     id: 'activity',
@@ -233,6 +241,27 @@ function formatRelativeDateTime(value: string | null): string {
   const amount = formatRelativeAmount(absMinutes);
 
   return diffMs >= 0 ? `in ${amount}` : `${amount} ago`;
+}
+
+/**
+ * ミリ秒 duration を dashboard 表示用に短く整形する。
+ */
+function formatDurationMs(value: number): string {
+  if (value < 1000) {
+    return `${Math.round(value)} ms`;
+  }
+  if (value < 60_000) {
+    return `${(value / 1000).toFixed(1)} sec`;
+  }
+
+  return `${(value / 60_000).toFixed(1)} min`;
+}
+
+/**
+ * 平均値を小数1桁までの短い数値として表示する。
+ */
+function formatAverage(value: number): string {
+  return value === 0 ? '0' : value.toFixed(1);
 }
 
 /**
@@ -1377,6 +1406,297 @@ function HealthSignals(props: {
 }
 
 /**
+ * action analysis の期間を選択する。
+ */
+function selectActionAnalysisPeriod(
+  analysis: DashboardActionAnalysisResponse,
+  days: DashboardActionAnalysisPeriodDays
+): DashboardActionAnalysisPeriod {
+  return (
+    analysis.periods.find((period) => period.days === days) ??
+    analysis.periods[0] ?? {
+      averageSessionDurationMs: 0,
+      averageTokensPerCompletedSession: 0,
+      completedSessionCount: 0,
+      days,
+      endArchiveDay: analysis.archiveDay,
+      eventCount: 0,
+      failedSessionCount: 0,
+      maxTurnsSessionCount: 0,
+      memorySearchAverageFinalResultCount: 0,
+      memorySearchCompletedCount: 0,
+      memorySearchFailedCount: 0,
+      memorySearchZeroResultCount: 0,
+      noToolCallTurns: 0,
+      sessionCount: 0,
+      startArchiveDay: analysis.archiveDay,
+      storeMemoryCompletedCount: 0,
+      toolCallCount: 0,
+      toolCompletedCount: 0,
+      toolFailedCount: 0,
+      toolFailureRate: 0,
+      topTools: [],
+      totalTokens: 0,
+      totalTurns: 0,
+      warningSessionCount: 0,
+    }
+  );
+}
+
+/**
+ * action analysis の期間ラベルを作る。
+ */
+function formatActionPeriodLabel(
+  period: DashboardActionAnalysisPeriod
+): string {
+  if (period.days === 1) {
+    return `Archive day ${period.endArchiveDay}`;
+  }
+
+  return `${period.startArchiveDay} - ${period.endArchiveDay}`;
+}
+
+/**
+ * 行動分析の上位 tool 一覧を描画する。
+ */
+function ToolAnalysisTable(props: {
+  tools: DashboardActionAnalysisPeriod['topTools'];
+}): JSX.Element {
+  if (props.tools.length === 0) {
+    return <p className="muted">No tool activity in this period.</p>;
+  }
+
+  return (
+    <div className="analysis-table" role="table" aria-label="Tool usage">
+      <div className="analysis-table-row analysis-table-head" role="row">
+        <span role="columnheader">Tool</span>
+        <span role="columnheader">Called</span>
+        <span role="columnheader">Done</span>
+        <span role="columnheader">Failed</span>
+        <span role="columnheader">Fail rate</span>
+      </div>
+      {props.tools.map((tool) => {
+        return (
+          <div key={tool.toolName} className="analysis-table-row" role="row">
+            <strong role="cell">{tool.toolName}</strong>
+            <span role="cell">{formatNumber(tool.calledCount)}</span>
+            <span role="cell">{formatNumber(tool.completedCount)}</span>
+            <span role="cell">{formatNumber(tool.failedCount)}</span>
+            <span role="cell">{formatPercent(tool.failureRate)}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * action analysis の期間切り替えボタン群を描画する。
+ */
+function ActionPeriodToggle(props: {
+  analysisDays: DashboardActionAnalysisPeriodDays;
+  setAnalysisDays(days: DashboardActionAnalysisPeriodDays): void;
+}): JSX.Element {
+  return (
+    <div className="usage-toggle">
+      {[1, 7, 30].map((days) => {
+        const active = props.analysisDays === days;
+
+        return (
+          <button
+            key={days}
+            type="button"
+            className={active ? 'primary' : 'secondary'}
+            onClick={() => {
+              props.setAnalysisDays(days as DashboardActionAnalysisPeriodDays);
+            }}
+          >
+            {days}d
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * action analysis の主要指標を summary grid で描画する。
+ */
+function ActionSummaryGrid(props: {
+  period: DashboardActionAnalysisPeriod;
+}): JSX.Element {
+  const { period } = props;
+  const noToolTurnRate =
+    period.totalTurns === 0 ? 0 : period.noToolCallTurns / period.totalTurns;
+
+  return (
+    <div className="summary-grid">
+      <div className="summary-metric">
+        <span>Sessions</span>
+        <strong>{formatNumber(period.sessionCount)}</strong>
+      </div>
+      <div className="summary-metric">
+        <span>Completed / failed</span>
+        <strong>
+          {formatNumber(period.completedSessionCount)} /{' '}
+          {formatNumber(period.failedSessionCount)}
+        </strong>
+      </div>
+      <div className="summary-metric">
+        <span>Avg duration</span>
+        <strong>{formatDurationMs(period.averageSessionDurationMs)}</strong>
+      </div>
+      <div className="summary-metric">
+        <span>Avg tokens/session</span>
+        <strong>
+          {formatNumber(Math.round(period.averageTokensPerCompletedSession))}
+        </strong>
+      </div>
+      <div className="summary-metric">
+        <span>Tool calls</span>
+        <strong>{formatNumber(period.toolCallCount)}</strong>
+      </div>
+      <div className="summary-metric">
+        <span>Tool failure rate</span>
+        <strong>{formatPercent(period.toolFailureRate)}</strong>
+      </div>
+      <div className="summary-metric">
+        <span>No-tool turns</span>
+        <strong>
+          {formatNumber(period.noToolCallTurns)} (
+          {formatPercent(noToolTurnRate)})
+        </strong>
+      </div>
+      <div className="summary-metric">
+        <span>Events analyzed</span>
+        <strong>{formatNumber(period.eventCount)}</strong>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * memory 関連の action analysis 指標を描画する。
+ */
+function MemoryAnalysisBlock(props: {
+  period: DashboardActionAnalysisPeriod;
+}): JSX.Element {
+  const { period } = props;
+  const memoryZeroResultRate =
+    period.memorySearchCompletedCount === 0
+      ? 0
+      : period.memorySearchZeroResultCount / period.memorySearchCompletedCount;
+
+  return (
+    <section className="analysis-block">
+      <h3>Memory</h3>
+      <div className="metric-list">
+        <p>
+          <span>Search completed</span>
+          <strong>{formatNumber(period.memorySearchCompletedCount)}</strong>
+        </p>
+        <p>
+          <span>Search failed</span>
+          <strong>{formatNumber(period.memorySearchFailedCount)}</strong>
+        </p>
+        <p>
+          <span>Zero-result rate</span>
+          <strong>{formatPercent(memoryZeroResultRate)}</strong>
+        </p>
+        <p>
+          <span>Avg results/search</span>
+          <strong>
+            {formatAverage(period.memorySearchAverageFinalResultCount)}
+          </strong>
+        </p>
+        <p>
+          <span>Store memory</span>
+          <strong>{formatNumber(period.storeMemoryCompletedCount)}</strong>
+        </p>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * session 関連の action analysis 指標を描画する。
+ */
+function SessionAnalysisBlock(props: {
+  period: DashboardActionAnalysisPeriod;
+}): JSX.Element {
+  const { period } = props;
+
+  return (
+    <section className="analysis-block">
+      <h3>Sessions</h3>
+      <div className="metric-list">
+        <p>
+          <span>Warning sessions</span>
+          <strong>{formatNumber(period.warningSessionCount)}</strong>
+        </p>
+        <p>
+          <span>Max-turn sessions</span>
+          <strong>{formatNumber(period.maxTurnsSessionCount)}</strong>
+        </p>
+        <p>
+          <span>Total turns</span>
+          <strong>{formatNumber(period.totalTurns)}</strong>
+        </p>
+        <p>
+          <span>Total tokens</span>
+          <strong>{formatNumber(period.totalTokens)}</strong>
+        </p>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * tool / memory / turn の行動分析を描画する。
+ */
+function ActionAnalysisSection(props: {
+  analysis: DashboardActionAnalysisResponse;
+  analysisDays: DashboardActionAnalysisPeriodDays;
+  setAnalysisDays(days: DashboardActionAnalysisPeriodDays): void;
+}): JSX.Element {
+  const period = selectActionAnalysisPeriod(props.analysis, props.analysisDays);
+
+  return (
+    <section className="card analysis-panel">
+      <div className="section-header">
+        <div>
+          <h2>Action Analysis</h2>
+          <p>{formatActionPeriodLabel(period)}</p>
+        </div>
+        <ActionPeriodToggle
+          analysisDays={props.analysisDays}
+          setAnalysisDays={(days): void => {
+            props.setAnalysisDays(days);
+          }}
+        />
+      </div>
+
+      <ActionSummaryGrid period={period} />
+
+      <div className="analysis-columns">
+        <MemoryAnalysisBlock period={period} />
+        <SessionAnalysisBlock period={period} />
+      </div>
+
+      <section className="analysis-block">
+        <div className="section-header">
+          <div>
+            <h3>Top Tools</h3>
+            <p>Most active tools in the selected period</p>
+          </div>
+        </div>
+        <ToolAnalysisTable tools={period.topTools} />
+      </section>
+    </section>
+  );
+}
+
+/**
  * 詳細画面のノート検索セクション。
  */
 function NotesSection(props: {
@@ -1922,10 +2242,13 @@ function DetailTabs(props: {
  */
 function DetailTabPanel(props: {
   activeTab: DetailTab;
+  actionAnalysis: DashboardActionAnalysisResponse;
+  analysisDays: DashboardActionAnalysisPeriodDays;
   archiveDay: string;
   noteQuery: string;
   notes: EchoStatus['notes'];
   sessionLogs: DashboardSessionLog[];
+  setAnalysisDays(days: DashboardActionAnalysisPeriodDays): void;
   setNoteQuery(value: string): void;
   setUsageDays(days: DashboardUsageDays): void;
   status: EchoStatus;
@@ -1947,6 +2270,18 @@ function DetailTabPanel(props: {
           />
           <KnowledgeInventory status={props.status} />
           <RuntimeContextPanel context={props.status.context} />
+        </div>
+      );
+    case 'analysis':
+      return (
+        <div className="stack" role="tabpanel">
+          <ActionAnalysisSection
+            analysis={props.actionAnalysis}
+            analysisDays={props.analysisDays}
+            setAnalysisDays={(days): void => {
+              props.setAnalysisDays(days);
+            }}
+          />
         </div>
       );
     case 'activity':
@@ -1984,8 +2319,11 @@ function DetailTabPanel(props: {
  * 詳細画面の読み込み完了後の情報セクション群を描画する。
  */
 function DashboardDetailContent(props: {
+  actionAnalysisResponse: DashboardActionAnalysisResponse;
+  analysisDays: DashboardActionAnalysisPeriodDays;
   noteQuery: string;
   sessionLogsResponse: DashboardSessionLogsResponse;
+  setAnalysisDays(days: DashboardActionAnalysisPeriodDays): void;
   setNoteQuery(value: string): void;
   setUsageDays(days: DashboardUsageDays): void;
   status: EchoStatus;
@@ -2016,6 +2354,8 @@ function DashboardDetailContent(props: {
       />
       <DetailTabPanel
         activeTab={activeTab}
+        actionAnalysis={props.actionAnalysisResponse}
+        analysisDays={props.analysisDays}
         archiveDay={props.sessionLogsResponse.archiveDay}
         sessionLogs={sessionLogs}
         status={props.status}
@@ -2023,6 +2363,9 @@ function DashboardDetailContent(props: {
         usageDays={props.usageDays}
         setUsageDays={(days): void => {
           props.setUsageDays(days);
+        }}
+        setAnalysisDays={(days): void => {
+          props.setAnalysisDays(days);
         }}
         notes={notes}
         noteQuery={props.noteQuery}
@@ -2042,10 +2385,14 @@ function DashboardDetailPage(): JSX.Element {
   const [status, setStatus] = useState<EchoStatus | null>(null);
   const [sessionLogsResponse, setSessionLogsResponse] =
     useState<DashboardSessionLogsResponse | null>(null);
+  const [actionAnalysisResponse, setActionAnalysisResponse] =
+    useState<DashboardActionAnalysisResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [noteQuery, setNoteQuery] = useState('');
   const [usageDays, setUsageDaysState] = useState<DashboardUsageDays>(7);
+  const [analysisDays, setAnalysisDaysState] =
+    useState<DashboardActionAnalysisPeriodDays>(7);
   const [refreshToken, setRefreshToken] = useState(0);
   const [lastLoadedAt, setLastLoadedAt] = useState<Date | null>(null);
 
@@ -2059,19 +2406,25 @@ function DashboardDetailPage(): JSX.Element {
       if (!isValidInstanceId(instanceId)) {
         setStatus(null);
         setSessionLogsResponse(null);
+        setActionAnalysisResponse(null);
         setError(`Invalid instance ID: ${instanceId}`);
         setLoading(false);
         return;
       }
 
       try {
-        const [statusPayload, sessionLogsPayload] = await Promise.all([
-          fetchDashboardJson(`/${instanceId}`, parseEchoStatus),
-          fetchDashboardJson(
-            `/${instanceId}/session-logs`,
-            parseDashboardSessionLogsResponse
-          ),
-        ]);
+        const [statusPayload, sessionLogsPayload, actionAnalysisPayload] =
+          await Promise.all([
+            fetchDashboardJson(`/${instanceId}`, parseEchoStatus),
+            fetchDashboardJson(
+              `/${instanceId}/session-logs`,
+              parseDashboardSessionLogsResponse
+            ),
+            fetchDashboardJson(
+              `/${instanceId}/action-analysis`,
+              parseDashboardActionAnalysisResponse
+            ),
+          ]);
 
         if (!active) {
           return;
@@ -2079,6 +2432,7 @@ function DashboardDetailPage(): JSX.Element {
 
         setStatus(statusPayload);
         setSessionLogsResponse(sessionLogsPayload);
+        setActionAnalysisResponse(actionAnalysisPayload);
         setLastLoadedAt(new Date());
       } catch (loadError) {
         if (!active) {
@@ -2087,6 +2441,7 @@ function DashboardDetailPage(): JSX.Element {
 
         setStatus(null);
         setSessionLogsResponse(null);
+        setActionAnalysisResponse(null);
         setError(formatLoadError(loadError, 'Failed to load instance'));
       } finally {
         if (active) {
@@ -2121,10 +2476,13 @@ function DashboardDetailPage(): JSX.Element {
         </div>
       ) : null}
 
-      {status !== null && sessionLogsResponse !== null ? (
+      {status !== null &&
+      sessionLogsResponse !== null &&
+      actionAnalysisResponse !== null ? (
         <DashboardDetailContent
           status={status}
           sessionLogsResponse={sessionLogsResponse}
+          actionAnalysisResponse={actionAnalysisResponse}
           noteQuery={noteQuery}
           setNoteQuery={(value): void => {
             setNoteQuery(value);
@@ -2132,6 +2490,10 @@ function DashboardDetailPage(): JSX.Element {
           usageDays={usageDays}
           setUsageDays={(days): void => {
             setUsageDaysState(days);
+          }}
+          analysisDays={analysisDays}
+          setAnalysisDays={(days): void => {
+            setAnalysisDaysState(days);
           }}
         />
       ) : null}

@@ -22,6 +22,8 @@ import { createToolExecutionContext } from './tool-context';
 
 import { Echo } from './index';
 
+import type { EchoEventArchiveRange } from './event-archive';
+
 const {
   mockEmbeddingService,
   mockExecutableTools,
@@ -215,6 +217,7 @@ function createUsage(totalTokens: number): Usage {
 }
 
 function getEventArchive(echo: Echo): {
+  getRecentEvents(input: { days: number; now?: Date }): EchoEventArchiveRange;
   getTodayEvents(): {
     archiveDay: string;
     events: DashboardEchoEvent[];
@@ -223,6 +226,10 @@ function getEventArchive(echo: Echo): {
   return (
     echo as unknown as {
       eventArchive: {
+        getRecentEvents(input: {
+          days: number;
+          now?: Date;
+        }): EchoEventArchiveRange;
         getTodayEvents(): {
           archiveDay: string;
           events: DashboardEchoEvent[];
@@ -396,6 +403,93 @@ describe('Echo session logs route', () => {
               title: 'Echo',
             },
           ],
+        },
+      ],
+    });
+    expect(body).not.toHaveProperty('events');
+  });
+});
+
+describe('Echo action analysis route', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('raw event ではなく period 別の行動分析を返す', async () => {
+    const env = createMockEnv();
+    const { storage } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+    vi.spyOn(
+      echo as unknown as {
+        ensureInitialized(instanceId: 'rin' | 'marie'): Promise<void>;
+      },
+      'ensureInitialized'
+    ).mockResolvedValue(undefined);
+    vi.spyOn(getEventArchive(echo), 'getRecentEvents').mockImplementation(
+      ({ days }) => ({
+        days,
+        startArchiveDay: days === 1 ? '2026-06-01' : '2026-05-26',
+        endArchiveDay: '2026-06-01',
+        events: [
+          {
+            id: `session-completed-${days}`,
+            archiveDay: '2026-06-01',
+            category: 'session',
+            createdAt: '2026-06-01T12:00:00.000Z',
+            payload: {
+              terminationReason: 'finish_thinking',
+              totalTokens: 100,
+            },
+            sessionId: 'session-1',
+            severity: 'info',
+            streams: ['thought', 'system', 'analysis'],
+            summary: 'thinking session completed',
+            type: 'session.completed',
+          },
+          {
+            id: `tool-completed-${days}`,
+            archiveDay: '2026-06-01',
+            category: 'tool',
+            createdAt: '2026-06-01T12:00:01.000Z',
+            payload: {
+              callId: 'call-1',
+              success: true,
+              toolName: 'search_memory',
+            },
+            sessionId: 'session-1',
+            severity: 'info',
+            streams: ['system', 'analysis'],
+            summary: 'search_memory completed',
+            type: 'tool.completed',
+          },
+        ],
+      })
+    );
+
+    const response = await echo.fetch(
+      new Request('http://example.com/rin/action-analysis')
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      periods: [
+        {
+          days: 1,
+          completedSessionCount: 1,
+          totalTokens: 100,
+          topTools: [
+            {
+              toolName: 'search_memory',
+              completedCount: 1,
+            },
+          ],
+        },
+        {
+          days: 7,
+        },
+        {
+          days: 30,
         },
       ],
     });

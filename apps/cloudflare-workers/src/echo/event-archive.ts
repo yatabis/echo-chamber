@@ -28,6 +28,13 @@ export interface EchoEventArchiveDay {
   events: DashboardEchoEvent[];
 }
 
+export interface EchoEventArchiveRange {
+  days: number;
+  startArchiveDay: string;
+  endArchiveDay: string;
+  events: DashboardEchoEvent[];
+}
+
 /**
  * JST 03:00 を境界にした event archive day を返す。
  *
@@ -115,6 +122,28 @@ export class SqliteEchoEventArchive implements EchoEventArchive {
   }
 
   /**
+   * 指定日数分の archive day に含まれる raw event 一覧を返す。
+   *
+   * @param input 基準時刻と集計対象日数
+   * @returns archive day range と raw event list
+   */
+  getRecentEvents(input: { now?: Date; days: number }): EchoEventArchiveRange {
+    const now = input.now ?? new Date();
+    const days = Math.max(1, Math.floor(input.days));
+    const endArchiveDay = getEventArchiveDay(now);
+    const startArchiveDay = getEventArchiveDay(
+      new Date(now.getTime() - (days - 1) * DAY_MS)
+    );
+
+    return {
+      days,
+      startArchiveDay,
+      endArchiveDay,
+      events: this.getEventsByArchiveDayRange(startArchiveDay, endArchiveDay),
+    };
+  }
+
+  /**
    * 保持期間を超えた Echo event を SQLite から削除する。
    *
    * @param input 基準時刻
@@ -178,6 +207,29 @@ export class SqliteEchoEventArchive implements EchoEventArchive {
          WHERE archive_day = ?
          ORDER BY created_at_ms DESC`,
         archiveDay
+      )
+      .toArray()
+      .map(rowToDashboardEvent);
+  }
+
+  /**
+   * 指定 archive day 範囲の event を dashboard 用に取得する。
+   */
+  private getEventsByArchiveDayRange(
+    startArchiveDay: string,
+    endArchiveDay: string
+  ): DashboardEchoEvent[] {
+    this.ensureSchema();
+
+    return this.sql
+      .exec<StoredEchoEventRow>(
+        `SELECT *
+         FROM echo_events
+         WHERE archive_day >= ?
+           AND archive_day <= ?
+         ORDER BY created_at_ms DESC`,
+        startArchiveDay,
+        endArchiveDay
       )
       .toArray()
       .map(rowToDashboardEvent);

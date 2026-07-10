@@ -125,4 +125,28 @@ describe('SqliteEchoEventArchive', () => {
       '2026-03-05',
     ]);
   });
+
+  it('指定日数分の archive day 範囲で Echo event を取得する', () => {
+    const { exec, sql } = createMockSql();
+    const archive = new SqliteEchoEventArchive({
+      sql,
+    });
+
+    const result = archive.getRecentEvents({
+      now: new Date('2026-06-02T18:00:00.000Z'),
+      days: 7,
+    });
+
+    expect(result).toEqual({
+      days: 7,
+      startArchiveDay: '2026-05-28',
+      endArchiveDay: '2026-06-03',
+      events: [],
+    });
+    expect(exec.mock.calls).toContainEqual([
+      expect.stringContaining('WHERE archive_day >= ?'),
+      '2026-05-28',
+      '2026-06-03',
+    ]);
+  });
 });

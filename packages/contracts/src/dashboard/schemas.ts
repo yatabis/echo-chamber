@@ -196,6 +196,71 @@ export const dashboardSessionLogsResponseSchema = z
   .strict();
 
 /**
+ * Dashboard action analysis が集計する期間。
+ */
+export const dashboardActionAnalysisPeriodDaysSchema = z.union([
+  z.literal(1),
+  z.literal(7),
+  z.literal(30),
+]);
+
+/**
+ * Dashboard action analysis に返す tool 別集計。
+ */
+export const dashboardActionAnalysisToolSummarySchema = z
+  .object({
+    toolName: z.string(),
+    calledCount: z.number().int().nonnegative(),
+    completedCount: z.number().int().nonnegative(),
+    failedCount: z.number().int().nonnegative(),
+    failureRate: finiteNumber,
+  })
+  .strict();
+
+/**
+ * Dashboard action analysis に返す期間別の行動集計。
+ */
+export const dashboardActionAnalysisPeriodSchema = z
+  .object({
+    days: dashboardActionAnalysisPeriodDaysSchema,
+    startArchiveDay: z.string(),
+    endArchiveDay: z.string(),
+    eventCount: z.number().int().nonnegative(),
+    sessionCount: z.number().int().nonnegative(),
+    completedSessionCount: z.number().int().nonnegative(),
+    failedSessionCount: z.number().int().nonnegative(),
+    warningSessionCount: z.number().int().nonnegative(),
+    maxTurnsSessionCount: z.number().int().nonnegative(),
+    totalTokens: finiteNumber,
+    averageTokensPerCompletedSession: finiteNumber,
+    averageSessionDurationMs: finiteNumber,
+    totalTurns: z.number().int().nonnegative(),
+    noToolCallTurns: z.number().int().nonnegative(),
+    toolCallCount: z.number().int().nonnegative(),
+    toolCompletedCount: z.number().int().nonnegative(),
+    toolFailedCount: z.number().int().nonnegative(),
+    toolFailureRate: finiteNumber,
+    topTools: z.array(dashboardActionAnalysisToolSummarySchema),
+    memorySearchCompletedCount: z.number().int().nonnegative(),
+    memorySearchFailedCount: z.number().int().nonnegative(),
+    memorySearchZeroResultCount: z.number().int().nonnegative(),
+    memorySearchAverageFinalResultCount: finiteNumber,
+    storeMemoryCompletedCount: z.number().int().nonnegative(),
+  })
+  .strict();
+
+/**
+ * `/\:instanceId/action-analysis` の payload。
+ */
+export const dashboardActionAnalysisResponseSchema = z
+  .object({
+    archiveDay: z.string(),
+    generatedAt: z.string(),
+    periods: z.array(dashboardActionAnalysisPeriodSchema),
+  })
+  .strict();
+
+/**
  * Dashboard に返す note payload。
  */
 export const noteSchema = z
@@ -289,6 +354,15 @@ export function parseDashboardSessionLogsResponse(
   value: unknown
 ): z.infer<typeof dashboardSessionLogsResponseSchema> {
   return dashboardSessionLogsResponseSchema.parse(value);
+}
+
+/**
+ * `/\:instanceId/action-analysis` の unknown payload を契約型へ変換する。
+ */
+export function parseDashboardActionAnalysisResponse(
+  value: unknown
+): z.infer<typeof dashboardActionAnalysisResponseSchema> {
+  return dashboardActionAnalysisResponseSchema.parse(value);
 }
 
 /**

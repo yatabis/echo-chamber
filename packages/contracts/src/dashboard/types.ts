@@ -2,6 +2,10 @@ import type {
   dashboardActivityKindSchema,
   dashboardActivitySchema,
   dashboardActivityToneSchema,
+  dashboardActionAnalysisPeriodDaysSchema,
+  dashboardActionAnalysisPeriodSchema,
+  dashboardActionAnalysisResponseSchema,
+  dashboardActionAnalysisToolSummarySchema,
   dashboardContextSnapshotSchema,
   dashboardInstanceSummarySchema,
   dashboardEchoEventSchema,
@@ -59,6 +63,18 @@ export type DashboardActivity = z.infer<typeof dashboardActivitySchema>;
 export type DashboardSessionLog = z.infer<typeof dashboardSessionLogSchema>;
 export type DashboardSessionLogsResponse = z.infer<
   typeof dashboardSessionLogsResponseSchema
+>;
+export type DashboardActionAnalysisPeriodDays = z.infer<
+  typeof dashboardActionAnalysisPeriodDaysSchema
+>;
+export type DashboardActionAnalysisToolSummary = z.infer<
+  typeof dashboardActionAnalysisToolSummarySchema
+>;
+export type DashboardActionAnalysisPeriod = z.infer<
+  typeof dashboardActionAnalysisPeriodSchema
+>;
+export type DashboardActionAnalysisResponse = z.infer<
+  typeof dashboardActionAnalysisResponseSchema
 >;
 export type DashboardInstanceSummary = z.infer<
   typeof dashboardInstanceSummarySchema

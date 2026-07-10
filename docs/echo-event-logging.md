@@ -243,6 +243,8 @@ Dashboard は Cloudflare Observability の代替ではない。raw event stream 
 
 Dashboard API の `/:instanceId/session-logs` は raw event を返さない。Worker 側で保存済み event から session log view model を組み立てて `sessionLogs` として返す。Dashboard は session log を新しい順に並べ、各 session log を折りたためる activity として描画する。
 
+Dashboard API の `/:instanceId/action-analysis` も raw event を返さない。Worker 側で 1 / 7 / 30 archive day 分の保存済み event を集計し、session 数、tool 使用回数、tool failure rate、no-tool turn、memory search の結果件数などの period summary として返す。raw tool input/output や model output 本文は action analysis response に含めない。
+
 #### Dashboard session log の責務
 
 Dashboard session log は event stream の見た目を変えたものではない。Echo の 1 session を人間が読み返すための read model である。
@@ -265,6 +267,21 @@ Dashboard session log は次の問いには答えない。
 - session 外の状態遷移や運用イベントがどう発生したか
 
 これらは Cloudflare Observability、DO SQLite に保持された raw event、または将来の分析基盤で見る。
+
+#### Dashboard action analysis の責務
+
+Dashboard action analysis は、Echo が実際にどの tool をどの程度使い、どこで失敗し、memory search がどれだけ効いているかを短い期間別サマリーとして読むための read model である。
+
+action analysis は次の問いに答える。
+
+- 1 / 7 / 30 archive day で session が何回走ったか
+- tool call が何回あり、どの tool が多く使われているか
+- tool failure rate がどの程度か
+- no-tool turn がどれだけ発生したか
+- memory search が何回成功・失敗し、0件結果がどれだけあったか
+- `store_memory` がどれだけ実行されたか
+
+action analysis は raw event の詳細確認ではない。詳細調査は session log、Cloudflare Observability、または DO SQLite の raw event を使う。
 
 #### 変換方針
 

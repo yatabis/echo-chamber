@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import { MemorySystem } from '@echo-chamber/cloudflare-runtime/memory-system';
 import { NoteSystem } from '@echo-chamber/cloudflare-runtime/note-system';
 import {
+  parseDashboardActionAnalysisResponse,
   parseDashboardInstanceSummary,
   parseDashboardSessionLogsResponse,
   parseEchoStatus,
@@ -69,8 +70,12 @@ import { createEmbeddingService } from '../embedding/create-embedding-service';
 import { createRerankingService } from '../reranking/create-reranking-service';
 import { createCloudflareEchoEventPort } from '../utils/echo-event';
 
+import {
+  DASHBOARD_ACTION_ANALYSIS_PERIOD_DAYS,
+  buildDashboardActionAnalysisResponse,
+} from './dashboard-action-analysis';
 import { buildDashboardSessionLogsResponse } from './dashboard-activities';
-import { SqliteEchoEventArchive } from './event-archive';
+import { SqliteEchoEventArchive, getEventArchiveDay } from './event-archive';
 import { createToolExecutionContext } from './tool-context';
 
 async function fetchUnreadMessageCounts(
@@ -206,6 +211,23 @@ export class Echo extends DurableObject<Env> {
             buildDashboardSessionLogsResponse(
               this.eventArchive.getTodayEvents()
             )
+          )
+        );
+      })
+      .get('/action-analysis', (c) => {
+        const now = new Date();
+        return c.json(
+          parseDashboardActionAnalysisResponse(
+            buildDashboardActionAnalysisResponse({
+              archiveDay: getEventArchiveDay(now),
+              generatedAt: now.toISOString(),
+              periods: DASHBOARD_ACTION_ANALYSIS_PERIOD_DAYS.map((days) =>
+                this.eventArchive.getRecentEvents({
+                  days,
+                  now,
+                })
+              ),
+            })
           )
         );
       })

@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  dashboardActionAnalysisResponseSchema,
   dashboardInstancesResponseSchema,
+  dashboardSessionLogsResponseSchema,
   echoStatusSchema,
+  parseDashboardActionAnalysisResponse,
   parseDashboardInstancesResponse,
   parseDashboardSessionLogsResponse,
   parseEchoStatus,
-  dashboardSessionLogsResponseSchema,
 } from './schemas';
 
 describe('dashboard contract schemas', () => {
@@ -102,6 +104,89 @@ describe('dashboard contract schemas', () => {
             startedAt: '2026-06-01T12:00:00.000Z',
             title: 'Session session-1',
             warningCount: 0,
+          },
+        ],
+      });
+    }).toThrow();
+  });
+
+  it('parses /:instanceId/action-analysis payload', () => {
+    const payload = parseDashboardActionAnalysisResponse({
+      archiveDay: '2026-06-01',
+      generatedAt: '2026-06-01T12:00:00.000Z',
+      periods: [
+        {
+          days: 7,
+          startArchiveDay: '2026-05-26',
+          endArchiveDay: '2026-06-01',
+          eventCount: 20,
+          sessionCount: 3,
+          completedSessionCount: 2,
+          failedSessionCount: 1,
+          warningSessionCount: 1,
+          maxTurnsSessionCount: 1,
+          totalTokens: 1200,
+          averageTokensPerCompletedSession: 600,
+          averageSessionDurationMs: 2500,
+          totalTurns: 6,
+          noToolCallTurns: 1,
+          toolCallCount: 8,
+          toolCompletedCount: 7,
+          toolFailedCount: 1,
+          toolFailureRate: 0.125,
+          topTools: [
+            {
+              toolName: 'search_memory',
+              calledCount: 3,
+              completedCount: 3,
+              failedCount: 0,
+              failureRate: 0,
+            },
+          ],
+          memorySearchCompletedCount: 2,
+          memorySearchFailedCount: 1,
+          memorySearchZeroResultCount: 1,
+          memorySearchAverageFinalResultCount: 1.5,
+          storeMemoryCompletedCount: 1,
+        },
+      ],
+    });
+
+    expect(payload.periods[0]?.topTools[0]?.toolName).toBe('search_memory');
+    expect(payload.periods[0]?.toolFailureRate).toBe(0.125);
+  });
+
+  it('rejects invalid /:instanceId/action-analysis period', () => {
+    expect(() => {
+      dashboardActionAnalysisResponseSchema.parse({
+        archiveDay: '2026-06-01',
+        generatedAt: '2026-06-01T12:00:00.000Z',
+        periods: [
+          {
+            days: 14,
+            startArchiveDay: '2026-05-19',
+            endArchiveDay: '2026-06-01',
+            eventCount: 0,
+            sessionCount: 0,
+            completedSessionCount: 0,
+            failedSessionCount: 0,
+            warningSessionCount: 0,
+            maxTurnsSessionCount: 0,
+            totalTokens: 0,
+            averageTokensPerCompletedSession: 0,
+            averageSessionDurationMs: 0,
+            totalTurns: 0,
+            noToolCallTurns: 0,
+            toolCallCount: 0,
+            toolCompletedCount: 0,
+            toolFailedCount: 0,
+            toolFailureRate: 0,
+            topTools: [],
+            memorySearchCompletedCount: 0,
+            memorySearchFailedCount: 0,
+            memorySearchZeroResultCount: 0,
+            memorySearchAverageFinalResultCount: 0,
+            storeMemoryCompletedCount: 0,
           },
         ],
       });
