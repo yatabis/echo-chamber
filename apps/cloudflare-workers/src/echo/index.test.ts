@@ -209,6 +209,7 @@ function createMockEnv(): Env {
 function createUsage(totalTokens: number): Usage {
   return {
     cached_input_tokens: 0,
+    cache_write_input_tokens: 0,
     uncached_input_tokens: 0,
     total_input_tokens: 0,
     output_tokens: 0,
@@ -219,6 +220,7 @@ function createUsage(totalTokens: number): Usage {
         provider: 'openai',
         model: 'gpt-5.5',
         cached_input_tokens: 0,
+        cache_write_input_tokens: 0,
         uncached_input_tokens: 0,
         total_input_tokens: 0,
         output_tokens: 0,
@@ -900,6 +902,7 @@ describe('Echo context storage', () => {
       context,
       usage: {
         cachedInputTokens: 0,
+        cacheWriteInputTokens: 0,
         uncachedInputTokens: 0,
         totalInputTokens: 0,
         outputTokens: 0,
@@ -984,6 +987,7 @@ describe('Echo next_wake_at storage', () => {
       nextWakeAt,
       usage: {
         cachedInputTokens: 0,
+        cacheWriteInputTokens: 0,
         uncachedInputTokens: 0,
         totalInputTokens: 0,
         outputTokens: 0,
@@ -1044,6 +1048,7 @@ describe('Echo next_wake_at storage', () => {
       nextWakeAt: null,
       usage: {
         cachedInputTokens: 0,
+        cacheWriteInputTokens: 0,
         uncachedInputTokens: 0,
         totalInputTokens: 0,
         outputTokens: 0,

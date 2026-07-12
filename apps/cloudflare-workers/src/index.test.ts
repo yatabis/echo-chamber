@@ -26,7 +26,7 @@ const rinRuntime = {
 const marieRuntime = {
   mainLlm: {
     provider: 'openai',
-    model: 'gpt-5.4-mini',
+    model: 'gpt-5.6-luna',
   },
   tokenLimits: {
     dailyHardLimit: 2_500_000,

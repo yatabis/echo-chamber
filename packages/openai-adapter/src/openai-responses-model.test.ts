@@ -112,7 +112,7 @@ describe('OpenAIResponsesModel', () => {
             output: '{"success":true}',
           },
         ],
-        model: 'gpt-5.5',
+        model: 'gpt-5.6',
         parallel_tool_calls: true,
         previous_response_id: 'response_prev',
         reasoning: {
@@ -141,7 +141,7 @@ describe('OpenAIResponsesModel', () => {
       summary: 'Response usage information is undefined',
       payload: {
         provider: 'openai.responses',
-        model: 'gpt-5.5',
+        model: 'gpt-5.6',
         turnIndex: undefined,
         code: 'missing_usage',
       },
@@ -157,7 +157,10 @@ describe('OpenAIResponsesModel', () => {
       output: [],
       usage: {
         input_tokens: 0,
-        input_tokens_details: { cached_tokens: 0 },
+        input_tokens_details: {
+          cached_tokens: 0,
+          cache_write_tokens: 0,
+        },
         output_tokens: 0,
         output_tokens_details: { reasoning_tokens: 0 },
         total_tokens: 0,
@@ -196,7 +199,10 @@ describe('OpenAIResponsesModel', () => {
       output: [],
       usage: {
         input_tokens: 0,
-        input_tokens_details: { cached_tokens: 0 },
+        input_tokens_details: {
+          cached_tokens: 0,
+          cache_write_tokens: 0,
+        },
         output_tokens: 0,
         output_tokens_details: { reasoning_tokens: 0 },
         total_tokens: 0,
@@ -249,7 +255,10 @@ describe('OpenAIResponsesModel', () => {
       ],
       usage: {
         input_tokens: 10,
-        input_tokens_details: { cached_tokens: 4 },
+        input_tokens_details: {
+          cached_tokens: 4,
+          cache_write_tokens: 2,
+        },
         output_tokens: 7,
         output_tokens_details: { reasoning_tokens: 2 },
         total_tokens: 17,
@@ -283,7 +292,8 @@ describe('OpenAIResponsesModel', () => {
       ],
       usage: {
         cachedInputTokens: 4,
-        uncachedInputTokens: 6,
+        cacheWriteInputTokens: 2,
+        uncachedInputTokens: 4,
         totalInputTokens: 10,
         outputTokens: 7,
         reasoningTokens: 2,
@@ -301,7 +311,7 @@ describe('OpenAIResponsesModel', () => {
       streams: ['thought', 'analysis'],
       payload: {
         provider: 'openai.responses',
-        model: 'gpt-5.5',
+        model: 'gpt-5.6',
         turnIndex: 2,
         content: '*thinking: Thinking complete*',
       },
@@ -317,7 +327,7 @@ describe('OpenAIResponsesModel', () => {
       streams: ['analysis'],
       payload: {
         provider: 'openai.responses',
-        model: 'gpt-5.5',
+        model: 'gpt-5.6',
         turnIndex: 2,
       },
     });
@@ -345,6 +355,7 @@ describe('OpenAIResponsesModel', () => {
 
     expect(response.usage).toEqual({
       cachedInputTokens: 0,
+      cacheWriteInputTokens: 0,
       uncachedInputTokens: 0,
       totalInputTokens: 0,
       outputTokens: 0,
@@ -380,7 +391,10 @@ describe('OpenAIResponsesModel', () => {
       ],
       usage: {
         input_tokens: 1,
-        input_tokens_details: { cached_tokens: 0 },
+        input_tokens_details: {
+          cached_tokens: 0,
+          cache_write_tokens: 0,
+        },
         output_tokens: 2,
         output_tokens_details: { reasoning_tokens: 1 },
         total_tokens: 3,

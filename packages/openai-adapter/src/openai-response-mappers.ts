@@ -25,7 +25,10 @@ export interface FunctionToolDefinition {
 
 const EMPTY_RESPONSE_USAGE: ResponseUsage = {
   input_tokens: 0,
-  input_tokens_details: { cached_tokens: 0 },
+  input_tokens_details: {
+    cached_tokens: 0,
+    cache_write_tokens: 0,
+  },
   output_tokens: 0,
   output_tokens_details: { reasoning_tokens: 0 },
   total_tokens: 0,
@@ -146,11 +149,15 @@ function toResponseInputMessageContent(
 export function toModelUsage(usage: ResponseUsage | undefined): ModelUsage {
   const safeUsage = usage ?? EMPTY_RESPONSE_USAGE;
   const cachedInputTokens = safeUsage.input_tokens_details.cached_tokens;
+  const cacheWriteInputTokens =
+    safeUsage.input_tokens_details.cache_write_tokens;
   const totalInputTokens = safeUsage.input_tokens;
 
   return {
     cachedInputTokens,
-    uncachedInputTokens: totalInputTokens - cachedInputTokens,
+    cacheWriteInputTokens,
+    uncachedInputTokens:
+      totalInputTokens - cachedInputTokens - cacheWriteInputTokens,
     totalInputTokens,
     outputTokens: safeUsage.output_tokens,
     reasoningTokens: safeUsage.output_tokens_details.reasoning_tokens,

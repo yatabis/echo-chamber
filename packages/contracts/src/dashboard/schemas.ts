@@ -27,6 +27,7 @@ export const dashboardSummaryStateSchema = z.union([
 export const tokenUsageSchema = z
   .object({
     cached_input_tokens: finiteNumber,
+    cache_write_input_tokens: finiteNumber,
     uncached_input_tokens: finiteNumber,
     total_input_tokens: finiteNumber,
     output_tokens: finiteNumber,

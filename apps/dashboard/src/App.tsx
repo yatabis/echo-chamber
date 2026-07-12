@@ -378,6 +378,7 @@ function findPeakUsagePoint(
     },
     series[0] ?? {
       cachedInputTokens: 0,
+      cacheWriteInputTokens: 0,
       dateKey: '-',
       normalOutputTokens: 0,
       reasoningOutputTokens: 0,
@@ -431,6 +432,7 @@ const USAGE_SEGMENTS: {
   key: keyof Pick<
     DashboardUsageStackedPoint,
     | 'cachedInputTokens'
+    | 'cacheWriteInputTokens'
     | 'uncachedInputTokens'
     | 'normalOutputTokens'
     | 'reasoningOutputTokens'
@@ -440,8 +442,13 @@ const USAGE_SEGMENTS: {
 }[] = [
   {
     key: 'cachedInputTokens',
-    label: 'Cached input',
+    label: 'Cache read',
     className: 'usage-segment-cached',
+  },
+  {
+    key: 'cacheWriteInputTokens',
+    label: 'Cache write',
+    className: 'usage-segment-cache-write',
   },
   {
     key: 'uncachedInputTokens',
@@ -630,10 +637,14 @@ function UsageMetricsPanel(props: {
       </article>
 
       <article className="card usage-metric-card">
-        <h3>Cache / Uncached (input)</h3>
+        <h3>Input cache breakdown</h3>
         <p>
-          Cached: {formatPercent(ratios.cacheRateInInput)} (
+          Cache read: {formatPercent(ratios.cacheRateInInput)} (
           {formatNumber(totals.cachedInputTokens)})
+        </p>
+        <p>
+          Cache write: {formatPercent(ratios.cacheWriteRateInInput)} (
+          {formatNumber(totals.cacheWriteInputTokens)})
         </p>
         <p>
           Uncached: {formatPercent(ratios.uncachedRateInInput)} (

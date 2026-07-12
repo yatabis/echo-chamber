@@ -59,6 +59,7 @@ export interface AgentSessionResult {
  */
 export const ZERO_MODEL_USAGE: ModelUsage = {
   cachedInputTokens: 0,
+  cacheWriteInputTokens: 0,
   uncachedInputTokens: 0,
   totalInputTokens: 0,
   outputTokens: 0,
@@ -89,6 +90,8 @@ export function accumulateModelUsage(
 ): ModelUsage {
   return {
     cachedInputTokens: total.cachedInputTokens + additional.cachedInputTokens,
+    cacheWriteInputTokens:
+      total.cacheWriteInputTokens + additional.cacheWriteInputTokens,
     uncachedInputTokens:
       total.uncachedInputTokens + additional.uncachedInputTokens,
     totalInputTokens: total.totalInputTokens + additional.totalInputTokens,

@@ -341,6 +341,7 @@ describe('dashboard contract schemas', () => {
       usage: {
         '2026-03-19': {
           cached_input_tokens: 10,
+          cache_write_input_tokens: 0,
           uncached_input_tokens: 20,
           total_input_tokens: 30,
           output_tokens: 5,
@@ -351,6 +352,7 @@ describe('dashboard contract schemas', () => {
               provider: 'openai',
               model: 'gpt-5',
               cached_input_tokens: 10,
+              cache_write_input_tokens: 0,
               uncached_input_tokens: 20,
               total_input_tokens: 30,
               output_tokens: 5,
@@ -394,6 +396,7 @@ describe('dashboard contract schemas', () => {
         usage: {
           '2026-03-19': {
             cached_input_tokens: 10,
+            cache_write_input_tokens: 0,
             uncached_input_tokens: 20,
             total_input_tokens: 30,
             output_tokens: 5,
@@ -404,6 +407,7 @@ describe('dashboard contract schemas', () => {
                 provider: 'openai',
                 model: 'gpt-5',
                 cached_input_tokens: 10,
+                cache_write_input_tokens: 0,
                 uncached_input_tokens: 20,
                 total_input_tokens: 30,
                 output_tokens: 5,

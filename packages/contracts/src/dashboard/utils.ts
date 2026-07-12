@@ -23,6 +23,7 @@ const TOKENS_PER_MILLION = 1_000_000;
 interface ModelPricing {
   inputPerMillionUsd: number;
   cachedInputPerMillionUsd: number | null;
+  cacheWriteInputPerMillionUsd: number | null;
   outputPerMillionUsd: number;
 }
 
@@ -35,69 +36,106 @@ interface UsageCostEstimate {
 }
 
 const OPENAI_MODEL_PRICING: Record<string, ModelPricing> = {
+  'gpt-5.6': {
+    inputPerMillionUsd: 5,
+    cachedInputPerMillionUsd: 0.5,
+    cacheWriteInputPerMillionUsd: 6.25,
+    outputPerMillionUsd: 30,
+  },
+  'gpt-5.6-sol': {
+    inputPerMillionUsd: 5,
+    cachedInputPerMillionUsd: 0.5,
+    cacheWriteInputPerMillionUsd: 6.25,
+    outputPerMillionUsd: 30,
+  },
+  'gpt-5.6-terra': {
+    inputPerMillionUsd: 2.5,
+    cachedInputPerMillionUsd: 0.25,
+    cacheWriteInputPerMillionUsd: 3.125,
+    outputPerMillionUsd: 15,
+  },
+  'gpt-5.6-luna': {
+    inputPerMillionUsd: 1,
+    cachedInputPerMillionUsd: 0.1,
+    cacheWriteInputPerMillionUsd: 1.25,
+    outputPerMillionUsd: 6,
+  },
   'gpt-5.5': {
     inputPerMillionUsd: 5,
     cachedInputPerMillionUsd: 0.5,
+    cacheWriteInputPerMillionUsd: null,
     outputPerMillionUsd: 30,
   },
   'gpt-5.4': {
     inputPerMillionUsd: 2.5,
     cachedInputPerMillionUsd: 0.25,
+    cacheWriteInputPerMillionUsd: null,
     outputPerMillionUsd: 15,
   },
   'gpt-5.4-mini': {
     inputPerMillionUsd: 0.75,
     cachedInputPerMillionUsd: 0.075,
+    cacheWriteInputPerMillionUsd: null,
     outputPerMillionUsd: 4.5,
   },
   'gpt-5.2': {
     inputPerMillionUsd: 1.75,
     cachedInputPerMillionUsd: 0.175,
+    cacheWriteInputPerMillionUsd: null,
     outputPerMillionUsd: 14,
   },
   'gpt-5.1': {
     inputPerMillionUsd: 1.25,
     cachedInputPerMillionUsd: 0.125,
+    cacheWriteInputPerMillionUsd: null,
     outputPerMillionUsd: 10,
   },
   'gpt-5': {
     inputPerMillionUsd: 1.25,
     cachedInputPerMillionUsd: 0.125,
+    cacheWriteInputPerMillionUsd: null,
     outputPerMillionUsd: 10,
   },
   'gpt-5-mini': {
     inputPerMillionUsd: 0.25,
     cachedInputPerMillionUsd: 0.025,
+    cacheWriteInputPerMillionUsd: null,
     outputPerMillionUsd: 2,
   },
   'gpt-5-nano': {
     inputPerMillionUsd: 0.05,
     cachedInputPerMillionUsd: 0.005,
+    cacheWriteInputPerMillionUsd: null,
     outputPerMillionUsd: 0.4,
   },
   'gpt-4.1': {
     inputPerMillionUsd: 2,
     cachedInputPerMillionUsd: 0.5,
+    cacheWriteInputPerMillionUsd: null,
     outputPerMillionUsd: 8,
   },
   'gpt-4.1-mini': {
     inputPerMillionUsd: 0.4,
     cachedInputPerMillionUsd: 0.1,
+    cacheWriteInputPerMillionUsd: null,
     outputPerMillionUsd: 1.6,
   },
   'gpt-4.1-nano': {
     inputPerMillionUsd: 0.1,
     cachedInputPerMillionUsd: 0.025,
+    cacheWriteInputPerMillionUsd: null,
     outputPerMillionUsd: 0.4,
   },
   'gpt-4o': {
     inputPerMillionUsd: 2.5,
     cachedInputPerMillionUsd: 1.25,
+    cacheWriteInputPerMillionUsd: null,
     outputPerMillionUsd: 10,
   },
   'gpt-4o-mini': {
     inputPerMillionUsd: 0.15,
     cachedInputPerMillionUsd: 0.075,
+    cacheWriteInputPerMillionUsd: null,
     outputPerMillionUsd: 0.6,
   },
 };
@@ -142,6 +180,7 @@ function assertValidTokenUsage(
 ): void {
   const numericFields: [string, number][] = [
     ['cached_input_tokens', usage.cached_input_tokens],
+    ['cache_write_input_tokens', usage.cache_write_input_tokens],
     ['uncached_input_tokens', usage.uncached_input_tokens],
     ['total_input_tokens', usage.total_input_tokens],
     ['output_tokens', usage.output_tokens],
@@ -169,7 +208,9 @@ function assertValidTokenUsage(
   }
 
   if (
-    usage.cached_input_tokens + usage.uncached_input_tokens !==
+    usage.cached_input_tokens +
+      usage.cache_write_input_tokens +
+      usage.uncached_input_tokens !==
     usage.total_input_tokens
   ) {
     throw new Error(
@@ -206,6 +247,8 @@ function assertValidUsage(dateKey: string, usage: Usage): void {
       return {
         cached_input_tokens:
           total.cached_input_tokens + breakdown.cached_input_tokens,
+        cache_write_input_tokens:
+          total.cache_write_input_tokens + breakdown.cache_write_input_tokens,
         uncached_input_tokens:
           total.uncached_input_tokens + breakdown.uncached_input_tokens,
         total_input_tokens:
@@ -217,6 +260,7 @@ function assertValidUsage(dateKey: string, usage: Usage): void {
     },
     {
       cached_input_tokens: 0,
+      cache_write_input_tokens: 0,
       uncached_input_tokens: 0,
       total_input_tokens: 0,
       output_tokens: 0,
@@ -227,6 +271,8 @@ function assertValidUsage(dateKey: string, usage: Usage): void {
 
   if (
     breakdownTotal.cached_input_tokens !== usage.cached_input_tokens ||
+    breakdownTotal.cache_write_input_tokens !==
+      usage.cache_write_input_tokens ||
     breakdownTotal.uncached_input_tokens !== usage.uncached_input_tokens ||
     breakdownTotal.total_input_tokens !== usage.total_input_tokens ||
     breakdownTotal.output_tokens !== usage.output_tokens ||
@@ -284,11 +330,19 @@ function estimateBreakdownCostUsd(
   ) {
     return null;
   }
+  if (
+    breakdown.cache_write_input_tokens > 0 &&
+    pricing.cacheWriteInputPerMillionUsd === null
+  ) {
+    return null;
+  }
 
   return (
     (breakdown.uncached_input_tokens * pricing.inputPerMillionUsd +
       breakdown.cached_input_tokens *
         (pricing.cachedInputPerMillionUsd ?? pricing.inputPerMillionUsd) +
+      breakdown.cache_write_input_tokens *
+        (pricing.cacheWriteInputPerMillionUsd ?? pricing.inputPerMillionUsd) +
       breakdown.output_tokens * pricing.outputPerMillionUsd) /
     TOKENS_PER_MILLION
   );
@@ -347,6 +401,7 @@ export function buildUsageStackedSeries(
       return {
         dateKey,
         cachedInputTokens: 0,
+        cacheWriteInputTokens: 0,
         uncachedInputTokens: 0,
         normalOutputTokens: 0,
         reasoningOutputTokens: 0,
@@ -364,6 +419,7 @@ export function buildUsageStackedSeries(
     return {
       dateKey,
       cachedInputTokens: usage.cached_input_tokens,
+      cacheWriteInputTokens: usage.cache_write_input_tokens,
       uncachedInputTokens: usage.uncached_input_tokens,
       normalOutputTokens: usage.output_tokens - usage.reasoning_tokens,
       reasoningOutputTokens: usage.reasoning_tokens,
@@ -389,6 +445,7 @@ export function sumUsageBreakdown(
   let hasKnownCost = false;
   const totals: DashboardUsageBreakdownTotals = {
     cachedInputTokens: 0,
+    cacheWriteInputTokens: 0,
     uncachedInputTokens: 0,
     normalOutputTokens: 0,
     reasoningOutputTokens: 0,
@@ -401,6 +458,7 @@ export function sumUsageBreakdown(
 
   for (const point of series) {
     totals.cachedInputTokens += point.cachedInputTokens;
+    totals.cacheWriteInputTokens += point.cacheWriteInputTokens;
     totals.uncachedInputTokens += point.uncachedInputTokens;
     totals.normalOutputTokens += point.normalOutputTokens;
     totals.reasoningOutputTokens += point.reasoningOutputTokens;
@@ -439,7 +497,7 @@ function ratioOrZero(value: number, base: number): number {
 /**
  * Dashboard 表示向けのトークン比率指標を作る。
  *
- * - cache/uncached は `totalInputTokens` を分母にする
+ * - cache read / cache write / uncached は `totalInputTokens` を分母にする
  * - input/output は `totalTokens` を分母にする
  *
  * @param totals 期間合計
@@ -451,6 +509,10 @@ export function buildUsageRatioMetrics(
   return {
     cacheRateInInput: ratioOrZero(
       totals.cachedInputTokens,
+      totals.totalInputTokens
+    ),
+    cacheWriteRateInInput: ratioOrZero(
+      totals.cacheWriteInputTokens,
       totals.totalInputTokens
     ),
     uncachedRateInInput: ratioOrZero(

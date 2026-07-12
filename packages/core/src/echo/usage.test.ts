@@ -15,6 +15,7 @@ import type { ModelUsage } from '../ports/model';
 function createUsage(overrides: Partial<Usage> = {}): Usage {
   return {
     cached_input_tokens: 100,
+    cache_write_input_tokens: 0,
     uncached_input_tokens: 200,
     total_input_tokens: 300,
     output_tokens: 50,
@@ -25,6 +26,7 @@ function createUsage(overrides: Partial<Usage> = {}): Usage {
         provider: 'openai',
         model: 'gpt-5.5',
         cached_input_tokens: 100,
+        cache_write_input_tokens: 0,
         uncached_input_tokens: 200,
         total_input_tokens: 300,
         output_tokens: 50,
@@ -147,6 +149,7 @@ describe('addUsage', () => {
 
     const additionalUsage = createUsage({
       cached_input_tokens: 50,
+      cache_write_input_tokens: 0,
       uncached_input_tokens: 100,
       total_input_tokens: 150,
       output_tokens: 25,
@@ -157,6 +160,7 @@ describe('addUsage', () => {
           provider: 'openai',
           model: 'gpt-5.5',
           cached_input_tokens: 50,
+          cache_write_input_tokens: 0,
           uncached_input_tokens: 100,
           total_input_tokens: 150,
           output_tokens: 25,
@@ -170,6 +174,7 @@ describe('addUsage', () => {
 
     expect(result['2025-01-01']).toEqual({
       cached_input_tokens: 150,
+      cache_write_input_tokens: 0,
       uncached_input_tokens: 300,
       total_input_tokens: 450,
       output_tokens: 75,
@@ -180,6 +185,7 @@ describe('addUsage', () => {
           provider: 'openai',
           model: 'gpt-5.5',
           cached_input_tokens: 150,
+          cache_write_input_tokens: 0,
           uncached_input_tokens: 300,
           total_input_tokens: 450,
           output_tokens: 75,
@@ -197,6 +203,7 @@ describe('addUsage', () => {
     const usage1 = createUsage();
     const usage2 = createUsage({
       cached_input_tokens: 50,
+      cache_write_input_tokens: 0,
       uncached_input_tokens: 100,
       total_input_tokens: 150,
       output_tokens: 25,
@@ -207,6 +214,7 @@ describe('addUsage', () => {
           provider: 'openai',
           model: 'gpt-5.5',
           cached_input_tokens: 50,
+          cache_write_input_tokens: 0,
           uncached_input_tokens: 100,
           total_input_tokens: 150,
           output_tokens: 25,
@@ -217,6 +225,7 @@ describe('addUsage', () => {
     });
     const usage3 = createUsage({
       cached_input_tokens: 25,
+      cache_write_input_tokens: 0,
       uncached_input_tokens: 50,
       total_input_tokens: 75,
       output_tokens: 10,
@@ -227,6 +236,7 @@ describe('addUsage', () => {
           provider: 'openai',
           model: 'gpt-5-mini',
           cached_input_tokens: 25,
+          cache_write_input_tokens: 0,
           uncached_input_tokens: 50,
           total_input_tokens: 75,
           output_tokens: 10,
@@ -242,6 +252,7 @@ describe('addUsage', () => {
 
     expect(result[key]).toEqual({
       cached_input_tokens: 175,
+      cache_write_input_tokens: 0,
       uncached_input_tokens: 350,
       total_input_tokens: 525,
       output_tokens: 85,
@@ -252,6 +263,7 @@ describe('addUsage', () => {
           provider: 'openai',
           model: 'gpt-5.5',
           cached_input_tokens: 150,
+          cache_write_input_tokens: 0,
           uncached_input_tokens: 300,
           total_input_tokens: 450,
           output_tokens: 75,
@@ -262,6 +274,7 @@ describe('addUsage', () => {
           provider: 'openai',
           model: 'gpt-5-mini',
           cached_input_tokens: 25,
+          cache_write_input_tokens: 0,
           uncached_input_tokens: 50,
           total_input_tokens: 75,
           output_tokens: 10,
@@ -278,6 +291,7 @@ describe('addUsage', () => {
     const usage1 = createUsage();
     const usage2 = createUsage({
       cached_input_tokens: 50,
+      cache_write_input_tokens: 0,
       uncached_input_tokens: 100,
       total_input_tokens: 150,
       output_tokens: 25,
@@ -288,6 +302,7 @@ describe('addUsage', () => {
           provider: 'openai',
           model: 'gpt-5.5',
           cached_input_tokens: 50,
+          cache_write_input_tokens: 0,
           uncached_input_tokens: 100,
           total_input_tokens: 150,
           output_tokens: 25,
@@ -310,7 +325,8 @@ describe('convertUsage', () => {
   it('基本的なModelUsageをUsageに変換する', () => {
     const responseUsage: ModelUsage = {
       cachedInputTokens: 200,
-      uncachedInputTokens: 800,
+      cacheWriteInputTokens: 100,
+      uncachedInputTokens: 700,
       totalInputTokens: 1000,
       outputTokens: 500,
       reasoningTokens: 50,
@@ -324,7 +340,8 @@ describe('convertUsage', () => {
 
     expect(result).toEqual({
       cached_input_tokens: 200,
-      uncached_input_tokens: 800, // 1000 - 200
+      cache_write_input_tokens: 100,
+      uncached_input_tokens: 700,
       total_input_tokens: 1000,
       output_tokens: 500,
       reasoning_tokens: 50,
@@ -334,7 +351,8 @@ describe('convertUsage', () => {
           provider: 'openai',
           model: 'gpt-5.5',
           cached_input_tokens: 200,
-          uncached_input_tokens: 800,
+          cache_write_input_tokens: 100,
+          uncached_input_tokens: 700,
           total_input_tokens: 1000,
           output_tokens: 500,
           reasoning_tokens: 50,
@@ -362,6 +380,7 @@ describe('normalizeUsageRecord', () => {
     expect(result).toEqual({
       '2025-01-01': {
         cached_input_tokens: 100,
+        cache_write_input_tokens: 0,
         uncached_input_tokens: 200,
         total_input_tokens: 300,
         output_tokens: 50,
@@ -372,6 +391,7 @@ describe('normalizeUsageRecord', () => {
             provider: 'unknown',
             model: 'unknown',
             cached_input_tokens: 100,
+            cache_write_input_tokens: 0,
             uncached_input_tokens: 200,
             total_input_tokens: 300,
             output_tokens: 50,
@@ -381,6 +401,34 @@ describe('normalizeUsageRecord', () => {
         ],
       },
     });
+  });
+
+  it('cache write 項目がない既存の model 内訳を 0 で補完する', () => {
+    const result = normalizeUsageRecord({
+      '2026-07-12': {
+        cached_input_tokens: 100,
+        uncached_input_tokens: 200,
+        total_input_tokens: 300,
+        output_tokens: 50,
+        reasoning_tokens: 10,
+        total_tokens: 350,
+        by_model: [
+          {
+            provider: 'openai',
+            model: 'gpt-5.5',
+            cached_input_tokens: 100,
+            uncached_input_tokens: 200,
+            total_input_tokens: 300,
+            output_tokens: 50,
+            reasoning_tokens: 10,
+            total_tokens: 350,
+          },
+        ],
+      },
+    });
+
+    expect(result['2026-07-12']?.cache_write_input_tokens).toBe(0);
+    expect(result['2026-07-12']?.by_model[0]?.cache_write_input_tokens).toBe(0);
   });
 });
 

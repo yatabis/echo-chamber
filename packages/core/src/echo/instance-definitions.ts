@@ -56,12 +56,12 @@ export const ECHO_INSTANCE_DEFINITIONS = {
     systemPrompt: systemPromptMarie,
     mainLlm: {
       provider: 'openai',
-      model: 'gpt-5.4-mini',
+      model: 'gpt-5.6-luna',
       reasoningEffort: 'low',
     },
     tokenLimits: {
       dailyHardLimit: TOKEN_LIMITS.DAILY_HARD_LIMIT * 5,
-      dailySoftLimit: TOKEN_LIMITS.DAILY_SOFT_LIMIT * 5,
+      dailySoftLimit: TOKEN_LIMITS.DAILY_SOFT_LIMIT * 2,
       hardLimitBufferFactor: TOKEN_LIMITS.HARD_LIMIT_BUFFER_FACTOR,
     },
   },

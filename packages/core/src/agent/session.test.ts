@@ -41,6 +41,7 @@ function createFinishThinkingInput(
 function createUsage(overrides?: Partial<ModelUsage>): ModelUsage {
   return {
     cachedInputTokens: 0,
+    cacheWriteInputTokens: 0,
     uncachedInputTokens: 0,
     totalInputTokens: 0,
     outputTokens: 0,
@@ -65,6 +66,7 @@ describe('accumulateModelUsage', () => {
       accumulateModelUsage(
         createUsage({
           cachedInputTokens: 1,
+          cacheWriteInputTokens: 2,
           uncachedInputTokens: 2,
           totalInputTokens: 3,
           outputTokens: 4,
@@ -73,6 +75,7 @@ describe('accumulateModelUsage', () => {
         }),
         createUsage({
           cachedInputTokens: 10,
+          cacheWriteInputTokens: 20,
           uncachedInputTokens: 20,
           totalInputTokens: 30,
           outputTokens: 40,
@@ -83,6 +86,7 @@ describe('accumulateModelUsage', () => {
     ).toEqual(
       createUsage({
         cachedInputTokens: 11,
+        cacheWriteInputTokens: 22,
         uncachedInputTokens: 22,
         totalInputTokens: 33,
         outputTokens: 44,
@@ -459,6 +463,7 @@ describe('runAgentSession', () => {
         ],
         usage: createUsage({
           cachedInputTokens: 1,
+          cacheWriteInputTokens: 0,
           uncachedInputTokens: 2,
           totalInputTokens: 3,
           outputTokens: 4,
@@ -477,6 +482,7 @@ describe('runAgentSession', () => {
         ],
         usage: createUsage({
           cachedInputTokens: 10,
+          cacheWriteInputTokens: 0,
           uncachedInputTokens: 20,
           totalInputTokens: 30,
           outputTokens: 40,
@@ -496,6 +502,7 @@ describe('runAgentSession', () => {
         ],
         usage: createUsage({
           cachedInputTokens: 100,
+          cacheWriteInputTokens: 0,
           uncachedInputTokens: 200,
           totalInputTokens: 300,
           outputTokens: 400,
@@ -560,6 +567,7 @@ describe('runAgentSession', () => {
       nextWakeAt: null,
       usage: createUsage({
         cachedInputTokens: 111,
+        cacheWriteInputTokens: 0,
         uncachedInputTokens: 222,
         totalInputTokens: 333,
         outputTokens: 444,

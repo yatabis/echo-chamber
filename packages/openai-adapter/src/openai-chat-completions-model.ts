@@ -319,11 +319,15 @@ export function toChatModelUsage(
 ): ModelUsage {
   const safeUsage = usage ?? EMPTY_CHAT_USAGE;
   const cachedInputTokens = safeUsage.prompt_tokens_details?.cached_tokens ?? 0;
+  const cacheWriteInputTokens =
+    safeUsage.prompt_tokens_details?.cache_write_tokens ?? 0;
   const totalInputTokens = safeUsage.prompt_tokens;
 
   return {
     cachedInputTokens,
-    uncachedInputTokens: totalInputTokens - cachedInputTokens,
+    cacheWriteInputTokens,
+    uncachedInputTokens:
+      totalInputTokens - cachedInputTokens - cacheWriteInputTokens,
     totalInputTokens,
     outputTokens: safeUsage.completion_tokens,
     reasoningTokens: safeUsage.completion_tokens_details?.reasoning_tokens ?? 0,

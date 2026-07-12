@@ -91,7 +91,10 @@ describe('OpenAIChatCompletionsModel', () => {
       object: 'chat.completion',
       usage: {
         prompt_tokens: 10,
-        prompt_tokens_details: { cached_tokens: 3 },
+        prompt_tokens_details: {
+          cached_tokens: 3,
+          cache_write_tokens: 2,
+        },
         completion_tokens: 4,
         completion_tokens_details: { reasoning_tokens: 0 },
         total_tokens: 14,
@@ -282,6 +285,7 @@ describe('OpenAIChatCompletionsModel', () => {
       responseToken: 'chatcmpl_2',
       usage: {
         cachedInputTokens: 2,
+        cacheWriteInputTokens: 0,
         uncachedInputTokens: 6,
         totalInputTokens: 8,
         outputTokens: 3,
@@ -431,11 +435,35 @@ describe('OpenAIChatCompletionsModel', () => {
   it('usage がない response はゼロ usage として扱う', () => {
     expect(toChatModelUsage(undefined)).toEqual({
       cachedInputTokens: 0,
+      cacheWriteInputTokens: 0,
       uncachedInputTokens: 0,
       totalInputTokens: 0,
       outputTokens: 0,
       reasoningTokens: 0,
       totalTokens: 0,
+    });
+  });
+
+  it('cache write を uncached input から分離する', () => {
+    expect(
+      toChatModelUsage({
+        prompt_tokens: 10,
+        prompt_tokens_details: {
+          cached_tokens: 3,
+          cache_write_tokens: 2,
+        },
+        completion_tokens: 4,
+        completion_tokens_details: { reasoning_tokens: 1 },
+        total_tokens: 14,
+      })
+    ).toEqual({
+      cachedInputTokens: 3,
+      cacheWriteInputTokens: 2,
+      uncachedInputTokens: 5,
+      totalInputTokens: 10,
+      outputTokens: 4,
+      reasoningTokens: 1,
+      totalTokens: 14,
     });
   });
 });

@@ -16,6 +16,7 @@ import type {
 function createUsage(overrides?: Partial<ModelUsage>): ModelUsage {
   return {
     cachedInputTokens: 0,
+    cacheWriteInputTokens: 0,
     uncachedInputTokens: 0,
     totalInputTokens: 0,
     outputTokens: 0,

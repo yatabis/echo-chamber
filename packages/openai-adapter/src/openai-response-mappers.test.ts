@@ -156,14 +156,18 @@ describe('toModelUsage', () => {
     expect(
       toModelUsage({
         input_tokens: 10,
-        input_tokens_details: { cached_tokens: 4 },
+        input_tokens_details: {
+          cached_tokens: 4,
+          cache_write_tokens: 2,
+        },
         output_tokens: 7,
         output_tokens_details: { reasoning_tokens: 2 },
         total_tokens: 17,
       })
     ).toEqual({
       cachedInputTokens: 4,
-      uncachedInputTokens: 6,
+      cacheWriteInputTokens: 2,
+      uncachedInputTokens: 4,
       totalInputTokens: 10,
       outputTokens: 7,
       reasoningTokens: 2,
@@ -174,6 +178,7 @@ describe('toModelUsage', () => {
   it('usage undefined はゼロ usage にする', () => {
     expect(toModelUsage(undefined)).toEqual({
       cachedInputTokens: 0,
+      cacheWriteInputTokens: 0,
       uncachedInputTokens: 0,
       totalInputTokens: 0,
       outputTokens: 0,

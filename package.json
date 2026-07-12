@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "deploy": "pnpm dashboard:build && pnpm --filter @echo-chamber/cloudflare-workers run deploy",
-    "dev": "pnpm --filter @echo-chamber/cloudflare-workers dev",
-    "start": "pnpm --filter @echo-chamber/cloudflare-workers start",
+    "dev": "pnpm dashboard:build && pnpm --filter @echo-chamber/cloudflare-workers dev",
+    "start": "pnpm dashboard:build && pnpm --filter @echo-chamber/cloudflare-workers start",
     "cf-typegen": "pnpm --filter @echo-chamber/cloudflare-workers cf-typegen",
     "check": "pnpm lint && pnpm format && pnpm typecheck",
     "lint": "eslint ./apps ./packages --fix",
@@ -43,7 +43,7 @@
     "@discordjs/rest": "2.5.1",
     "discord-api-types": "0.38.16",
     "hono": "4.7.11",
-    "openai": "6.29.0",
+    "openai": "6.46.0",
     "zod": "4.0.5"
   },
   "pnpm": {

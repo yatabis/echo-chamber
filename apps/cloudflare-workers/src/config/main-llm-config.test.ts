@@ -6,7 +6,6 @@ import {
 } from '@echo-chamber/core/echo/instance-definitions';
 
 import {
-  DEFAULT_OPENAI_RESPONSES_MODEL,
   MAX_TOKENS,
   PRESENCE_PENALTY,
   TEMPERATURE,
@@ -43,9 +42,24 @@ describe('resolveMainLLMConfig', () => {
       provider: 'openai',
       api: 'responses',
       apiKey: 'openai-key',
-      model: DEFAULT_OPENAI_RESPONSES_MODEL,
+      model: 'gpt-5.5',
       baseURL: undefined,
       reasoningEffort: undefined,
+    });
+  });
+
+  it('model 未指定時は GPT-5.6 を既定値として返す', () => {
+    expect(
+      resolveMainLLMConfig(
+        createEnv(),
+        createDefinition({
+          mainLlm: {},
+        })
+      )
+    ).toMatchObject({
+      provider: 'openai',
+      api: 'responses',
+      model: 'gpt-5.6',
     });
   });
 
@@ -55,6 +69,7 @@ describe('resolveMainLLMConfig', () => {
     ).toMatchObject({
       provider: 'openai',
       api: 'responses',
+      model: 'gpt-5.6-luna',
       reasoningEffort: 'low',
     });
   });

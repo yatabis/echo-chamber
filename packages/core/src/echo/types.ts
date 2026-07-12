@@ -2,6 +2,7 @@ export type EchoState = 'Idling' | 'Running' | 'Sleeping';
 
 export interface TokenUsage {
   cached_input_tokens: number;
+  cache_write_input_tokens: number;
   uncached_input_tokens: number;
   total_input_tokens: number;
   output_tokens: number;

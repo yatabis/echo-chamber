@@ -103,6 +103,7 @@ export function normalizeUsageRecord(value: unknown): UsageRecord {
 function toTokenUsage(usage: ModelUsage): TokenUsage {
   return {
     cached_input_tokens: usage.cachedInputTokens,
+    cache_write_input_tokens: usage.cacheWriteInputTokens,
     uncached_input_tokens: usage.uncachedInputTokens,
     total_input_tokens: usage.totalInputTokens,
     output_tokens: usage.outputTokens,
@@ -119,6 +120,7 @@ function toTokenUsage(usage: ModelUsage): TokenUsage {
  */
 function addTokenUsage(total: TokenUsage, additional: TokenUsage): void {
   total.cached_input_tokens += additional.cached_input_tokens;
+  total.cache_write_input_tokens += additional.cache_write_input_tokens;
   total.uncached_input_tokens += additional.uncached_input_tokens;
   total.total_input_tokens += additional.total_input_tokens;
   total.output_tokens += additional.output_tokens;
@@ -213,6 +215,9 @@ function normalizeTokenUsage(value: unknown): TokenUsage {
 
   return {
     cached_input_tokens: finiteNumberOrZero(objectValue.cached_input_tokens),
+    cache_write_input_tokens: finiteNumberOrZero(
+      objectValue.cache_write_input_tokens
+    ),
     uncached_input_tokens: finiteNumberOrZero(
       objectValue.uncached_input_tokens
     ),

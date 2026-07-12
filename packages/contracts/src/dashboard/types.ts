@@ -88,6 +88,7 @@ export type DashboardUsageDays = 7 | 30;
 export interface DashboardUsageStackedPoint {
   dateKey: string;
   cachedInputTokens: number;
+  cacheWriteInputTokens: number;
   uncachedInputTokens: number;
   normalOutputTokens: number;
   reasoningOutputTokens: number;
@@ -100,6 +101,7 @@ export interface DashboardUsageStackedPoint {
 
 export interface DashboardUsageBreakdownTotals {
   cachedInputTokens: number;
+  cacheWriteInputTokens: number;
   uncachedInputTokens: number;
   normalOutputTokens: number;
   reasoningOutputTokens: number;
@@ -112,6 +114,7 @@ export interface DashboardUsageBreakdownTotals {
 
 export interface DashboardUsageRatioMetrics {
   cacheRateInInput: number;
+  cacheWriteRateInInput: number;
   uncachedRateInInput: number;
   inputRateInTotal: number;
   outputRateInTotal: number;

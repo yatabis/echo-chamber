@@ -106,6 +106,7 @@ export type ModelInputItem = ModelMessage | ModelToolCall | ModelToolResult;
  */
 export interface ModelUsage {
   cachedInputTokens: number;
+  cacheWriteInputTokens: number;
   uncachedInputTokens: number;
   totalInputTokens: number;
   outputTokens: number;

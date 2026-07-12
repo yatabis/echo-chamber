@@ -9,7 +9,7 @@ export const TEMPERATURE = 0.7;
 export const TOP_P = 0.8;
 export const PRESENCE_PENALTY = 1.5;
 export const TOP_K = 20;
-export const DEFAULT_OPENAI_RESPONSES_MODEL = 'gpt-5.5';
+export const DEFAULT_OPENAI_RESPONSES_MODEL = 'gpt-5.6';
 
 export type MainLLMProvider = EchoMainLLMProvider;
 export type MainLLMApi = 'responses' | 'chat_completions';

@@ -3,17 +3,88 @@ import { describe, expect, it } from 'vitest';
 import {
   buildUsageRatioMetrics,
   buildUsageStackedSeries,
+  estimateUsageCostUsd,
   filterNotes,
   sumUsageBreakdown,
 } from './utils';
 
-import type { Note, UsageRecord } from './types';
+import type { Note, Usage, UsageRecord } from './types';
+
+describe('estimateUsageCostUsd', () => {
+  it.each([
+    {
+      model: 'gpt-5.6',
+      inputPrice: 5,
+      cachedInputPrice: 0.5,
+      cacheWritePrice: 6.25,
+      outputPrice: 30,
+    },
+    {
+      model: 'gpt-5.6-sol',
+      inputPrice: 5,
+      cachedInputPrice: 0.5,
+      cacheWritePrice: 6.25,
+      outputPrice: 30,
+    },
+    {
+      model: 'gpt-5.6-terra',
+      inputPrice: 2.5,
+      cachedInputPrice: 0.25,
+      cacheWritePrice: 3.125,
+      outputPrice: 15,
+    },
+    {
+      model: 'gpt-5.6-luna',
+      inputPrice: 1,
+      cachedInputPrice: 0.1,
+      cacheWritePrice: 1.25,
+      outputPrice: 6,
+    },
+  ] as const)(
+    '$model の標準料金で推定コストを計算する',
+    ({ model, inputPrice, cachedInputPrice, cacheWritePrice, outputPrice }) => {
+      const usage: Usage = {
+        cached_input_tokens: 2,
+        cache_write_input_tokens: 3,
+        uncached_input_tokens: 3,
+        total_input_tokens: 8,
+        output_tokens: 4,
+        reasoning_tokens: 1,
+        total_tokens: 12,
+        by_model: [
+          {
+            provider: 'openai',
+            model,
+            cached_input_tokens: 2,
+            cache_write_input_tokens: 3,
+            uncached_input_tokens: 3,
+            total_input_tokens: 8,
+            output_tokens: 4,
+            reasoning_tokens: 1,
+            total_tokens: 12,
+          },
+        ],
+      };
+
+      expect(estimateUsageCostUsd(usage)).toEqual({
+        costUsd:
+          (2 * cachedInputPrice +
+            3 * cacheWritePrice +
+            3 * inputPrice +
+            4 * outputPrice) /
+          1_000_000,
+        isPartial: false,
+      });
+    }
+  );
+});
 
 describe('buildUsageStackedSeries', () => {
   it('7日分の系列を生成し、欠損日は0埋めする', () => {
     const usageRecord: UsageRecord = {
       '2026-02-20': {
         cached_input_tokens: 10,
+        cache_write_input_tokens: 0,
         uncached_input_tokens: 20,
         total_input_tokens: 30,
         output_tokens: 7,
@@ -24,6 +95,7 @@ describe('buildUsageStackedSeries', () => {
             provider: 'openai',
             model: 'gpt-5',
             cached_input_tokens: 10,
+            cache_write_input_tokens: 0,
             uncached_input_tokens: 20,
             total_input_tokens: 30,
             output_tokens: 7,
@@ -34,6 +106,7 @@ describe('buildUsageStackedSeries', () => {
       },
       '2026-02-22': {
         cached_input_tokens: 5,
+        cache_write_input_tokens: 0,
         uncached_input_tokens: 15,
         total_input_tokens: 20,
         output_tokens: 4,
@@ -44,6 +117,7 @@ describe('buildUsageStackedSeries', () => {
             provider: 'openai',
             model: 'gpt-5-mini',
             cached_input_tokens: 5,
+            cache_write_input_tokens: 0,
             uncached_input_tokens: 15,
             total_input_tokens: 20,
             output_tokens: 4,
@@ -66,6 +140,7 @@ describe('buildUsageStackedSeries', () => {
 
     expect(series[0]).toMatchObject({
       cachedInputTokens: 0,
+      cacheWriteInputTokens: 0,
       uncachedInputTokens: 0,
       normalOutputTokens: 0,
       reasoningOutputTokens: 0,
@@ -77,6 +152,7 @@ describe('buildUsageStackedSeries', () => {
     });
     expect(series[4]).toMatchObject({
       cachedInputTokens: 10,
+      cacheWriteInputTokens: 0,
       uncachedInputTokens: 20,
       normalOutputTokens: 5,
       reasoningOutputTokens: 2,
@@ -88,6 +164,7 @@ describe('buildUsageStackedSeries', () => {
     });
     expect(series[6]).toMatchObject({
       cachedInputTokens: 5,
+      cacheWriteInputTokens: 0,
       uncachedInputTokens: 15,
       normalOutputTokens: 3,
       reasoningOutputTokens: 1,
@@ -107,6 +184,7 @@ describe('buildUsageStackedSeries', () => {
       const usageRecord: UsageRecord = {
         '2026-02-22': {
           cached_input_tokens: 10,
+          cache_write_input_tokens: 0,
           uncached_input_tokens: 20,
           total_input_tokens: 30,
           output_tokens: 7,
@@ -117,6 +195,7 @@ describe('buildUsageStackedSeries', () => {
               provider: 'openai',
               model: 'gpt-5',
               cached_input_tokens: 10,
+              cache_write_input_tokens: 0,
               uncached_input_tokens: 20,
               total_input_tokens: 30,
               output_tokens: 7,
@@ -151,6 +230,7 @@ describe('buildUsageStackedSeries', () => {
         {
           '2026-02-22': {
             cached_input_tokens: 10,
+            cache_write_input_tokens: 0,
             uncached_input_tokens: 10,
             total_input_tokens: 20,
             output_tokens: 5,
@@ -161,6 +241,7 @@ describe('buildUsageStackedSeries', () => {
                 provider: 'openai',
                 model: 'gpt-5',
                 cached_input_tokens: 10,
+                cache_write_input_tokens: 0,
                 uncached_input_tokens: 10,
                 total_input_tokens: 20,
                 output_tokens: 5,
@@ -182,6 +263,7 @@ describe('buildUsageStackedSeries', () => {
         {
           '2026-02-22': {
             cached_input_tokens: 10,
+            cache_write_input_tokens: 0,
             uncached_input_tokens: 10,
             total_input_tokens: 20,
             output_tokens: 5,
@@ -192,6 +274,7 @@ describe('buildUsageStackedSeries', () => {
                 provider: 'openai',
                 model: 'gpt-5',
                 cached_input_tokens: 1,
+                cache_write_input_tokens: 0,
                 uncached_input_tokens: 1,
                 total_input_tokens: 2,
                 output_tokens: 1,
@@ -214,6 +297,7 @@ describe('sumUsageBreakdown', () => {
       {
         '2026-02-21': {
           cached_input_tokens: 10,
+          cache_write_input_tokens: 0,
           uncached_input_tokens: 10,
           total_input_tokens: 20,
           output_tokens: 5,
@@ -224,6 +308,7 @@ describe('sumUsageBreakdown', () => {
               provider: 'openai',
               model: 'gpt-5',
               cached_input_tokens: 10,
+              cache_write_input_tokens: 0,
               uncached_input_tokens: 10,
               total_input_tokens: 20,
               output_tokens: 5,
@@ -234,6 +319,7 @@ describe('sumUsageBreakdown', () => {
         },
         '2026-02-22': {
           cached_input_tokens: 2,
+          cache_write_input_tokens: 0,
           uncached_input_tokens: 3,
           total_input_tokens: 5,
           output_tokens: 4,
@@ -244,6 +330,7 @@ describe('sumUsageBreakdown', () => {
               provider: 'openai',
               model: 'gpt-5-mini',
               cached_input_tokens: 2,
+              cache_write_input_tokens: 0,
               uncached_input_tokens: 3,
               total_input_tokens: 5,
               output_tokens: 4,
@@ -261,6 +348,7 @@ describe('sumUsageBreakdown', () => {
 
     expect(totals).toEqual({
       cachedInputTokens: 12,
+      cacheWriteInputTokens: 0,
       uncachedInputTokens: 13,
       normalOutputTokens: 8,
       reasoningOutputTokens: 1,
@@ -279,6 +367,7 @@ describe('sumUsageBreakdown', () => {
       {
         '2026-02-22': {
           cached_input_tokens: 10,
+          cache_write_input_tokens: 0,
           uncached_input_tokens: 10,
           total_input_tokens: 20,
           output_tokens: 5,
@@ -289,6 +378,7 @@ describe('sumUsageBreakdown', () => {
               provider: 'lmstudio',
               model: 'local-model',
               cached_input_tokens: 10,
+              cache_write_input_tokens: 0,
               uncached_input_tokens: 10,
               total_input_tokens: 20,
               output_tokens: 5,
@@ -314,6 +404,7 @@ describe('sumUsageBreakdown', () => {
       {
         '2026-02-22': {
           cached_input_tokens: 15,
+          cache_write_input_tokens: 0,
           uncached_input_tokens: 25,
           total_input_tokens: 40,
           output_tokens: 9,
@@ -324,6 +415,7 @@ describe('sumUsageBreakdown', () => {
               provider: 'openai',
               model: 'gpt-5',
               cached_input_tokens: 5,
+              cache_write_input_tokens: 0,
               uncached_input_tokens: 15,
               total_input_tokens: 20,
               output_tokens: 4,
@@ -334,6 +426,7 @@ describe('sumUsageBreakdown', () => {
               provider: 'lmstudio',
               model: 'local-model',
               cached_input_tokens: 10,
+              cache_write_input_tokens: 0,
               uncached_input_tokens: 10,
               total_input_tokens: 20,
               output_tokens: 5,
@@ -359,7 +452,8 @@ describe('buildUsageRatioMetrics', () => {
   it('cache/uncached と input/output の比率を返す', () => {
     const ratios = buildUsageRatioMetrics({
       cachedInputTokens: 25,
-      uncachedInputTokens: 75,
+      cacheWriteInputTokens: 10,
+      uncachedInputTokens: 65,
       normalOutputTokens: 30,
       reasoningOutputTokens: 10,
       totalInputTokens: 100,
@@ -370,7 +464,8 @@ describe('buildUsageRatioMetrics', () => {
     });
 
     expect(ratios.cacheRateInInput).toBeCloseTo(0.25, 10);
-    expect(ratios.uncachedRateInInput).toBeCloseTo(0.75, 10);
+    expect(ratios.cacheWriteRateInInput).toBeCloseTo(0.1, 10);
+    expect(ratios.uncachedRateInInput).toBeCloseTo(0.65, 10);
     expect(ratios.inputRateInTotal).toBeCloseTo(100 / 140, 10);
     expect(ratios.outputRateInTotal).toBeCloseTo(40 / 140, 10);
   });
@@ -378,6 +473,7 @@ describe('buildUsageRatioMetrics', () => {
   it('分母が0のときは0を返す', () => {
     const ratios = buildUsageRatioMetrics({
       cachedInputTokens: 0,
+      cacheWriteInputTokens: 0,
       uncachedInputTokens: 0,
       normalOutputTokens: 0,
       reasoningOutputTokens: 0,
@@ -390,6 +486,7 @@ describe('buildUsageRatioMetrics', () => {
 
     expect(ratios).toEqual({
       cacheRateInInput: 0,
+      cacheWriteRateInInput: 0,
       uncachedRateInInput: 0,
       inputRateInTotal: 0,
       outputRateInTotal: 0,

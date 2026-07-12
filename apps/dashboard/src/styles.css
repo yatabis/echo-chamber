@@ -624,8 +624,7 @@ h3 {
 
 .analysis-table-row {
   display: grid;
-  grid-template-columns:
-    minmax(160px, 1.5fr) repeat(4, minmax(76px, 0.75fr));
+  grid-template-columns: minmax(160px, 1.5fr) repeat(4, minmax(76px, 0.75fr));
   gap: 8px;
   min-width: 520px;
   padding: 8px 10px;
@@ -757,6 +756,10 @@ h3 {
 
 .usage-segment-cached {
   background: linear-gradient(180deg, #c6f0e7 0%, #71cab2 100%);
+}
+
+.usage-segment-cache-write {
+  background: linear-gradient(180deg, #d8f3bd 0%, #8bc45a 100%);
 }
 
 .usage-segment-uncached {

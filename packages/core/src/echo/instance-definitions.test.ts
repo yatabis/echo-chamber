@@ -22,12 +22,12 @@ const expectedInstanceRuntimeSettings = {
   marie: {
     mainLlm: {
       provider: 'openai',
-      model: 'gpt-5.4-mini',
+      model: 'gpt-5.6-luna',
       reasoningEffort: 'low',
     },
     tokenLimits: {
       dailyHardLimit: 2_500_000,
-      dailySoftLimit: 1_500_000,
+      dailySoftLimit: 600_000,
       hardLimitBufferFactor: 1.5,
     },
   },
