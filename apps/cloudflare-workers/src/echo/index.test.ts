@@ -3,7 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemorySystem } from '@echo-chamber/cloudflare-runtime/memory-system';
 import {
   parseDashboardActionAnalysisResponse,
+  parseDashboardInstanceSummary,
   parseDashboardSessionLogsResponse,
+  parseEchoStatus,
 } from '@echo-chamber/contracts/dashboard/schemas';
 import type { DashboardEchoEvent } from '@echo-chamber/contracts/dashboard/types';
 import { canonicalRuntimeTools } from '@echo-chamber/core/agent/runtime-tools/catalog';
@@ -384,35 +386,41 @@ describe('Echo session logs route', () => {
       },
       'ensureInitialized'
     ).mockResolvedValue(undefined);
-    vi.spyOn(getEventArchive(echo), 'getTodayEvents').mockReturnValue({
-      archiveDay: '2026-06-01',
-      events: [
-        {
-          id: 'event-1',
-          archiveDay: '2026-06-01',
-          category: 'model',
-          createdAt: '2026-06-01T12:00:00.000Z',
-          payload: {
-            content: 'I will check the notes.',
-            model: 'gpt-5.5',
-            provider: 'openai.responses',
-            turnIndex: 1,
+    const getTodayEvents = vi
+      .spyOn(getEventArchive(echo), 'getTodayEvents')
+      .mockReturnValue({
+        archiveDay: '2026-06-01',
+        events: [
+          {
+            id: 'event-1',
+            archiveDay: '2026-06-01',
+            category: 'model',
+            createdAt: '2026-06-01T12:00:00.000Z',
+            payload: {
+              content: 'I will check the notes.',
+              model: 'gpt-5.5',
+              provider: 'openai.responses',
+              turnIndex: 1,
+            },
+            sessionId: 'session-1',
+            severity: 'info',
+            streams: ['thought', 'analysis'],
+            summary: 'model output emitted',
+            type: 'model.output.emitted',
           },
-          sessionId: 'session-1',
-          severity: 'info',
-          streams: ['thought', 'analysis'],
-          summary: 'model output emitted',
-          type: 'model.output.emitted',
-        },
-      ],
-    });
+        ],
+      });
 
     const response = await echo.fetch(
+      new Request('http://example.com/rin/session-logs')
+    );
+    const cachedResponse = await echo.fetch(
       new Request('http://example.com/rin/session-logs')
     );
     const body = parseDashboardSessionLogsResponse(
       await response.json<unknown>()
     );
+    await cachedResponse.json<unknown>();
 
     expect(response.status).toBe(200);
     expect(body).toMatchObject({
@@ -431,6 +439,7 @@ describe('Echo session logs route', () => {
       ],
     });
     expect(body).not.toHaveProperty('events');
+    expect(getTodayEvents).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -554,9 +563,13 @@ describe('Echo action analysis route', () => {
     const response = await echo.fetch(
       new Request('http://example.com/rin/action-analysis')
     );
+    const cachedResponse = await echo.fetch(
+      new Request('http://example.com/rin/action-analysis')
+    );
     const body = parseDashboardActionAnalysisResponse(
       await response.json<unknown>()
     );
+    await cachedResponse.json<unknown>();
 
     expect(response.status).toBe(200);
     expect(body.periods[0]).toMatchObject({
@@ -581,6 +594,174 @@ describe('Echo action analysis route', () => {
 describe('Echo dashboard status payload', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('詳細 status route は短時間 cache を使う', async () => {
+    const env = createMockEnv();
+    const { storage } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+    vi.spyOn(
+      echo as unknown as {
+        ensureInitialized(instanceId: 'rin' | 'marie'): Promise<void>;
+      },
+      'ensureInitialized'
+    ).mockResolvedValue(undefined);
+    const getStatus = vi.spyOn(echo, 'getStatus').mockResolvedValue(
+      parseEchoStatus({
+        id: 'rin',
+        name: 'リン',
+        state: 'Idling',
+        nextAlarm: null,
+        nextWakeAt: null,
+        context: null,
+        runtime: {
+          mainLlm: {
+            provider: 'openai',
+            model: 'gpt-5.5',
+          },
+          tokenLimits: {
+            dailyHardLimit: 500_000,
+            dailySoftLimit: 300_000,
+            hardLimitBufferFactor: 1.5,
+          },
+        },
+        memories: [],
+        notes: [],
+        usage: {},
+      })
+    );
+
+    const response = await echo.fetch(new Request('http://example.com/rin'));
+    const cachedResponse = await echo.fetch(
+      new Request('http://example.com/rin')
+    );
+    const body = parseEchoStatus(await response.json<unknown>());
+    await cachedResponse.json<unknown>();
+
+    expect(body.id).toBe('rin');
+    expect(getStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it('状態変更後は dashboard read cache を破棄する', async () => {
+    const env = createMockEnv();
+    const { storage } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+    vi.spyOn(
+      echo as unknown as {
+        ensureInitialized(instanceId: 'rin' | 'marie'): Promise<void>;
+      },
+      'ensureInitialized'
+    ).mockResolvedValue(undefined);
+    const getStatus = vi
+      .spyOn(echo, 'getStatus')
+      .mockResolvedValueOnce(
+        parseEchoStatus({
+          id: 'rin',
+          name: 'リン',
+          state: 'Idling',
+          nextAlarm: null,
+          nextWakeAt: null,
+          context: null,
+          runtime: {
+            mainLlm: {
+              provider: 'openai',
+              model: 'gpt-5.5',
+            },
+            tokenLimits: {
+              dailyHardLimit: 500_000,
+              dailySoftLimit: 300_000,
+              hardLimitBufferFactor: 1.5,
+            },
+          },
+          memories: [],
+          notes: [],
+          usage: {},
+        })
+      )
+      .mockResolvedValueOnce(
+        parseEchoStatus({
+          id: 'rin',
+          name: 'リン',
+          state: 'Running',
+          nextAlarm: null,
+          nextWakeAt: null,
+          context: null,
+          runtime: {
+            mainLlm: {
+              provider: 'openai',
+              model: 'gpt-5.5',
+            },
+            tokenLimits: {
+              dailyHardLimit: 500_000,
+              dailySoftLimit: 300_000,
+              hardLimitBufferFactor: 1.5,
+            },
+          },
+          memories: [],
+          notes: [],
+          usage: {},
+        })
+      );
+
+    await echo.fetch(new Request('http://example.com/rin'));
+    await echo.fetch(new Request('http://example.com/rin'));
+    await echo.setState('Running', 'test');
+    const response = await echo.fetch(new Request('http://example.com/rin'));
+    const body = parseEchoStatus(await response.json<unknown>());
+
+    expect(body.state).toBe('Running');
+    expect(getStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it('summary route は短時間 cache を使う', async () => {
+    const env = createMockEnv();
+    const { storage } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+    vi.spyOn(
+      echo as unknown as {
+        ensureInitialized(instanceId: 'rin' | 'marie'): Promise<void>;
+      },
+      'ensureInitialized'
+    ).mockResolvedValue(undefined);
+    const getSummary = vi.spyOn(echo, 'getSummary').mockResolvedValue(
+      parseDashboardInstanceSummary({
+        id: 'rin',
+        name: 'リン',
+        state: 'Idling',
+        nextAlarm: null,
+        nextWakeAt: null,
+        noteCount: 0,
+        memoryCount: 0,
+        todayUsageTokens: 0,
+        sevenDayUsageTokens: 0,
+        thirtyDayUsageTokens: 0,
+        runtime: {
+          mainLlm: {
+            provider: 'openai',
+            model: 'gpt-5.5',
+          },
+          tokenLimits: {
+            dailyHardLimit: 500_000,
+            dailySoftLimit: 300_000,
+            hardLimitBufferFactor: 1.5,
+          },
+        },
+        latestNoteUpdatedAt: null,
+        latestMemoryUpdatedAt: null,
+      })
+    );
+
+    const response = await echo.fetch(
+      new Request('http://example.com/rin/summary')
+    );
+    const cachedResponse = await echo.fetch(
+      new Request('http://example.com/rin/summary')
+    );
+    const body = parseDashboardInstanceSummary(await response.json<unknown>());
+    await cachedResponse.json<unknown>();
+
+    expect(body.id).toBe('rin');
+    expect(getSummary).toHaveBeenCalledTimes(1);
   });
 
   it('保存済み context と next_wake_at を詳細 status に含める', async () => {

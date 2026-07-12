@@ -82,6 +82,8 @@ Dashboard 一覧画面を開く、または一覧で Refresh する操作。
 
 `/:id/summary` は raw event を読まない。note は最大 200 件、memory は summary query のみを使う。
 
+`/:id/summary` は Durable Object instance 内で 30 秒だけ in-memory cache する。cache hit 時も DO request は発生するが、storage read は発生しない。state / usage / context / next wake / alarm などの更新時は cache を破棄する。
+
 ### Instance detail
 
 詳細画面を開く、または詳細で Refresh する操作。タブ切り替えだけでは追加 API request は発生しない。
@@ -102,6 +104,8 @@ endpoint ごとの storage read:
 | `GET /:id/action-analysis` | 日次 action-analysis stats と tool stats だけを最大 30 archive day 分読む。raw `echo_events` は読まない |
 
 `GET /:id/action-analysis` は raw `echo_events` を読まない。1 / 7 / 30 day の period summary は、最大 30 日分の daily stats と tool stats から組み立てる。
+
+Dashboard detail の GET DTO は Durable Object instance 内で短時間だけ in-memory cache する。`GET /:id` と `GET /:id/summary`、`GET /:id/session-logs` は 30 秒、`GET /:id/action-analysis` は 60 秒を上限にする。これは Cloudflare edge cache ではないため DO request 数は減らないが、同じ DO instance が生きている間の連続 refresh では storage read を避けられる。
 
 ### Manual wake / sleep
 

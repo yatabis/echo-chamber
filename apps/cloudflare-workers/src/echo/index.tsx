@@ -10,7 +10,9 @@ import {
   parseEchoStatus,
 } from '@echo-chamber/contracts/dashboard/schemas';
 import type {
+  DashboardActionAnalysisResponse,
   DashboardInstanceSummary,
+  DashboardSessionLogsResponse,
   DashboardRuntimeConfig,
   EchoStatus,
 } from '@echo-chamber/contracts/dashboard/types';
@@ -100,6 +102,11 @@ interface RunExecutionResult {
   thinkMs: number;
 }
 
+interface DashboardReadCacheEntry<T> {
+  expiresAtMs: number;
+  value: T;
+}
+
 type EventRetentionCleanupResult =
   | {
       status: 'completed';
@@ -118,6 +125,37 @@ type MemoryReembeddingMaintenanceResult =
       error: string;
     };
 
+const DASHBOARD_STATUS_CACHE_TTL_MS = 30_000;
+const DASHBOARD_SUMMARY_CACHE_TTL_MS = 30_000;
+const DASHBOARD_SESSION_LOGS_CACHE_TTL_MS = 30_000;
+const DASHBOARD_ACTION_ANALYSIS_CACHE_TTL_MS = 60_000;
+
+/**
+ * 短時間だけ使う in-memory dashboard read cache entry を作る。
+ */
+function createDashboardReadCacheEntry<T>(
+  value: T,
+  ttlMs: number
+): DashboardReadCacheEntry<T> {
+  return {
+    expiresAtMs: Date.now() + ttlMs,
+    value,
+  };
+}
+
+/**
+ * 有効期限内の in-memory dashboard read cache を返す。
+ */
+function getDashboardReadCacheValue<T>(
+  entry: DashboardReadCacheEntry<T> | null
+): T | null {
+  if (entry === null || entry.expiresAtMs <= Date.now()) {
+    return null;
+  }
+
+  return entry.value;
+}
+
 export class Echo extends DurableObject<Env> {
   private readonly store: KVNamespace;
   private readonly storage: DurableObjectStorage;
@@ -127,6 +165,14 @@ export class Echo extends DurableObject<Env> {
   private readonly _env: Env;
   private readonly noteSystem: NoteSystem;
   private currentSessionId: string | null = null;
+  private dashboardActionAnalysisCache: DashboardReadCacheEntry<DashboardActionAnalysisResponse> | null =
+    null;
+  private dashboardSessionLogsCache: DashboardReadCacheEntry<DashboardSessionLogsResponse> | null =
+    null;
+  private dashboardStatusCache: DashboardReadCacheEntry<EchoStatus> | null =
+    null;
+  private dashboardSummaryCache: DashboardReadCacheEntry<DashboardInstanceSummary> | null =
+    null;
 
   // 遅延初期化されるプロパティ（ensureInitializedで設定されるためreadonlyではない）
   private executableTools: readonly AgentSessionTool[] | null = null;
@@ -188,34 +234,16 @@ export class Echo extends DurableObject<Env> {
         await next();
       })
       .get('/', async (c) => {
-        return c.json(await this.getStatus());
+        return c.json(await this.getCachedStatus());
       })
       .get('/summary', async (c) => {
-        return c.json(await this.getSummary());
+        return c.json(await this.getCachedSummary());
       })
       .get('/session-logs', (c) => {
-        return c.json(
-          parseDashboardSessionLogsResponse(
-            buildDashboardSessionLogsResponse(
-              this.eventArchive.getTodayEvents()
-            )
-          )
-        );
+        return c.json(this.getCachedSessionLogsResponse());
       })
       .get('/action-analysis', (c) => {
-        const now = new Date();
-        return c.json(
-          parseDashboardActionAnalysisResponse(
-            buildDashboardActionAnalysisResponse({
-              archiveDay: getEventArchiveDay(now),
-              generatedAt: now.toISOString(),
-              periods: this.eventArchive.getRecentActionAnalysisEventRanges({
-                now,
-                periodDays: DASHBOARD_ACTION_ANALYSIS_PERIOD_DAYS,
-              }),
-            })
-          )
-        );
+        return c.json(this.getCachedActionAnalysisResponse());
       })
       .post('/wake', async (c) => {
         await this.wake(true);
@@ -249,6 +277,7 @@ export class Echo extends DurableObject<Env> {
     }
 
     this.instanceDefinition = getEchoInstanceDefinition(id);
+    this.clearDashboardReadCache();
     this.runtimeBindings = await resolveEchoRuntimeBindings(
       this._env,
       this.store,
@@ -275,6 +304,19 @@ export class Echo extends DurableObject<Env> {
     // ストレージにID/名前を保存（alarmから参照するため）
     await this.storage.put('id', id);
     await this.storage.put('name', this.instanceDefinition.name);
+  }
+
+  /**
+   * Dashboard の GET DTO 用 in-memory cache を破棄する。
+   *
+   * 状態変更や永続データ更新の後に呼び、短 TTL でも古い dashboard payload を
+   * 返し続けないようにする。
+   */
+  private clearDashboardReadCache(): void {
+    this.dashboardActionAnalysisCache = null;
+    this.dashboardSessionLogsCache = null;
+    this.dashboardStatusCache = null;
+    this.dashboardSummaryCache = null;
   }
 
   /**
@@ -539,6 +581,7 @@ export class Echo extends DurableObject<Env> {
       );
     }
     await this.storage.setAlarm(nextAlarm);
+    this.clearDashboardReadCache();
     await emitEchoEvent(this.events, {
       type: 'system.schedule.alarm_scheduled',
       severity: 'debug',
@@ -568,6 +611,7 @@ export class Echo extends DurableObject<Env> {
   async setState(newState: EchoState, reason = 'direct'): Promise<void> {
     const previousState = await this.getState();
     await this.storage.put('state', newState);
+    this.clearDashboardReadCache();
     if (previousState === newState) {
       return;
     }
@@ -629,6 +673,25 @@ export class Echo extends DurableObject<Env> {
   }
 
   /**
+   * Dashboard 詳細 status を短時間 in-memory cache 付きで返す。
+   *
+   * @returns cache hit なら保存済み DTO、miss なら storage から組み立てた DTO
+   */
+  private async getCachedStatus(): Promise<EchoStatus> {
+    const cached = getDashboardReadCacheValue(this.dashboardStatusCache);
+    if (cached !== null) {
+      return cached;
+    }
+
+    const status = await this.getStatus();
+    this.dashboardStatusCache = createDashboardReadCacheEntry(
+      status,
+      DASHBOARD_STATUS_CACHE_TTL_MS
+    );
+    return status;
+  }
+
+  /**
    * Dashboard 一覧画面向けの軽量サマリーを返す。
    *
    * 一覧では name/state/nextAlarm のみ使うため、詳細 DTO より小さい形で返す。
@@ -662,6 +725,77 @@ export class Echo extends DurableObject<Env> {
       latestNoteUpdatedAt: noteSummary.latestUpdatedAt,
       latestMemoryUpdatedAt: memorySummary.latestUpdatedAt,
     });
+  }
+
+  /**
+   * Dashboard 一覧 summary を短時間 in-memory cache 付きで返す。
+   *
+   * @returns cache hit なら保存済み DTO、miss なら storage から組み立てた DTO
+   */
+  private async getCachedSummary(): Promise<DashboardInstanceSummary> {
+    const cached = getDashboardReadCacheValue(this.dashboardSummaryCache);
+    if (cached !== null) {
+      return cached;
+    }
+
+    const summary = await this.getSummary();
+    this.dashboardSummaryCache = createDashboardReadCacheEntry(
+      summary,
+      DASHBOARD_SUMMARY_CACHE_TTL_MS
+    );
+    return summary;
+  }
+
+  /**
+   * Dashboard session logs payload を短時間 in-memory cache 付きで返す。
+   *
+   * @returns cache hit なら保存済み DTO、miss なら event archive から組み立てた DTO
+   */
+  private getCachedSessionLogsResponse(): DashboardSessionLogsResponse {
+    const cached = getDashboardReadCacheValue(this.dashboardSessionLogsCache);
+    if (cached !== null) {
+      return cached;
+    }
+
+    const response = parseDashboardSessionLogsResponse(
+      buildDashboardSessionLogsResponse(this.eventArchive.getTodayEvents())
+    );
+    this.dashboardSessionLogsCache = createDashboardReadCacheEntry(
+      response,
+      DASHBOARD_SESSION_LOGS_CACHE_TTL_MS
+    );
+    return response;
+  }
+
+  /**
+   * Dashboard action analysis payload を短時間 in-memory cache 付きで返す。
+   *
+   * @returns cache hit なら保存済み DTO、miss なら read model から組み立てた DTO
+   */
+  private getCachedActionAnalysisResponse(): DashboardActionAnalysisResponse {
+    const cached = getDashboardReadCacheValue(
+      this.dashboardActionAnalysisCache
+    );
+    if (cached !== null) {
+      return cached;
+    }
+
+    const now = new Date();
+    const response = parseDashboardActionAnalysisResponse(
+      buildDashboardActionAnalysisResponse({
+        archiveDay: getEventArchiveDay(now),
+        generatedAt: now.toISOString(),
+        periods: this.eventArchive.getRecentActionAnalysisEventRanges({
+          now,
+          periodDays: DASHBOARD_ACTION_ANALYSIS_PERIOD_DAYS,
+        }),
+      })
+    );
+    this.dashboardActionAnalysisCache = createDashboardReadCacheEntry(
+      response,
+      DASHBOARD_ACTION_ANALYSIS_CACHE_TTL_MS
+    );
+    return response;
   }
 
   async getNotes(query = ''): Promise<Note[]> {
@@ -703,6 +837,7 @@ export class Echo extends DurableObject<Env> {
 
     await this.setNextAlarm(undefined, 'wake');
     await this.setState('Idling', 'wake');
+    this.clearDashboardReadCache();
   }
 
   async sleep(force = false): Promise<void> {
@@ -731,6 +866,7 @@ export class Echo extends DurableObject<Env> {
     try {
       await this.setState('Sleeping', 'sleep');
       await this.storage.deleteAlarm();
+      this.clearDashboardReadCache();
       // sleep 処理
     } catch (error) {
       await emitEchoEvent(this.events, {
@@ -1221,6 +1357,7 @@ export class Echo extends DurableObject<Env> {
     }
 
     await this.storage.put('usage', updatedUsageRecord);
+    this.clearDashboardReadCache();
     return totalUsage;
   }
 
@@ -1290,6 +1427,7 @@ export class Echo extends DurableObject<Env> {
    */
   private async saveContext(context: ContextSnapshot): Promise<void> {
     await this.storage.put('context', context);
+    this.clearDashboardReadCache();
   }
 
   /**
@@ -1317,6 +1455,7 @@ export class Echo extends DurableObject<Env> {
         ? await this.loadNextWakeAt()
         : previousValueOverride;
     await this.storage.put('next_wake_at', nextWakeAt);
+    this.clearDashboardReadCache();
     await emitEchoEvent(this.events, {
       type: 'system.schedule.next_wake_at_updated',
       severity: 'info',
@@ -1337,6 +1476,7 @@ export class Echo extends DurableObject<Env> {
   private async clearNextWakeAt(reason: string): Promise<void> {
     const previousValue = await this.loadNextWakeAt();
     await this.storage.delete('next_wake_at');
+    this.clearDashboardReadCache();
     if (previousValue === null) {
       return;
     }
@@ -1357,6 +1497,7 @@ export class Echo extends DurableObject<Env> {
     reason: string
   ): Promise<void> {
     await this.storage.delete('next_wake_at');
+    this.clearDashboardReadCache();
     await emitEchoEvent(this.events, {
       type: 'system.schedule.next_wake_at_invalidated',
       severity: 'warn',
