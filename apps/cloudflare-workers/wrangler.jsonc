@@ -47,7 +47,14 @@
    * Environment Variables
    * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables
    */
-  // "vars": { "MY_VARIABLE": "production_value" },
+  "vars": {
+    "ENVIRONMENT": "production",
+    "ACCESS_TEAM_DOMAIN": "https://yatabis.cloudflareaccess.com",
+    "ACCESS_PRODUCTION_HOSTNAME": "echo-chamber.yatabis.workers.dev",
+    "ACCESS_PRODUCTION_AUD": "18f71fa35c31206389ab7d5bbd58d9f80d7158127291f462ca5b30b77bba7f75",
+    "ACCESS_PREVIEW_HOSTNAME_SUFFIX": "-echo-chamber.yatabis.workers.dev",
+    "ACCESS_PREVIEW_AUD": "6abc8d6a45073f003b9fd96e44242ec3a6ddfbea9ae44faaf7b4fd94b4a9bf25",
+  },
   /**
    * Note: Use secrets to store sensitive data.
    * https://developers.cloudflare.com/workers/configuration/secrets/

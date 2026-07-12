@@ -54,6 +54,7 @@ interface MockInstanceBehavior {
 }
 
 interface MockEnvOptions {
+  environment?: string;
   failSummaryFor?: 'rin' | 'marie';
   redirectSpaAssetPath?: string;
 }
@@ -139,6 +140,7 @@ function createMockEnv(options: MockEnvOptions = {}): MockEnvResult {
   let durableObjectFetchCount = 0;
 
   const env = {
+    ENVIRONMENT: options.environment ?? 'local',
     ASSETS: {
       fetch: async (request: Request): Promise<Response> => {
         const pathname = new URL(request.url).pathname;
@@ -256,6 +258,16 @@ async function request(pathname: string, env: Env): Promise<Response> {
 }
 
 describe('worker routes', () => {
+  it('non-local request without Access JWT is rejected before route handling', async () => {
+    const mock = createMockEnv({ environment: 'production' });
+
+    const response = await request('/', mock.env);
+
+    expect(response.status).toBe(403);
+    expect(await response.text()).toBe('Forbidden');
+    expect(mock.getDurableObjectFetchCount()).toBe(0);
+  });
+
   it('/instances returns summaries and fallback Unknown on per-instance failure', async () => {
     const { env } = createMockEnv({ failSummaryFor: 'marie' });
 

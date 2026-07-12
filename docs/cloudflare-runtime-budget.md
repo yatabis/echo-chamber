@@ -57,16 +57,18 @@ alarm invocation 数の概算:
 
 以下の storage read / write は実装上のクエリ形状から見た設計見積もりであり、Cloudflare が実際に数える rows read は SQLite の実行計画や内部 metadata にも左右される。設計レビューでは、この表より大きくなる変更を危険信号として扱う。
 
+production / preview の全 Worker request は、route 処理より前に Cloudflare Access JWT の署名、issuer、AUD、時刻 claim を検証する。この検証による DO request、storage read / write の増分は 0。署名検証用 JWKS は Worker isolate 内で再利用するため、通常の request では外部 API call も 0 だが、isolate 内の初回検証時または未知の key id への rotation 時には Access team domain の JWKS endpoint へ 1 call 発生し得る。JWT 検証の CPU cost は各 request に加わる。
+
 ### Dashboard shell / static assets
 
-| 項目                 | 内容                                       |
-| -------------------- | ------------------------------------------ |
-| Browser API requests | `GET /dashboard`, `GET /dashboard/*`       |
-| DO requests          | 0                                          |
-| Storage reads        | 0                                          |
-| Storage writes       | 0                                          |
-| 外部 API             | 0                                          |
-| 備考                 | `ASSETS.fetch()` で静的 dashboard を返す。 |
+| 項目                 | 内容                                                                   |
+| -------------------- | ---------------------------------------------------------------------- |
+| Browser API requests | `GET /dashboard`, `GET /dashboard/*`                                   |
+| DO requests          | 0                                                                      |
+| Storage reads        | 0                                                                      |
+| Storage writes       | 0                                                                      |
+| 外部 API             | warm isolate では 0。初回 JWT 検証時は Access JWKS 1 call の可能性あり |
+| 備考                 | `ASSETS.fetch()` で静的 dashboard を返す。                             |
 
 ### Instance list
 

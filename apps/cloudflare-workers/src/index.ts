@@ -13,11 +13,14 @@ import {
   isValidInstanceId,
 } from '@echo-chamber/core/types/echo-config';
 
+import { createCloudflareAccessMiddleware } from './auth/cloudflare-access';
 import { Echo } from './echo';
 
 const app = new Hono<{ Bindings: Env }>();
 
 type AppContext = Context<{ Bindings: Env }>;
+
+app.use('*', createCloudflareAccessMiddleware());
 
 /**
  * Dashboard summary 取得に失敗した instance の代替値を作る。

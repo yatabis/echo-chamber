@@ -53,16 +53,21 @@ pnpm dev
 
 ### 必須キー
 
-| キー名                    | 用途                               |
-| ------------------------- | ---------------------------------- |
-| `OPENAI_API_KEY`          | OpenAI API 認証                    |
-| `DISCORD_BOT_TOKEN`       | ログ通知用 Discord Bot Token       |
-| `DISCORD_BOT_TOKEN_RIN`   | `rin` インスタンス用 Bot Token     |
-| `DISCORD_BOT_TOKEN_MARIE` | `marie` インスタンス用 Bot Token   |
-| `LOG_CHANNEL_ID`          | ログ通知先チャンネル ID            |
-| `ENVIRONMENT`             | 実行環境判定（`local` / それ以外） |
+| キー名                           | 用途                                          |
+| -------------------------------- | --------------------------------------------- |
+| `OPENAI_API_KEY`                 | OpenAI API 認証                               |
+| `DISCORD_BOT_TOKEN`              | ログ通知用 Discord Bot Token                  |
+| `DISCORD_BOT_TOKEN_RIN`          | `rin` インスタンス用 Bot Token                |
+| `DISCORD_BOT_TOKEN_MARIE`        | `marie` インスタンス用 Bot Token              |
+| `LOG_CHANNEL_ID`                 | ログ通知先チャンネル ID                       |
+| `ENVIRONMENT`                    | 実行環境判定（`local` / それ以外）            |
+| `ACCESS_TEAM_DOMAIN`             | Cloudflare Access team domain の HTTPS origin |
+| `ACCESS_PRODUCTION_HOSTNAME`     | production Worker の hostname                 |
+| `ACCESS_PRODUCTION_AUD`          | production Access application の AUD          |
+| `ACCESS_PREVIEW_HOSTNAME_SUFFIX` | preview Worker hostname の suffix             |
+| `ACCESS_PREVIEW_AUD`             | preview Access application の AUD             |
 
-ローカル開発時は、`apps/cloudflare-workers/.dev.vars` に上記キーを設定します。
+ローカル開発時は、`apps/cloudflare-workers/.dev.vars` に Secret と `ENVIRONMENT=local` を設定します。`ACCESS_*` は non-local 環境で必須ですが、local bypass では参照しません。
 
 ### インスタンスごとの LLM / token limit 設定
 
@@ -100,6 +105,18 @@ pnpm --filter @echo-chamber/cloudflare-workers exec wrangler secret put LOG_CHAN
 ```
 
 `ENVIRONMENT=local` のときのみ `POST /{instanceId}/run` が有効です。
+
+## Cloudflare Access 認証
+
+`ENVIRONMENT=local` 以外の Worker request は、`Cf-Access-Jwt-Assertion` の署名、issuer、AUD、時刻 claim を Worker 内でも検証します。production と preview は別の AUD を使い、request hostname に一致しない token は `403 Forbidden` で拒否します。Access binding の欠落や未知の hostname も fail closed です。
+
+Cloudflare Zero Trust 側では、production / preview の両 Access application を次の状態に保ちます。
+
+- Identity provider は Cloudflare account のみを使用する
+- Cloudflare account の MFA を有効にする
+- Instant authentication と Binding Cookie を有効にする
+
+ローカル開発では `ENVIRONMENT=local` に限って Access JWT 検証を省略します。`ENVIRONMENT` を未設定にして bypass することはできません。
 
 ## KV 初期化（thinking channel ID）
 

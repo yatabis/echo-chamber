@@ -6,6 +6,7 @@ Cloudflare Worker / Durable Object の実装本体です。
 ## 役割
 
 - Worker エントリ (`src/index.ts`)
+- Cloudflare Access JWT の Worker-side 検証 (`src/auth/cloudflare-access.ts`)
 - ルーティング:
   - `GET /`
   - `GET /instances`
@@ -29,6 +30,7 @@ Cloudflare Worker / Durable Object の実装本体です。
 - `wrangler.jsonc`
 - `worker-configuration.d.ts`
 - `src/index.ts`
+- `src/auth/cloudflare-access.ts`
 - `src/echo/index.tsx`
 - `src/config/echo-runtime-bindings.ts`
 - `vitest.config.ts`
@@ -51,6 +53,8 @@ Cloudflare Worker / Durable Object の実装本体です。
 - ルートの `pnpm dev` / `pnpm start` / `pnpm deploy` はこの workspace のコマンドを呼び出します。
 - ルートの `pnpm test:run` / `pnpm test:coverage` もこの workspace のテストを実行します。
 - `wrangler.jsonc` 変更時は `pnpm cf-typegen` を実行してください。
+- `ENVIRONMENT=local` 以外では Cloudflare Access JWT を必須とし、production / preview の hostname ごとに別の AUD を検証します。Access 関連 binding の欠落や未知の hostname は `403 Forbidden` になります。
+- Access team domain と production / preview の hostname / AUD は `wrangler.jsonc` の `ACCESS_*` vars で管理します。これらは Secret ではありません。
 - Echo の persona 定義は `@echo-chamber/core/echo/instance-definitions` にあり、この workspace では runtime bindings だけを解決します。
 - DO を動かすには `ECHO_KV` に `thinking_channel_discord_*` を投入してください（ローカルは `wrangler kv key put --local`）。chat channels は `src/config/echo-runtime-bindings.ts` の固定定義を使います。
 - Echo event は instance ごとの Durable Object SQLite に 90 日分保持します。R2 binding は使いません。
