@@ -11,6 +11,8 @@ import type { EmbeddingService } from './embedding-service';
 import type { RerankingService } from './reranking-service';
 
 const MAX_MEMORY_COUNT = 500;
+const MEMORY_SEARCH_SOURCE_LIMIT = MAX_MEMORY_COUNT;
+const DASHBOARD_MEMORY_ROW_LIMIT = MAX_MEMORY_COUNT;
 const VECTOR_CANDIDATE_LIMIT = 20;
 const SEARCH_RESULT_LIMIT = 5;
 const SIMILARITY_THRESHOLD = 0.001;
@@ -56,6 +58,37 @@ export interface StoredMemoryRow extends Record<string, SqlStorageValue> {
 }
 
 /**
+ * Dashboard 表示に必要な embedding 以外の memory row。
+ */
+export interface StoredMemoryDashboardRow
+  extends Record<string, SqlStorageValue> {
+  id: string;
+  content: string;
+  type: MemoryType;
+  embedding_model: string;
+  emotion_valence: number;
+  emotion_arousal: number;
+  emotion_labels: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface StoredMemoryDashboardSummaryRow
+  extends Record<string, SqlStorageValue> {
+  memory_count: number;
+  latest_updated_at: string | null;
+}
+
+interface ReEmbedStaleMemoriesInput {
+  limit?: number;
+}
+
+export interface MemoryDashboardSummary {
+  count: number;
+  latestUpdatedAt: string | null;
+}
+
+/**
  * 記憶システム
  * SQLiteベースのエピソード記憶の保存とセマンティック検索を提供する。
  */
@@ -64,6 +97,7 @@ export class MemorySystem {
   private readonly embeddingService: EmbeddingService;
   private readonly rerankingService: RerankingService;
   private readonly events: EchoEventPort | undefined;
+  private searchableMemoryRows: StoredMemoryRow[] | null = null;
   private initialized = false;
 
   /**
@@ -114,6 +148,10 @@ export class MemorySystem {
 
     // マイグレーション: 既存テーブルにtypeカラム, embedding_modelカラムがない場合は追加
     this.migrateColumn();
+
+    this.sql.exec(`
+      CREATE INDEX IF NOT EXISTS idx_memories_embedding_model ON memories(embedding_model)
+    `);
 
     this.initialized = true;
   }
@@ -187,6 +225,7 @@ export class MemorySystem {
           maxMemoryCount: MAX_MEMORY_COUNT,
         },
       });
+      this.searchableMemoryRows = null;
     }
 
     const now = new Date().toISOString();
@@ -208,6 +247,7 @@ export class MemorySystem {
       now,
       now
     );
+    this.searchableMemoryRows = null;
   }
 
   /**
@@ -232,7 +272,7 @@ export class MemorySystem {
       },
     });
 
-    let rows = this.getAllMemories();
+    let rows = this.getSearchableMemories();
 
     // タイプが指定された場合はフィルタ
     if (type !== undefined) {
@@ -370,22 +410,119 @@ export class MemorySystem {
   }
 
   /**
+   * Dashboard 表示用に embedding BLOB を除いた全 memory row を取得する。
+   *
+   * @returns SQLite に保存された memory metadata rows
+   */
+  getDashboardMemories(
+    input: { limit?: number } = {}
+  ): StoredMemoryDashboardRow[] {
+    this.ensureSchema();
+    const limit = Math.max(
+      1,
+      Math.floor(input.limit ?? DASHBOARD_MEMORY_ROW_LIMIT)
+    );
+
+    return this.sql
+      .exec<StoredMemoryDashboardRow>(
+        `SELECT
+           id,
+           content,
+           type,
+           embedding_model,
+           emotion_valence,
+           emotion_arousal,
+           emotion_labels,
+           created_at,
+           updated_at
+         FROM memories
+         ORDER BY updated_at DESC
+         LIMIT ?`,
+        limit
+      )
+      .toArray();
+  }
+
+  /**
+   * Dashboard summary 表示に必要な memory 件数と最新更新時刻だけを返す。
+   *
+   * @returns memory summary
+   */
+  getDashboardMemorySummary(): MemoryDashboardSummary {
+    this.ensureSchema();
+
+    const row = this.sql
+      .exec<StoredMemoryDashboardSummaryRow>(
+        `SELECT
+           COUNT(*) AS memory_count,
+           MAX(updated_at) AS latest_updated_at
+         FROM memories`
+      )
+      .one();
+
+    return {
+      count: row.memory_count,
+      latestUpdatedAt: row.latest_updated_at,
+    };
+  }
+
+  /**
+   * 検索用に current embedding model の memory row を読み込む。
+   *
+   * Durable Objects SQLite の rows read 制限を避けるため、1 リクエスト内では
+   * 読み込み済み rows を再利用する。異なる embedding model の row はベクトル空間や
+   * 次元が一致しない可能性があるため、日次再 embedding で current model へ戻す。
+   *
+   * @returns semantic search の候補にできる memory rows
+   */
+  private getSearchableMemories(): StoredMemoryRow[] {
+    this.ensureSchema();
+
+    if (this.searchableMemoryRows !== null) {
+      return this.searchableMemoryRows;
+    }
+
+    this.searchableMemoryRows = this.sql
+      .exec<StoredMemoryRow>(
+        `SELECT *
+         FROM memories
+         WHERE embedding_model = ?
+         ORDER BY updated_at DESC
+         LIMIT ?`,
+        this.embeddingService.modelIdentifier,
+        MEMORY_SEARCH_SOURCE_LIMIT
+      )
+      .toArray();
+
+    return this.searchableMemoryRows;
+  }
+
+  /**
    * 現在の embedding モデルと異なるモデルで生成された memory を再 embedding する
    *
+   * @param input 1 回で処理する最大件数
    * @returns 再 embedding 完了
    */
-  async reEmbedStaleMemories(): Promise<void> {
+  async reEmbedStaleMemories(
+    input: ReEmbedStaleMemoriesInput = {}
+  ): Promise<void> {
     this.ensureSchema();
 
     const currentModel = this.embeddingService.modelIdentifier;
+    const limit = Math.max(1, Math.floor(input.limit ?? MAX_MEMORY_COUNT));
 
     const staleRows = this.sql
       .exec<{
         id: string;
         content: string;
       }>(
-        'SELECT id, content FROM memories WHERE embedding_model != ?',
-        currentModel
+        `SELECT id, content
+         FROM memories
+         WHERE embedding_model != ?
+         ORDER BY updated_at ASC
+         LIMIT ?`,
+        currentModel,
+        limit
       )
       .toArray();
 
@@ -438,6 +575,7 @@ export class MemorySystem {
         });
       }
     }
+    this.searchableMemoryRows = null;
 
     await emitEchoEvent(this.events, {
       type: 'memory.reembedding.completed',

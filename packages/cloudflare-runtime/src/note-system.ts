@@ -25,6 +25,15 @@ interface UpdateNoteInput {
   content?: string;
 }
 
+interface ListNotesInput {
+  limit?: number;
+}
+
+export interface NoteDashboardSummary {
+  count: number;
+  latestUpdatedAt: string | null;
+}
+
 /**
  * ノートシステム
  * DurableObjectStorage上でメモを管理する。
@@ -46,9 +55,30 @@ export class NoteSystem {
    *
    * @returns 最新更新順に並んだノート一覧
    */
-  async listNotes(): Promise<Note[]> {
-    const notes = await this.readNotes();
+  async listNotes(input: ListNotesInput = {}): Promise<Note[]> {
+    const notes = await this.readNotes({
+      limit: input.limit ?? MAX_NOTE_COUNT,
+    });
     return sortByUpdatedAtDesc(notes);
+  }
+
+  /**
+   * Dashboard summary 用に note 件数と最新更新時刻を返す。
+   *
+   * note は上限が 200 件なので、正確性を保つため bounded list で集計する。
+   *
+   * @returns note summary
+   */
+  async getDashboardNoteSummary(): Promise<NoteDashboardSummary> {
+    const notes = await this.readNotes({
+      limit: MAX_NOTE_COUNT,
+    });
+    const [latestNote] = sortByUpdatedAtDesc(notes);
+
+    return {
+      count: notes.length,
+      latestUpdatedAt: latestNote?.updatedAt ?? null,
+    };
   }
 
   /**
@@ -79,7 +109,9 @@ export class NoteSystem {
    */
   async searchNotes(query: string): Promise<Note[]> {
     const normalizedQuery = validateQuery(query).toLowerCase();
-    const notes = await this.listNotes();
+    const notes = await this.listNotes({
+      limit: MAX_NOTE_COUNT,
+    });
 
     return notes.filter((note) => {
       return (
@@ -98,7 +130,9 @@ export class NoteSystem {
   async createNote({ title, content }: CreateNoteInput): Promise<Note> {
     const normalizedTitle = validateTitle(title);
     const normalizedContent = validateContent(content);
-    const notes = await this.readNotes();
+    const notes = await this.readNotes({
+      limit: MAX_NOTE_COUNT,
+    });
 
     if (notes.length >= MAX_NOTE_COUNT) {
       throw new Error(`Note capacity reached (max ${MAX_NOTE_COUNT})`);
@@ -175,9 +209,11 @@ export class NoteSystem {
     return await this.storage.delete(getNoteStorageKey(noteId));
   }
 
-  private async readNotes(): Promise<Note[]> {
+  private async readNotes(input: ListNotesInput = {}): Promise<Note[]> {
     const entries = await this.storage.list({
       prefix: NOTE_ITEM_PREFIX,
+      reverse: true,
+      limit: input.limit ?? MAX_NOTE_COUNT,
     });
     return Array.from(entries.values()).filter(isNoteRecord);
   }

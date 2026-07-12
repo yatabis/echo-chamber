@@ -27,3 +27,7 @@
 
 - Secret は Wrangler secrets を使い、ローカル開発時のみ `apps/cloudflare-workers/.dev.vars` を使う
 - Worker / Durable Object では `setTimeout` / `setInterval` を避け、alarm を使う
+- Dashboard / Durable Object / Echo event / tool を追加・変更するときは、`docs/cloudflare-runtime-budget.md` の request / storage budget を確認し、API request、DO request、rows read、rows written、外部 API call の増分を説明できる状態にする
+- Dashboard の read path では raw event や embedding BLOB の unbounded scan を避け、pre-aggregated read model または bounded latest rows を使う
+- 動作確認や本番調査でも Cloudflare Free plan の制約を意識し、production endpoint の反復実行で rows read / written を消費しない。必要な確認は local / test / analytics / bounded diagnostic endpoint を優先する
+- 既存データが削除されなくても、表示・検索・集計の対象から外れる変更、固定上限で以前見えていたデータが見えなくなる変更、過去指標の連続性が失われる変更は破壊的変更として扱い、実装前にユーザーへ明示する

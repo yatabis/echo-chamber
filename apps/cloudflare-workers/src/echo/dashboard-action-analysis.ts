@@ -3,17 +3,65 @@ import type {
   DashboardActionAnalysisPeriodDays,
   DashboardActionAnalysisResponse,
   DashboardActionAnalysisToolSummary,
-  DashboardEchoEvent,
 } from '@echo-chamber/contracts/dashboard/types';
 
-import type { EchoEventArchiveRange } from './event-archive';
-
 export const DASHBOARD_ACTION_ANALYSIS_PERIOD_DAYS = [1, 7, 30] as const;
+
+export interface DashboardActionAnalysisEvent {
+  archiveDay: string;
+  createdAt: string;
+  sessionId: string | null;
+  type: string;
+  severity: 'debug' | 'info' | 'warn' | 'error';
+  totalTokens?: number;
+  terminationReason?: string;
+  toolName?: string;
+  finalResultCount?: number;
+  warnings: readonly string[];
+}
+
+export interface DashboardActionAnalysisEventRange {
+  days: number;
+  startArchiveDay: string;
+  endArchiveDay: string;
+  eventCount: number;
+  events: readonly DashboardActionAnalysisEvent[];
+  metrics?: DashboardActionAnalysisMetrics;
+}
+
+export interface DashboardActionAnalysisToolMetrics {
+  toolName: string;
+  calledCount: number;
+  completedCount: number;
+  failedCount: number;
+}
+
+export interface DashboardActionAnalysisMetrics {
+  sessionCount: number;
+  completedSessionCount: number;
+  failedSessionCount: number;
+  warningSessionCount: number;
+  maxTurnsSessionCount: number;
+  totalTokens: number;
+  totalSessionDurationMs: number;
+  sessionDurationCount: number;
+  totalTurns: number;
+  noToolCallTurns: number;
+  toolCallCount: number;
+  toolCompletedCount: number;
+  toolFailedCount: number;
+  topTools: readonly DashboardActionAnalysisToolMetrics[];
+  memorySearchCompletedCount: number;
+  memorySearchFailedCount: number;
+  memorySearchZeroResultCount: number;
+  memorySearchFinalResultTotal: number;
+  storeMemoryCompletedCount: number;
+}
 
 interface DashboardActionAnalysisInput {
   archiveDay: string;
   generatedAt: string;
-  periods: readonly EchoEventArchiveRange[];
+  periods: readonly DashboardActionAnalysisEventRange[];
 }
 
 interface MutableToolSummary {
@@ -69,8 +117,15 @@ export function buildDashboardActionAnalysisResponse(
  * 1 period 分の raw event を行動指標へ集計する。
  */
 function buildDashboardActionAnalysisPeriod(
-  period: EchoEventArchiveRange
+  period: DashboardActionAnalysisEventRange
 ): DashboardActionAnalysisPeriod {
+  if (period.metrics !== undefined) {
+    return createDashboardActionAnalysisPeriodFromMetrics(
+      period,
+      period.metrics
+    );
+  }
+
   const accumulator = createActionAnalysisAccumulator();
 
   for (const event of period.events) {
@@ -78,6 +133,53 @@ function buildDashboardActionAnalysisPeriod(
   }
 
   return createDashboardActionAnalysisPeriod(period, accumulator);
+}
+
+/**
+ * write 時に作られた集計済み metrics を dashboard contract の period payload に変換する。
+ */
+function createDashboardActionAnalysisPeriodFromMetrics(
+  period: DashboardActionAnalysisEventRange,
+  metrics: DashboardActionAnalysisMetrics
+): DashboardActionAnalysisPeriod {
+  return {
+    days: toDashboardActionAnalysisPeriodDays(period.days),
+    startArchiveDay: period.startArchiveDay,
+    endArchiveDay: period.endArchiveDay,
+    eventCount: period.eventCount,
+    sessionCount: metrics.sessionCount,
+    completedSessionCount: metrics.completedSessionCount,
+    failedSessionCount: metrics.failedSessionCount,
+    warningSessionCount: metrics.warningSessionCount,
+    maxTurnsSessionCount: metrics.maxTurnsSessionCount,
+    totalTokens: metrics.totalTokens,
+    averageTokensPerCompletedSession: safeAverage(
+      metrics.totalTokens,
+      metrics.completedSessionCount
+    ),
+    averageSessionDurationMs: safeAverage(
+      metrics.totalSessionDurationMs,
+      metrics.sessionDurationCount
+    ),
+    totalTurns: metrics.totalTurns,
+    noToolCallTurns: metrics.noToolCallTurns,
+    toolCallCount: metrics.toolCallCount,
+    toolCompletedCount: metrics.toolCompletedCount,
+    toolFailedCount: metrics.toolFailedCount,
+    toolFailureRate: safeAverage(
+      metrics.toolFailedCount,
+      metrics.toolCompletedCount + metrics.toolFailedCount
+    ),
+    topTools: buildTopToolSummariesFromMetrics(metrics.topTools),
+    memorySearchCompletedCount: metrics.memorySearchCompletedCount,
+    memorySearchFailedCount: metrics.memorySearchFailedCount,
+    memorySearchZeroResultCount: metrics.memorySearchZeroResultCount,
+    memorySearchAverageFinalResultCount: safeAverage(
+      metrics.memorySearchFinalResultTotal,
+      metrics.memorySearchCompletedCount
+    ),
+    storeMemoryCompletedCount: metrics.storeMemoryCompletedCount,
+  };
 }
 
 /**
@@ -111,7 +213,7 @@ function createActionAnalysisAccumulator(): ActionAnalysisAccumulator {
  */
 function consumeActionAnalysisEvent(
   accumulator: ActionAnalysisAccumulator,
-  event: DashboardEchoEvent
+  event: DashboardActionAnalysisEvent
 ): void {
   if (event.sessionId !== null) {
     accumulator.sessionIds.add(event.sessionId);
@@ -128,7 +230,7 @@ function consumeActionAnalysisEvent(
  */
 function consumeSessionEvent(
   accumulator: ActionAnalysisAccumulator,
-  event: DashboardEchoEvent
+  event: DashboardActionAnalysisEvent
 ): void {
   switch (event.type) {
     case 'session.started':
@@ -151,16 +253,15 @@ function consumeSessionEvent(
  */
 function recordSessionCompleted(
   accumulator: ActionAnalysisAccumulator,
-  event: DashboardEchoEvent
+  event: DashboardActionAnalysisEvent
 ): void {
-  const payload = getEventPayload(event);
   recordSessionFinished(accumulator.sessionTimes, event);
   accumulator.completedSessionCount += 1;
-  accumulator.totalTokens += getPayloadNumber(payload, 'totalTokens') ?? 0;
+  accumulator.totalTokens += event.totalTokens ?? 0;
   if (event.severity === 'warn') {
     accumulator.warningSessionCount += 1;
   }
-  if (getPayloadString(payload, 'terminationReason') === 'max_turns') {
+  if (event.terminationReason === 'max_turns') {
     accumulator.maxTurnsSessionCount += 1;
   }
 }
@@ -170,15 +271,14 @@ function recordSessionCompleted(
  */
 function consumeModelEvent(
   accumulator: ActionAnalysisAccumulator,
-  event: DashboardEchoEvent
+  event: DashboardActionAnalysisEvent
 ): void {
   if (event.type !== 'model.turn.completed') {
     return;
   }
 
   accumulator.totalTurns += 1;
-  const warnings = getPayloadStringArray(getEventPayload(event), 'warnings');
-  if (warnings.includes('no_tool_calls')) {
+  if (event.warnings.includes('no_tool_calls')) {
     accumulator.noToolCallTurns += 1;
   }
 }
@@ -188,7 +288,7 @@ function consumeModelEvent(
  */
 function consumeToolEvent(
   accumulator: ActionAnalysisAccumulator,
-  event: DashboardEchoEvent
+  event: DashboardActionAnalysisEvent
 ): void {
   switch (event.type) {
     case 'tool.called':
@@ -212,12 +312,11 @@ function consumeToolEvent(
  */
 function recordToolCompleted(
   accumulator: ActionAnalysisAccumulator,
-  event: DashboardEchoEvent
+  event: DashboardActionAnalysisEvent
 ): void {
-  const payload = getEventPayload(event);
   accumulator.toolCompletedCount += 1;
   getToolSummary(accumulator.toolSummaries, event).completedCount += 1;
-  if (getPayloadString(payload, 'toolName') === 'store_memory') {
+  if (event.toolName === 'store_memory') {
     accumulator.storeMemoryCompletedCount += 1;
   }
 }
@@ -227,7 +326,7 @@ function recordToolCompleted(
  */
 function consumeMemoryEvent(
   accumulator: ActionAnalysisAccumulator,
-  event: DashboardEchoEvent
+  event: DashboardActionAnalysisEvent
 ): void {
   switch (event.type) {
     case 'memory.search.completed':
@@ -246,11 +345,10 @@ function consumeMemoryEvent(
  */
 function recordMemorySearchCompleted(
   accumulator: ActionAnalysisAccumulator,
-  event: DashboardEchoEvent
+  event: DashboardActionAnalysisEvent
 ): void {
   accumulator.memorySearchCompletedCount += 1;
-  const finalResultCount =
-    getPayloadNumber(getEventPayload(event), 'finalResultCount') ?? 0;
+  const finalResultCount = event.finalResultCount ?? 0;
   accumulator.memorySearchFinalResultTotal += finalResultCount;
   if (finalResultCount === 0) {
     accumulator.memorySearchZeroResultCount += 1;
@@ -261,14 +359,14 @@ function recordMemorySearchCompleted(
  * accumulator を dashboard contract の period payload に変換する。
  */
 function createDashboardActionAnalysisPeriod(
-  period: EchoEventArchiveRange,
+  period: DashboardActionAnalysisEventRange,
   accumulator: ActionAnalysisAccumulator
 ): DashboardActionAnalysisPeriod {
   return {
     days: toDashboardActionAnalysisPeriodDays(period.days),
     startArchiveDay: period.startArchiveDay,
     endArchiveDay: period.endArchiveDay,
-    eventCount: period.events.length,
+    eventCount: period.eventCount,
     sessionCount: accumulator.sessionIds.size,
     completedSessionCount: accumulator.completedSessionCount,
     failedSessionCount: accumulator.failedSessionCount,
@@ -321,10 +419,9 @@ function toDashboardActionAnalysisPeriodDays(
  */
 function getToolSummary(
   toolSummaries: Map<string, MutableToolSummary>,
-  event: DashboardEchoEvent
+  event: DashboardActionAnalysisEvent
 ): MutableToolSummary {
-  const toolName =
-    getPayloadString(getEventPayload(event), 'toolName') ?? 'tool';
+  const toolName = event.toolName ?? 'tool';
   const existing = toolSummaries.get(toolName);
   if (existing !== undefined) {
     return existing;
@@ -346,7 +443,16 @@ function getToolSummary(
 function buildTopToolSummaries(
   toolSummaries: Map<string, MutableToolSummary>
 ): DashboardActionAnalysisToolSummary[] {
-  return [...toolSummaries.values()]
+  return buildTopToolSummariesFromMetrics([...toolSummaries.values()]);
+}
+
+/**
+ * tool 集計 metrics を表示用上位リストへ変換する。
+ */
+function buildTopToolSummariesFromMetrics(
+  toolSummaries: readonly DashboardActionAnalysisToolMetrics[]
+): DashboardActionAnalysisToolSummary[] {
+  return [...toolSummaries]
     .map((summary) => ({
       ...summary,
       failureRate: safeAverage(
@@ -375,7 +481,7 @@ function buildTopToolSummaries(
  */
 function recordSessionStarted(
   sessionTimes: Map<string, SessionTimes>,
-  event: DashboardEchoEvent
+  event: DashboardActionAnalysisEvent
 ): void {
   if (event.sessionId === null) {
     return;
@@ -391,7 +497,7 @@ function recordSessionStarted(
  */
 function recordSessionFinished(
   sessionTimes: Map<string, SessionTimes>,
-  event: DashboardEchoEvent
+  event: DashboardActionAnalysisEvent
 ): void {
   if (event.sessionId === null) {
     return;
@@ -433,36 +539,4 @@ function calculateAverageSessionDurationMs(
  */
 function safeAverage(total: number, count: number): number {
   return count === 0 ? 0 : total / count;
-}
-
-function getEventPayload(event: DashboardEchoEvent): Record<string, unknown> {
-  return event.payload ?? {};
-}
-
-function getPayloadString(
-  payload: Record<string, unknown>,
-  key: string
-): string | undefined {
-  const value = payload[key];
-  return typeof value === 'string' ? value : undefined;
-}
-
-function getPayloadNumber(
-  payload: Record<string, unknown>,
-  key: string
-): number | undefined {
-  const value = payload[key];
-  return typeof value === 'number' ? value : undefined;
-}
-
-function getPayloadStringArray(
-  payload: Record<string, unknown>,
-  key: string
-): string[] {
-  const value = payload[key];
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return value.filter((item): item is string => typeof item === 'string');
 }

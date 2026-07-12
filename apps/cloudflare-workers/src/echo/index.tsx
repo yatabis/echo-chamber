@@ -90,27 +90,6 @@ async function fetchUnreadMessageCounts(
   );
 }
 
-function findLatestUpdatedAt(
-  rows: readonly { updatedAt: string }[]
-): string | null {
-  return rows.reduce<string | null>((latest, row) => {
-    if (latest === null) {
-      return row.updatedAt;
-    }
-
-    const latestTime = new Date(latest).getTime();
-    const rowTime = new Date(row.updatedAt).getTime();
-    if (Number.isNaN(rowTime)) {
-      return latest;
-    }
-    if (Number.isNaN(latestTime) || rowTime > latestTime) {
-      return row.updatedAt;
-    }
-
-    return latest;
-  }, null);
-}
-
 interface RunDecision {
   shouldRun: boolean;
   unreadCheckMs: number;
@@ -122,6 +101,15 @@ interface RunExecutionResult {
 }
 
 type EventRetentionCleanupResult =
+  | {
+      status: 'completed';
+    }
+  | {
+      status: 'failed';
+      error: string;
+    };
+
+type MemoryReembeddingMaintenanceResult =
   | {
       status: 'completed';
     }
@@ -221,12 +209,10 @@ export class Echo extends DurableObject<Env> {
             buildDashboardActionAnalysisResponse({
               archiveDay: getEventArchiveDay(now),
               generatedAt: now.toISOString(),
-              periods: DASHBOARD_ACTION_ANALYSIS_PERIOD_DAYS.map((days) =>
-                this.eventArchive.getRecentEvents({
-                  days,
-                  now,
-                })
-              ),
+              periods: this.eventArchive.getRecentActionAnalysisEventRanges({
+                now,
+                periodDays: DASHBOARD_ACTION_ANALYSIS_PERIOD_DAYS,
+              }),
             })
           )
         );
@@ -286,9 +272,6 @@ export class Echo extends DurableObject<Env> {
       noteSystem: this.noteSystem,
     });
     this.executableTools = bindRuntimeTools(canonicalRuntimeTools, toolContext);
-    // embedding モデル変更時の自動再 embedding
-    await this.memorySystem.reEmbedStaleMemories();
-
     // ストレージにID/名前を保存（alarmから参照するため）
     await this.storage.put('id', id);
     await this.storage.put('name', this.instanceDefinition.name);
@@ -344,6 +327,9 @@ export class Echo extends DurableObject<Env> {
     let alarmSeverity: 'debug' | 'warn' | 'error' = 'debug';
     let alarmReason: string | undefined;
     let eventRetentionCleanup: EventRetentionCleanupResult | undefined;
+    let memoryReembeddingMaintenance:
+      | MemoryReembeddingMaintenanceResult
+      | undefined;
 
     try {
       await emitEchoEvent(this.events, {
@@ -383,6 +369,8 @@ export class Echo extends DurableObject<Env> {
         alarmSeverity = dailySleepResult.alarmSeverity;
         alarmReason = 'daily_sleep_window';
         eventRetentionCleanup = dailySleepResult.eventRetentionCleanup;
+        memoryReembeddingMaintenance =
+          dailySleepResult.memoryReembeddingMaintenance;
         return;
       }
       if (
@@ -399,6 +387,7 @@ export class Echo extends DurableObject<Env> {
         severity: alarmSeverity,
         reason: alarmReason,
         eventRetentionCleanup,
+        memoryReembeddingMaintenance,
         alarmStartedAt,
         runResult,
       });
@@ -435,28 +424,69 @@ export class Echo extends DurableObject<Env> {
   private async scheduleDailySleepWakeAndCleanUpEvents(now: Date): Promise<{
     alarmSeverity: 'debug' | 'warn';
     eventRetentionCleanup: EventRetentionCleanupResult;
+    memoryReembeddingMaintenance: MemoryReembeddingMaintenanceResult;
   }> {
     await this.sleep();
     const nextAlarm = new Date(now);
     nextAlarm.setUTCHours(ALARM_CONFIG.DAILY_SLEEP_END_UTC_HOUR, 0, 0, 0);
     await this.setNextAlarm(nextAlarm, 'daily_sleep_wake');
 
-    try {
-      await this.cleanUpExpiredEvents(now);
+    const memoryReembeddingMaintenance =
+      await this.reEmbedStaleMemoriesForDailyMaintenance();
+    const eventRetentionCleanup =
+      await this.cleanUpExpiredEventsForDailySleep(now);
 
+    return {
+      alarmSeverity:
+        eventRetentionCleanup.status === 'failed' ||
+        memoryReembeddingMaintenance.status === 'failed'
+          ? 'warn'
+          : 'debug',
+      eventRetentionCleanup,
+      memoryReembeddingMaintenance,
+    };
+  }
+
+  /**
+   * 日次 sleep maintenance として stale memory の再 embedding を試みる。
+   *
+   * 初期化時の自動実行は避ける一方、embedding model 変更後に古い memory が
+   * 検索対象へ戻る機会を維持する。
+   *
+   * @returns 再 embedding maintenance の成否
+   */
+  private async reEmbedStaleMemoriesForDailyMaintenance(): Promise<MemoryReembeddingMaintenanceResult> {
+    try {
+      await this.getMemorySystemOrThrow().reEmbedStaleMemories();
       return {
-        alarmSeverity: 'debug',
-        eventRetentionCleanup: {
-          status: 'completed',
-        },
+        status: 'completed',
       };
     } catch (error) {
       return {
-        alarmSeverity: 'warn',
-        eventRetentionCleanup: {
-          status: 'failed',
-          error: getErrorMessage(error),
-        },
+        status: 'failed',
+        error: getErrorMessage(error),
+      };
+    }
+  }
+
+  /**
+   * 日次 sleep maintenance として expired event cleanup を試みる。
+   *
+   * @param now daily sleep alarm の発火時刻
+   * @returns event retention cleanup の成否
+   */
+  private async cleanUpExpiredEventsForDailySleep(
+    now: Date
+  ): Promise<EventRetentionCleanupResult> {
+    try {
+      await this.cleanUpExpiredEvents(now);
+      return {
+        status: 'completed',
+      };
+    } catch (error) {
+      return {
+        status: 'failed',
+        error: getErrorMessage(error),
       };
     }
   }
@@ -471,6 +501,9 @@ export class Echo extends DurableObject<Env> {
     severity: 'debug' | 'warn' | 'error';
     reason: string | undefined;
     eventRetentionCleanup: EventRetentionCleanupResult | undefined;
+    memoryReembeddingMaintenance:
+      | MemoryReembeddingMaintenanceResult
+      | undefined;
     alarmStartedAt: number;
     runResult: RunExecutionResult;
   }): Promise<void> {
@@ -485,6 +518,7 @@ export class Echo extends DurableObject<Env> {
         status: input.status,
         reason: input.reason,
         eventRetentionCleanup: input.eventRetentionCleanup,
+        memoryReembeddingMaintenance: input.memoryReembeddingMaintenance,
         alarmTotalMs: Date.now() - input.alarmStartedAt,
         unreadCheckMs: input.runResult.unreadCheckMs,
         thinkMs: input.runResult.thinkMs,
@@ -565,7 +599,7 @@ export class Echo extends DurableObject<Env> {
     const usage = await this.getAllUsage();
 
     const memories = this.getMemorySystemOrThrow()
-      .getAllMemories()
+      .getDashboardMemories()
       .map((row) => ({
         content: row.content,
         type: row.type,
@@ -601,12 +635,9 @@ export class Echo extends DurableObject<Env> {
    */
   async getSummary(): Promise<DashboardInstanceSummary> {
     const definition = this.getInstanceDefinitionOrThrow();
-    const notes = await this.getNotes();
-    const memories = this.getMemorySystemOrThrow()
-      .getAllMemories()
-      .map((row) => ({
-        updatedAt: row.updated_at,
-      }));
+    const noteSummary = await this.noteSystem.getDashboardNoteSummary();
+    const memorySystem = this.getMemorySystemOrThrow();
+    const memorySummary = memorySystem.getDashboardMemorySummary();
     const usage = await this.getAllUsage();
     const todayUsageTokens = (await this.getTodayUsage())?.total_tokens ?? 0;
     const sevenDayUsageTokens = sumUsageBreakdown(
@@ -623,13 +654,13 @@ export class Echo extends DurableObject<Env> {
       nextAlarm: await this.getNextAlarm(),
       nextWakeAt: await this.loadNextWakeAt(),
       runtime: this.getDashboardRuntimeConfig(),
-      noteCount: notes.length,
-      memoryCount: memories.length,
+      noteCount: noteSummary.count,
+      memoryCount: memorySummary.count,
       todayUsageTokens,
       sevenDayUsageTokens,
       thirtyDayUsageTokens,
-      latestNoteUpdatedAt: findLatestUpdatedAt(notes),
-      latestMemoryUpdatedAt: findLatestUpdatedAt(memories),
+      latestNoteUpdatedAt: noteSummary.latestUpdatedAt,
+      latestMemoryUpdatedAt: memorySummary.latestUpdatedAt,
     });
   }
 

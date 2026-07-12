@@ -5,5 +5,6 @@
 
 現在の現役ドキュメント:
 
+- [`cloudflare-runtime-budget.md`](./cloudflare-runtime-budget.md)
 - [`echo-event-logging.md`](./echo-event-logging.md)
 - [`echo-registry-boundary.md`](./echo-registry-boundary.md)

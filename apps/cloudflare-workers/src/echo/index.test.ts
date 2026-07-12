@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MemorySystem } from '@echo-chamber/cloudflare-runtime/memory-system';
+import {
+  parseDashboardActionAnalysisResponse,
+  parseDashboardSessionLogsResponse,
+} from '@echo-chamber/contracts/dashboard/schemas';
 import type { DashboardEchoEvent } from '@echo-chamber/contracts/dashboard/types';
 import { canonicalRuntimeTools } from '@echo-chamber/core/agent/runtime-tools/catalog';
 import { bindRuntimeTools } from '@echo-chamber/core/agent/runtime-tools/tool';
@@ -22,7 +26,7 @@ import { createToolExecutionContext } from './tool-context';
 
 import { Echo } from './index';
 
-import type { EchoEventArchiveRange } from './event-archive';
+import type { DashboardActionAnalysisEventRange } from './dashboard-action-analysis';
 
 const {
   mockEmbeddingService,
@@ -57,7 +61,14 @@ const {
   mockMemorySystem: {
     reEmbedStaleMemories: vi.fn(async () => Promise.resolve()),
   },
-  mockNoteSystem: {},
+  mockNoteSystem: {
+    getDashboardNoteSummary: vi.fn(async () =>
+      Promise.resolve({
+        count: 0,
+        latestUpdatedAt: null,
+      })
+    ),
+  },
   mockRerankingService: { provider: 'test-reranker' },
   mockRuntimeBindings: {
     discordBotToken: 'discord-token',
@@ -217,7 +228,14 @@ function createUsage(totalTokens: number): Usage {
 }
 
 function getEventArchive(echo: Echo): {
-  getRecentEvents(input: { days: number; now?: Date }): EchoEventArchiveRange;
+  getRecentActionAnalysisEventRanges(input: {
+    now?: Date;
+    periodDays: readonly number[];
+  }): DashboardActionAnalysisEventRange[];
+  getRecentActionAnalysisEvents(input: {
+    days: number;
+    now?: Date;
+  }): DashboardActionAnalysisEventRange;
   getTodayEvents(): {
     archiveDay: string;
     events: DashboardEchoEvent[];
@@ -226,10 +244,14 @@ function getEventArchive(echo: Echo): {
   return (
     echo as unknown as {
       eventArchive: {
-        getRecentEvents(input: {
+        getRecentActionAnalysisEventRanges(input: {
+          now?: Date;
+          periodDays: readonly number[];
+        }): DashboardActionAnalysisEventRange[];
+        getRecentActionAnalysisEvents(input: {
           days: number;
           now?: Date;
-        }): EchoEventArchiveRange;
+        }): DashboardActionAnalysisEventRange;
         getTodayEvents(): {
           archiveDay: string;
           events: DashboardEchoEvent[];
@@ -320,7 +342,7 @@ describe('Echo.ensureInitialized', () => {
       canonicalRuntimeTools,
       mockToolContext
     );
-    expect(mockMemorySystem.reEmbedStaleMemories).toHaveBeenCalledTimes(1);
+    expect(mockMemorySystem.reEmbedStaleMemories).not.toHaveBeenCalled();
     expect(putFn).toHaveBeenNthCalledWith(1, 'id', 'rin');
     expect(putFn).toHaveBeenNthCalledWith(2, 'name', 'リン');
   });
@@ -388,7 +410,9 @@ describe('Echo session logs route', () => {
     const response = await echo.fetch(
       new Request('http://example.com/rin/session-logs')
     );
-    const body = await response.json();
+    const body = parseDashboardSessionLogsResponse(
+      await response.json<unknown>()
+    );
 
     expect(response.status).toBe(200);
     expect(body).toMatchObject({
@@ -425,74 +449,131 @@ describe('Echo action analysis route', () => {
       },
       'ensureInitialized'
     ).mockResolvedValue(undefined);
-    vi.spyOn(getEventArchive(echo), 'getRecentEvents').mockImplementation(
-      ({ days }) => ({
-        days,
-        startArchiveDay: days === 1 ? '2026-06-01' : '2026-05-26',
-        endArchiveDay: '2026-06-01',
-        events: [
-          {
-            id: `session-completed-${days}`,
-            archiveDay: '2026-06-01',
-            category: 'session',
-            createdAt: '2026-06-01T12:00:00.000Z',
-            payload: {
-              terminationReason: 'finish_thinking',
-              totalTokens: 100,
-            },
-            sessionId: 'session-1',
-            severity: 'info',
-            streams: ['thought', 'system', 'analysis'],
-            summary: 'thinking session completed',
-            type: 'session.completed',
-          },
-          {
-            id: `tool-completed-${days}`,
-            archiveDay: '2026-06-01',
-            category: 'tool',
-            createdAt: '2026-06-01T12:00:01.000Z',
-            payload: {
-              callId: 'call-1',
-              success: true,
-              toolName: 'search_memory',
-            },
-            sessionId: 'session-1',
-            severity: 'info',
-            streams: ['system', 'analysis'],
-            summary: 'search_memory completed',
-            type: 'tool.completed',
-          },
-        ],
-      })
-    );
-
-    const response = await echo.fetch(
-      new Request('http://example.com/rin/action-analysis')
-    );
-    const body = await response.json();
-
-    expect(response.status).toBe(200);
-    expect(body).toMatchObject({
-      periods: [
+    const getRanges = vi
+      .spyOn(getEventArchive(echo), 'getRecentActionAnalysisEventRanges')
+      .mockReturnValue([
         {
           days: 1,
-          completedSessionCount: 1,
-          totalTokens: 100,
-          topTools: [
+          startArchiveDay: '2026-06-01',
+          endArchiveDay: '2026-06-01',
+          eventCount: 2,
+          events: [
             {
+              archiveDay: '2026-06-01',
+              createdAt: '2026-06-01T12:00:00.000Z',
+              sessionId: 'session-1',
+              severity: 'info',
+              terminationReason: 'finish_thinking',
+              totalTokens: 100,
+              type: 'session.completed',
+              warnings: [],
+            },
+            {
+              archiveDay: '2026-06-01',
+              createdAt: '2026-06-01T12:00:01.000Z',
+              sessionId: 'session-1',
+              severity: 'info',
               toolName: 'search_memory',
-              completedCount: 1,
+              type: 'tool.completed',
+              warnings: [],
             },
           ],
         },
         {
           days: 7,
+          startArchiveDay: '2026-05-26',
+          endArchiveDay: '2026-06-01',
+          eventCount: 2,
+          events: [],
+          metrics: {
+            sessionCount: 1,
+            completedSessionCount: 1,
+            failedSessionCount: 0,
+            warningSessionCount: 0,
+            maxTurnsSessionCount: 0,
+            totalTokens: 100,
+            totalSessionDurationMs: 0,
+            sessionDurationCount: 0,
+            totalTurns: 0,
+            noToolCallTurns: 0,
+            toolCallCount: 0,
+            toolCompletedCount: 1,
+            toolFailedCount: 0,
+            topTools: [
+              {
+                toolName: 'search_memory',
+                calledCount: 0,
+                completedCount: 1,
+                failedCount: 0,
+              },
+            ],
+            memorySearchCompletedCount: 0,
+            memorySearchFailedCount: 0,
+            memorySearchZeroResultCount: 0,
+            memorySearchFinalResultTotal: 0,
+            storeMemoryCompletedCount: 0,
+          },
         },
         {
           days: 30,
+          startArchiveDay: '2026-05-03',
+          endArchiveDay: '2026-06-01',
+          eventCount: 2,
+          events: [],
+          metrics: {
+            sessionCount: 1,
+            completedSessionCount: 1,
+            failedSessionCount: 0,
+            warningSessionCount: 0,
+            maxTurnsSessionCount: 0,
+            totalTokens: 100,
+            totalSessionDurationMs: 0,
+            sessionDurationCount: 0,
+            totalTurns: 0,
+            noToolCallTurns: 0,
+            toolCallCount: 0,
+            toolCompletedCount: 1,
+            toolFailedCount: 0,
+            topTools: [
+              {
+                toolName: 'search_memory',
+                calledCount: 0,
+                completedCount: 1,
+                failedCount: 0,
+              },
+            ],
+            memorySearchCompletedCount: 0,
+            memorySearchFailedCount: 0,
+            memorySearchZeroResultCount: 0,
+            memorySearchFinalResultTotal: 0,
+            storeMemoryCompletedCount: 0,
+          },
+        },
+      ]);
+
+    const response = await echo.fetch(
+      new Request('http://example.com/rin/action-analysis')
+    );
+    const body = parseDashboardActionAnalysisResponse(
+      await response.json<unknown>()
+    );
+
+    expect(response.status).toBe(200);
+    expect(body.periods[0]).toMatchObject({
+      days: 1,
+      completedSessionCount: 1,
+      totalTokens: 100,
+      topTools: [
+        {
+          toolName: 'search_memory',
+          completedCount: 1,
         },
       ],
     });
+    expect(body.periods).toHaveLength(3);
+    expect(getRanges).toHaveBeenCalledTimes(1);
+    expect(getRanges.mock.calls[0]?.[0]?.now).toBeInstanceOf(Date);
+    expect(getRanges.mock.calls[0]?.[0]?.periodDays).toEqual([1, 7, 30]);
     expect(body).not.toHaveProperty('events');
   });
 });
@@ -530,11 +611,11 @@ describe('Echo dashboard status payload', () => {
     });
     vi.spyOn(
       echo as unknown as {
-        getMemorySystemOrThrow(): { getAllMemories(): [] };
+        getMemorySystemOrThrow(): { getDashboardMemories(): [] };
       },
       'getMemorySystemOrThrow'
     ).mockReturnValue({
-      getAllMemories: () => [],
+      getDashboardMemories: () => [],
     });
     vi.spyOn(echo, 'getNextAlarm').mockResolvedValue(null);
     vi.spyOn(echo, 'getNotes').mockResolvedValue([]);
@@ -561,11 +642,21 @@ describe('Echo dashboard status payload', () => {
     });
     vi.spyOn(
       echo as unknown as {
-        getMemorySystemOrThrow(): { getAllMemories(): [] };
+        getMemorySystemOrThrow(): {
+          getDashboardMemories(): [];
+          getDashboardMemorySummary(): {
+            count: number;
+            latestUpdatedAt: string | null;
+          };
+        };
       },
       'getMemorySystemOrThrow'
     ).mockReturnValue({
-      getAllMemories: () => [],
+      getDashboardMemories: () => [],
+      getDashboardMemorySummary: () => ({
+        count: 0,
+        latestUpdatedAt: null,
+      }),
     });
     vi.spyOn(echo, 'getNextAlarm').mockResolvedValue(null);
     vi.spyOn(echo, 'getNotes').mockResolvedValue([]);
@@ -1243,6 +1334,18 @@ describe('Echo run metrics', () => {
         'cleanUpExpiredEvents'
       )
       .mockResolvedValue(undefined);
+    const reEmbedStaleMemoriesForDailyMaintenance = vi
+      .spyOn(
+        echo as unknown as {
+          reEmbedStaleMemoriesForDailyMaintenance(): Promise<{
+            status: 'completed';
+          }>;
+        },
+        'reEmbedStaleMemoriesForDailyMaintenance'
+      )
+      .mockResolvedValue({
+        status: 'completed',
+      });
     const setNextAlarm = vi
       .spyOn(
         echo as unknown as {
@@ -1259,6 +1362,7 @@ describe('Echo run metrics', () => {
     await echo.alarm();
 
     expect(sleep).toHaveBeenCalledTimes(1);
+    expect(reEmbedStaleMemoriesForDailyMaintenance).toHaveBeenCalledTimes(1);
     expect(cleanUpExpiredEvents).toHaveBeenCalledWith(
       new Date('2026-03-21T18:00:00.000Z')
     );
@@ -1299,6 +1403,18 @@ describe('Echo run metrics', () => {
         'cleanUpExpiredEvents'
       )
       .mockRejectedValue(new Error('SQLite cleanup failed'));
+    const reEmbedStaleMemoriesForDailyMaintenance = vi
+      .spyOn(
+        echo as unknown as {
+          reEmbedStaleMemoriesForDailyMaintenance(): Promise<{
+            status: 'completed';
+          }>;
+        },
+        'reEmbedStaleMemoriesForDailyMaintenance'
+      )
+      .mockResolvedValue({
+        status: 'completed',
+      });
     const setNextAlarm = vi
       .spyOn(
         echo as unknown as {
@@ -1315,6 +1431,7 @@ describe('Echo run metrics', () => {
     await expect(echo.alarm()).resolves.toBeUndefined();
 
     expect(sleep).toHaveBeenCalledTimes(1);
+    expect(reEmbedStaleMemoriesForDailyMaintenance).toHaveBeenCalledTimes(1);
     expect(setNextAlarm).toHaveBeenCalledWith(
       new Date('2026-03-21T22:00:00.000Z'),
       'daily_sleep_wake'
@@ -1344,5 +1461,58 @@ describe('Echo run metrics', () => {
     });
 
     vi.useRealTimers();
+  });
+
+  it('日次 memory maintenance で stale memory の再 embedding を実行する', async () => {
+    const env = createMockEnv();
+    const { storage } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+    (
+      echo as unknown as {
+        memorySystem: typeof mockMemorySystem | null;
+      }
+    ).memorySystem = mockMemorySystem;
+
+    const result = await (
+      echo as unknown as {
+        reEmbedStaleMemoriesForDailyMaintenance(): Promise<{
+          status: 'completed' | 'failed';
+          error?: string;
+        }>;
+      }
+    ).reEmbedStaleMemoriesForDailyMaintenance();
+
+    expect(mockMemorySystem.reEmbedStaleMemories).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({
+      status: 'completed',
+    });
+  });
+
+  it('日次 memory maintenance が失敗しても結果として返す', async () => {
+    const env = createMockEnv();
+    const { storage } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+    (
+      echo as unknown as {
+        memorySystem: typeof mockMemorySystem | null;
+      }
+    ).memorySystem = mockMemorySystem;
+    vi.mocked(mockMemorySystem.reEmbedStaleMemories).mockRejectedValueOnce(
+      new Error('embedding maintenance failed')
+    );
+
+    const result = await (
+      echo as unknown as {
+        reEmbedStaleMemoriesForDailyMaintenance(): Promise<{
+          status: 'completed' | 'failed';
+          error?: string;
+        }>;
+      }
+    ).reEmbedStaleMemoriesForDailyMaintenance();
+
+    expect(result).toEqual({
+      status: 'failed',
+      error: 'embedding maintenance failed',
+    });
   });
 });

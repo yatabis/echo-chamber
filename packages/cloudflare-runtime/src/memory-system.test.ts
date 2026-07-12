@@ -21,9 +21,21 @@ interface MockMemoryRow {
   updated_at: string;
 }
 
+type MockMemoryDashboardRow = Omit<MockMemoryRow, 'embedding'>;
+
+interface MockMemorySummaryRow {
+  latest_updated_at: string | null;
+  memory_count: number;
+}
+
 interface MockSqlResult {
-  toArray(): MockMemoryRow[];
-  one(): MockMemoryRow | { count: number } | undefined;
+  toArray(): (MockMemoryRow | MockMemoryDashboardRow | MockMemorySummaryRow)[];
+  one():
+    | MockMemoryRow
+    | MockMemoryDashboardRow
+    | MockMemorySummaryRow
+    | { count: number }
+    | undefined;
 }
 
 interface MockSqlStorage {
@@ -39,47 +51,137 @@ function createMockSqlStorage(): MockSqlStorage {
   const tables: { memories: MockMemoryRow[] } = {
     memories: [],
   };
+  type SelectHandler = (
+    queryLower: string,
+    args: unknown[]
+  ) => MockSqlResult | null;
+
+  const selectHandlers: SelectHandler[] = [
+    (queryLower): MockSqlResult | null => {
+      if (!queryLower.includes('max(updated_at)')) {
+        return null;
+      }
+      const latest = [...tables.memories].sort((a, b) =>
+        b.updated_at.localeCompare(a.updated_at)
+      )[0];
+      return {
+        toArray: () => [],
+        one: () => ({
+          latest_updated_at: latest?.updated_at ?? null,
+          memory_count: tables.memories.length,
+        }),
+      };
+    },
+    (queryLower): MockSqlResult | null => {
+      if (!queryLower.includes('count(*)')) {
+        return null;
+      }
+      return {
+        toArray: () => [],
+        one: () => ({ count: tables.memories.length }),
+      };
+    },
+    (queryLower): MockSqlResult | null => {
+      if (!queryLower.includes('order by created_at desc limit 1')) {
+        return null;
+      }
+      const sorted = [...tables.memories].sort((a, b) =>
+        b.created_at.localeCompare(a.created_at)
+      );
+      return { toArray: () => sorted.slice(0, 1), one: () => sorted[0] };
+    },
+    (queryLower): MockSqlResult | null => {
+      if (!queryLower.includes('order by updated_at asc limit 1')) {
+        return null;
+      }
+      const sorted = [...tables.memories].sort((a, b) =>
+        a.updated_at.localeCompare(b.updated_at)
+      );
+      return { toArray: () => sorted.slice(0, 1), one: () => sorted[0] };
+    },
+    (queryLower, args): MockSqlResult | null => {
+      if (!queryLower.includes('where embedding_model =')) {
+        return null;
+      }
+      const targetModel = args[0] as string;
+      const limit =
+        typeof args[1] === 'number' ? Math.max(1, Math.floor(args[1])) : 500;
+      const rows = tables.memories
+        .filter((m) => m.embedding_model === targetModel)
+        .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+        .slice(0, limit);
+      return {
+        toArray: () => rows.map((m) => ({ ...m })),
+        one: () => (rows[0] ? { ...rows[0] } : undefined),
+      };
+    },
+    (queryLower, args): MockSqlResult | null => {
+      if (
+        !queryLower.includes('from memories') ||
+        !queryLower.includes('embedding_model !=')
+      ) {
+        return null;
+      }
+      const targetModel = args[0] as string;
+      const limit =
+        typeof args[1] === 'number'
+          ? Math.max(1, Math.floor(args[1]))
+          : tables.memories.length;
+      const stale = tables.memories
+        .filter((m) => m.embedding_model !== targetModel)
+        .sort((a, b) => a.updated_at.localeCompare(b.updated_at))
+        .slice(0, limit);
+      return {
+        toArray: () => stale.map((m) => ({ ...m })),
+        one: () => (stale[0] ? { ...stale[0] } : undefined),
+      };
+    },
+    (queryLower, args): MockSqlResult | null => {
+      if (
+        !queryLower.includes('from memories') ||
+        !queryLower.includes('embedding_model') ||
+        queryLower.includes('embedding,')
+      ) {
+        return null;
+      }
+      const limit =
+        typeof args[0] === 'number'
+          ? Math.max(1, Math.floor(args[0]))
+          : tables.memories.length;
+      const rows = [...tables.memories]
+        .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+        .slice(0, limit)
+        .map(({ embedding: _embedding, ...row }) => ({
+          ...row,
+        }));
+      return {
+        toArray: () => rows,
+        one: () => rows[0],
+      };
+    },
+    (queryLower): MockSqlResult | null => {
+      if (
+        !queryLower.includes('from memories') ||
+        queryLower.includes('order by')
+      ) {
+        return null;
+      }
+      return {
+        toArray: () => tables.memories.map((m) => ({ ...m })),
+        one: () => (tables.memories[0] ? { ...tables.memories[0] } : undefined),
+      };
+    },
+  ];
 
   function handleSelect(
     queryLower: string,
     args: unknown[]
   ): MockSqlResult | null {
-    if (queryLower.includes('count(*)')) {
-      return {
-        toArray: () => [],
-        one: () => ({ count: tables.memories.length }),
-      };
-    }
-    if (queryLower.includes('order by created_at desc limit 1')) {
-      const sorted = [...tables.memories].sort((a, b) =>
-        b.created_at.localeCompare(a.created_at)
-      );
-      return { toArray: () => sorted.slice(0, 1), one: () => sorted[0] };
-    }
-    if (queryLower.includes('order by updated_at asc limit 1')) {
-      const sorted = [...tables.memories].sort((a, b) =>
-        a.updated_at.localeCompare(b.updated_at)
-      );
-      return { toArray: () => sorted.slice(0, 1), one: () => sorted[0] };
-    }
-    if (queryLower.includes('from memories where embedding_model')) {
-      const targetModel = args[0] as string;
-      const stale = tables.memories.filter(
-        (m) => m.embedding_model !== targetModel
-      );
-      return {
-        toArray: () => stale.map((m) => ({ ...m })),
-        one: () => (stale[0] ? { ...stale[0] } : undefined),
-      };
-    }
-    if (
-      queryLower.includes('from memories') &&
-      !queryLower.includes('order by')
-    ) {
-      return {
-        toArray: () => tables.memories.map((m) => ({ ...m })),
-        one: () => (tables.memories[0] ? { ...tables.memories[0] } : undefined),
-      };
+    for (const handler of selectHandlers) {
+      const result = handler(queryLower, args);
+      if (result !== null) {
+        return result;
+      }
     }
     return null;
   }
@@ -212,7 +314,7 @@ function createMockMemoryRow(
     content: 'Test memory content',
     type: 'episode',
     embedding: float32ArrayToBuffer(new Array<number>(1536).fill(0)),
-    embedding_model: 'openai/text-embedding-3-small',
+    embedding_model: 'test/mock-embedding-model',
     emotion_valence: 0.5,
     emotion_arousal: 0.3,
     emotion_labels: JSON.stringify(['neutral']),
@@ -379,6 +481,72 @@ describe('MemorySystem', () => {
     });
   });
 
+  describe('getDashboardMemories', () => {
+    it('embedding BLOB を除いた memory rows を返す', () => {
+      mockSql._tables.memories = [
+        createMockMemoryRow({
+          content: 'Dashboard memory',
+        }),
+      ];
+
+      const memories = memorySystem.getDashboardMemories();
+
+      expect(memories).toEqual([
+        expect.objectContaining({
+          content: 'Dashboard memory',
+          embedding_model: 'test/mock-embedding-model',
+        }),
+      ]);
+      expect(memories[0]).not.toHaveProperty('embedding');
+      expect(mockSql.exec).toHaveBeenCalledWith(
+        expect.not.stringContaining('embedding,'),
+        500
+      );
+    });
+
+    it('表示用 memory rows は指定上限で返す', () => {
+      mockSql._tables.memories = [
+        createMockMemoryRow({
+          content: 'Older memory',
+          updated_at: '2025-01-25T10:00:00.000Z',
+        }),
+        createMockMemoryRow({
+          content: 'Newer memory',
+          updated_at: '2025-01-25T11:00:00.000Z',
+        }),
+      ];
+
+      const memories = memorySystem.getDashboardMemories({ limit: 1 });
+
+      expect(memories).toEqual([
+        expect.objectContaining({
+          content: 'Newer memory',
+        }),
+      ]);
+    });
+  });
+
+  describe('getDashboardMemorySummary', () => {
+    it('memory count と最新更新日時を返す', () => {
+      mockSql._tables.memories = [
+        createMockMemoryRow({
+          updated_at: '2025-01-25T10:00:00.000Z',
+        }),
+        createMockMemoryRow({
+          updated_at: '2025-01-25T11:00:00.000Z',
+        }),
+      ];
+
+      expect(memorySystem.getDashboardMemorySummary()).toEqual({
+        count: 2,
+        latestUpdatedAt: '2025-01-25T11:00:00.000Z',
+      });
+      expect(mockSql.exec).toHaveBeenCalledWith(
+        expect.stringContaining('MAX(updated_at)')
+      );
+    });
+  });
+
   describe('searchMemory', () => {
     it('メモリが空の場合は空配列を返す', async () => {
       const results = await memorySystem.searchMemory('test query');
@@ -415,12 +583,12 @@ describe('MemorySystem', () => {
         createMockMemoryRow({
           content: 'Vector top 1',
           embedding: embedding.buffer,
-          updated_at: '2025-01-25T10:00:00.000Z',
+          updated_at: '2025-01-25T10:01:00.000Z',
         }),
         createMockMemoryRow({
           content: 'Vector top 2',
           embedding: embedding.buffer,
-          updated_at: '2025-01-25T10:01:00.000Z',
+          updated_at: '2025-01-25T10:00:00.000Z',
         }),
       ];
 
@@ -582,6 +750,56 @@ describe('MemorySystem', () => {
       expect(results).toHaveLength(1);
       expect(results[0]?.content).toBe('Semantic memory');
       expect(results[0]?.type).toBe('semantic');
+    });
+
+    it('同じインスタンス内の連続検索では memory rows を再読込しない', async () => {
+      const embedding = new Float32Array(1536).fill(0.5);
+      (
+        mockEmbeddingService.embed as ReturnType<typeof vi.fn>
+      ).mockResolvedValue(Array.from(embedding));
+      mockedRerank.mockResolvedValue([{ id: 0, score: 0.9 }]);
+
+      mockSql._tables.memories = [
+        createMockMemoryRow({
+          content: 'Cached memory',
+          embedding: embedding.buffer,
+        }),
+      ];
+
+      await memorySystem.searchMemory('first query');
+      await memorySystem.searchMemory('second query');
+
+      const searchSelectCalls = mockSql.exec.mock.calls.filter(([query]) => {
+        const sqlText = String(query).toLowerCase();
+        return (
+          sqlText.includes('select *') &&
+          sqlText.includes('where embedding_model =')
+        );
+      });
+      expect(searchSelectCalls).toHaveLength(1);
+    });
+
+    it('検索候補は最大 memory 件数まで読み込む', async () => {
+      const embedding = new Float32Array(1536).fill(0.5);
+      (
+        mockEmbeddingService.embed as ReturnType<typeof vi.fn>
+      ).mockResolvedValue(Array.from(embedding));
+      mockedRerank.mockResolvedValue([{ id: 0, score: 0.9 }]);
+
+      mockSql._tables.memories = [
+        createMockMemoryRow({
+          content: 'Searchable memory',
+          embedding: embedding.buffer,
+        }),
+      ];
+
+      await memorySystem.searchMemory('search query');
+
+      expect(mockSql.exec).toHaveBeenCalledWith(
+        expect.stringContaining('WHERE embedding_model = ?'),
+        'test/mock-embedding-model',
+        500
+      );
     });
 
     it('typeフィルタ後に候補が0件ならembeddingせず空配列を返す', async () => {
@@ -805,6 +1023,35 @@ describe('MemorySystem', () => {
       );
       expect(mockSql._tables.memories[1]?.embedding_model).toBe(
         'test/mock-embedding-model'
+      );
+    });
+
+    it('指定した上限まで stale memory を再 embedding する', async () => {
+      const newEmbedding = new Array<number>(2048).fill(0.2);
+      // eslint-disable-next-line @typescript-eslint/unbound-method
+      vi.mocked(mockEmbeddingService.embed).mockResolvedValue(newEmbedding);
+
+      mockSql._tables.memories = [
+        createMockMemoryRow({
+          content: 'Older stale memory',
+          embedding_model: 'openai/text-embedding-3-small',
+          updated_at: '2025-01-25T10:00:00.000Z',
+        }),
+        createMockMemoryRow({
+          content: 'Newer stale memory',
+          embedding_model: 'openai/text-embedding-3-small',
+          updated_at: '2025-01-25T11:00:00.000Z',
+        }),
+      ];
+
+      await memorySystem.reEmbedStaleMemories({ limit: 1 });
+
+      expect(mockEmbeddingService.embed).toHaveBeenCalledTimes(1); // eslint-disable-line @typescript-eslint/unbound-method
+      expect(mockSql._tables.memories[0]?.embedding_model).toBe(
+        'test/mock-embedding-model'
+      );
+      expect(mockSql._tables.memories[1]?.embedding_model).toBe(
+        'openai/text-embedding-3-small'
       );
     });
 

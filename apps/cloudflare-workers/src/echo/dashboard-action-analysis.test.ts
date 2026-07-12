@@ -1,22 +1,19 @@
 import { describe, expect, it } from 'vitest';
 
-import type { DashboardEchoEvent } from '@echo-chamber/contracts/dashboard/types';
-
 import { buildDashboardActionAnalysisResponse } from './dashboard-action-analysis';
 
+import type { DashboardActionAnalysisEvent } from './dashboard-action-analysis';
+
 function createEvent(
-  overrides: Partial<DashboardEchoEvent> & Pick<DashboardEchoEvent, 'type'>
-): DashboardEchoEvent {
+  overrides: Partial<DashboardActionAnalysisEvent> &
+    Pick<DashboardActionAnalysisEvent, 'type'>
+): DashboardActionAnalysisEvent {
   return {
-    id: `event-${overrides.type}`,
     archiveDay: '2026-06-01',
-    category: 'system',
     createdAt: '2026-06-01T12:00:00.000Z',
-    payload: null,
     sessionId: 'session-1',
     severity: 'info',
-    streams: ['system', 'analysis'],
-    summary: overrides.type,
+    warnings: [],
     ...overrides,
   };
 }
@@ -31,94 +28,48 @@ describe('buildDashboardActionAnalysisResponse', () => {
           days: 7,
           startArchiveDay: '2026-05-26',
           endArchiveDay: '2026-06-01',
+          eventCount: 8,
           events: [
             createEvent({
-              id: 'session-started',
               type: 'session.started',
-              category: 'session',
               createdAt: '2026-06-01T12:00:00.000Z',
-              streams: ['thought', 'system', 'analysis'],
             }),
             createEvent({
-              id: 'model-turn-completed',
               type: 'model.turn.completed',
-              category: 'model',
               createdAt: '2026-06-01T12:00:01.000Z',
-              payload: {
-                toolCallCount: 0,
-                turnIndex: 1,
-                warnings: ['no_tool_calls'],
-              },
-              streams: ['analysis'],
+              warnings: ['no_tool_calls'],
             }),
             createEvent({
-              id: 'tool-called-search',
               type: 'tool.called',
-              category: 'tool',
               createdAt: '2026-06-01T12:00:02.000Z',
-              payload: {
-                callId: 'call-search',
-                toolName: 'search_memory',
-              },
-              streams: ['thought', 'analysis'],
+              toolName: 'search_memory',
             }),
             createEvent({
-              id: 'tool-completed-search',
               type: 'tool.completed',
-              category: 'tool',
               createdAt: '2026-06-01T12:00:03.000Z',
-              payload: {
-                callId: 'call-search',
-                success: true,
-                toolName: 'search_memory',
-              },
-              streams: ['system', 'analysis'],
+              toolName: 'search_memory',
             }),
             createEvent({
-              id: 'memory-search-completed',
               type: 'memory.search.completed',
-              category: 'memory',
               createdAt: '2026-06-01T12:00:04.000Z',
-              payload: {
-                finalResultCount: 0,
-                query: 'latest context',
-              },
+              finalResultCount: 0,
             }),
             createEvent({
-              id: 'tool-completed-store',
               type: 'tool.completed',
-              category: 'tool',
               createdAt: '2026-06-01T12:00:05.000Z',
-              payload: {
-                callId: 'call-store',
-                success: true,
-                toolName: 'store_memory',
-              },
-              streams: ['system', 'analysis'],
+              toolName: 'store_memory',
             }),
             createEvent({
-              id: 'tool-failed-chat',
               type: 'tool.failed',
-              category: 'tool',
               createdAt: '2026-06-01T12:00:06.000Z',
-              payload: {
-                callId: 'call-chat',
-                success: false,
-                toolName: 'read_chat_messages',
-              },
-              streams: ['thought', 'system', 'analysis'],
+              toolName: 'read_chat_messages',
             }),
             createEvent({
-              id: 'session-completed',
               type: 'session.completed',
-              category: 'session',
               createdAt: '2026-06-01T12:00:10.000Z',
-              payload: {
-                terminationReason: 'max_turns',
-                totalTokens: 900,
-              },
+              terminationReason: 'max_turns',
+              totalTokens: 900,
               severity: 'warn',
-              streams: ['thought', 'system', 'analysis'],
             }),
           ],
         },
@@ -127,6 +78,7 @@ describe('buildDashboardActionAnalysisResponse', () => {
 
     expect(response.periods[0]).toMatchObject({
       days: 7,
+      eventCount: 8,
       sessionCount: 1,
       completedSessionCount: 1,
       warningSessionCount: 1,
@@ -163,6 +115,84 @@ describe('buildDashboardActionAnalysisResponse', () => {
       {
         toolName: 'store_memory',
         calledCount: 0,
+        completedCount: 1,
+        failedCount: 0,
+        failureRate: 0,
+      },
+    ]);
+  });
+
+  it('集計済み metrics から period payload を作る', () => {
+    const response = buildDashboardActionAnalysisResponse({
+      archiveDay: '2026-06-01',
+      generatedAt: '2026-06-01T12:10:00.000Z',
+      periods: [
+        {
+          days: 30,
+          startArchiveDay: '2026-05-03',
+          endArchiveDay: '2026-06-01',
+          eventCount: 12,
+          events: [],
+          metrics: {
+            sessionCount: 2,
+            completedSessionCount: 2,
+            failedSessionCount: 0,
+            warningSessionCount: 1,
+            maxTurnsSessionCount: 1,
+            totalTokens: 1200,
+            totalSessionDurationMs: 15_000,
+            sessionDurationCount: 2,
+            totalTurns: 3,
+            noToolCallTurns: 1,
+            toolCallCount: 3,
+            toolCompletedCount: 2,
+            toolFailedCount: 1,
+            topTools: [
+              {
+                toolName: 'search_memory',
+                calledCount: 2,
+                completedCount: 1,
+                failedCount: 1,
+              },
+              {
+                toolName: 'store_memory',
+                calledCount: 1,
+                completedCount: 1,
+                failedCount: 0,
+              },
+            ],
+            memorySearchCompletedCount: 2,
+            memorySearchFailedCount: 1,
+            memorySearchZeroResultCount: 1,
+            memorySearchFinalResultTotal: 3,
+            storeMemoryCompletedCount: 1,
+          },
+        },
+      ],
+    });
+
+    expect(response.periods[0]).toMatchObject({
+      days: 30,
+      eventCount: 12,
+      sessionCount: 2,
+      completedSessionCount: 2,
+      averageTokensPerCompletedSession: 600,
+      averageSessionDurationMs: 7500,
+      toolFailureRate: 1 / 3,
+      memorySearchAverageFinalResultCount: 1.5,
+      storeMemoryCompletedCount: 1,
+    });
+    expect(response.periods[0]?.topTools).toEqual([
+      {
+        toolName: 'search_memory',
+        calledCount: 2,
+        completedCount: 1,
+        failedCount: 1,
+        failureRate: 0.5,
+      },
+      {
+        toolName: 'store_memory',
+        calledCount: 1,
         completedCount: 1,
         failedCount: 0,
         failureRate: 0,

@@ -1494,21 +1494,25 @@ function ToolAnalysisTable(props: {
  * action analysis の期間切り替えボタン群を描画する。
  */
 function ActionPeriodToggle(props: {
+  availableDays: readonly DashboardActionAnalysisPeriodDays[];
   analysisDays: DashboardActionAnalysisPeriodDays;
   setAnalysisDays(days: DashboardActionAnalysisPeriodDays): void;
 }): JSX.Element {
   return (
     <div className="usage-toggle">
       {[1, 7, 30].map((days) => {
-        const active = props.analysisDays === days;
+        const periodDays = days as DashboardActionAnalysisPeriodDays;
+        const available = props.availableDays.includes(periodDays);
+        const active = available && props.analysisDays === days;
 
         return (
           <button
             key={days}
             type="button"
+            disabled={!available}
             className={active ? 'primary' : 'secondary'}
             onClick={() => {
-              props.setAnalysisDays(days as DashboardActionAnalysisPeriodDays);
+              props.setAnalysisDays(periodDays);
             }}
           >
             {days}d
@@ -1659,6 +1663,7 @@ function ActionAnalysisSection(props: {
   analysisDays: DashboardActionAnalysisPeriodDays;
   setAnalysisDays(days: DashboardActionAnalysisPeriodDays): void;
 }): JSX.Element {
+  const availableDays = props.analysis.periods.map((period) => period.days);
   const period = selectActionAnalysisPeriod(props.analysis, props.analysisDays);
 
   return (
@@ -1669,6 +1674,7 @@ function ActionAnalysisSection(props: {
           <p>{formatActionPeriodLabel(period)}</p>
         </div>
         <ActionPeriodToggle
+          availableDays={availableDays}
           analysisDays={props.analysisDays}
           setAnalysisDays={(days): void => {
             props.setAnalysisDays(days);

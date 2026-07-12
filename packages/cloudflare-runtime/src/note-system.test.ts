@@ -34,14 +34,25 @@ function createMockStorage(): MockStorage {
     list: vi.fn(
       async ({
         prefix,
+        reverse,
+        limit,
       }: {
         prefix?: string;
+        reverse?: boolean;
+        limit?: number;
       } = {}) => {
         const result = new Map<string, unknown>();
-        for (const [key, value] of data.entries()) {
-          if (prefix === undefined || key.startsWith(prefix)) {
-            result.set(key, value);
-          }
+        const entries = [...data.entries()]
+          .filter(([key]) => prefix === undefined || key.startsWith(prefix))
+          .sort(([left], [right]) =>
+            reverse === true
+              ? right.localeCompare(left)
+              : left.localeCompare(right)
+          )
+          .slice(0, limit);
+
+        for (const [key, value] of entries) {
+          result.set(key, value);
         }
         return Promise.resolve(result);
       }
@@ -171,6 +182,29 @@ describe('NoteSystem', () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  describe('getDashboardNoteSummary', () => {
+    it('dashboard summary 用に上限付きで正確な件数と最新更新日時を返す', async () => {
+      await noteSystem.createNote({
+        title: 'First',
+        content: 'first content',
+      });
+      await noteSystem.createNote({
+        title: 'Second',
+        content: 'second content',
+      });
+
+      const summary = await noteSystem.getDashboardNoteSummary();
+
+      expect(summary.count).toBe(2);
+      expect(typeof summary.latestUpdatedAt).toBe('string');
+      expect(storage.list).toHaveBeenLastCalledWith({
+        limit: MAX_NOTE_COUNT,
+        prefix: 'note:item:',
+        reverse: true,
+      });
     });
   });
 
