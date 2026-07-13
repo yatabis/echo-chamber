@@ -548,7 +548,7 @@ describe('SqliteEchoEventArchive', () => {
     ]);
   });
 
-  it('dashboard session logs 用の当日 event 取得に件数上限を付ける', () => {
+  it('dashboard session logs の件数上限を session 付き event に適用する', () => {
     const { exec, sql } = createMockSql();
     const archive = new SqliteEchoEventArchive({
       sql,
@@ -563,10 +563,29 @@ describe('SqliteEchoEventArchive', () => {
       archiveDay: '2026-06-03',
       events: [],
     });
-    expect(exec.mock.calls).toContainEqual([
-      expect.stringContaining('WHERE archive_day = ?'),
+    const eventQuery = exec.mock.calls.find(([query]) => {
+      return String(query).includes('FROM echo_events');
+    });
+    expect(eventQuery).toEqual([
+      expect.stringContaining('AND session_id IS NOT NULL'),
       '2026-06-03',
       50,
     ]);
+    expect(String(eventQuery?.[0])).toContain(
+      'ORDER BY created_at_ms DESC\n         LIMIT ?'
+    );
+    expect(exec.mock.calls).toContainEqual([
+      expect.stringContaining(
+        'CREATE INDEX IF NOT EXISTS idx_echo_events_archive_day_session_created'
+      ),
+    ]);
+    const sessionEventIndexQuery = exec.mock.calls.find(([query]) => {
+      return String(query).includes(
+        'idx_echo_events_archive_day_session_created'
+      );
+    });
+    expect(String(sessionEventIndexQuery?.[0])).toContain(
+      'WHERE session_id IS NOT NULL'
+    );
   });
 });

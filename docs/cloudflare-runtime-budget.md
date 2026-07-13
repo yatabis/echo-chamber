@@ -102,10 +102,12 @@ endpoint ごとの storage read:
 | Endpoint                   | Storage read shape                                                                                      |
 | -------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `GET /:id`                 | state、alarm、next wake、context、usage、notes 最大 200 件、embedding BLOB なし memory 最大 500 件      |
-| `GET /:id/session-logs`    | 現在 archive day の `echo_events` を `LIMIT 200` で読む                                                 |
+| `GET /:id/session-logs`    | 現在 archive day の session 付き `echo_events` を partial index 経由で `LIMIT 200` まで読む             |
 | `GET /:id/action-analysis` | 日次 action-analysis stats と tool stats だけを最大 30 archive day 分読む。raw `echo_events` は読まない |
 
 `GET /:id/action-analysis` は raw `echo_events` を読まない。1 / 7 / 30 day の period summary は、最大 30 日分の daily stats と tool stats から組み立てる。
+
+`GET /:id/session-logs` は `session_id IS NOT NULL` を `LIMIT 200` より前に適用する。1 分間隔の alarm が生成する session なし system event は取得上限を消費しない。`idx_echo_events_archive_day_session_created` partial index により、session なし event を遡って scan せず、最大 200 session event の bounded read を維持する。既存 DO では、この index を初めて作るときだけ保持中の session event に対する index 構築が発生する。定常時の API / DO request、event table row write、外部 API call は増えないが、session event row には partial index の保存・更新コストが加わる。
 
 Dashboard detail の GET DTO は Durable Object instance 内で短時間だけ in-memory cache する。`GET /:id` と `GET /:id/summary`、`GET /:id/session-logs` は 30 秒、`GET /:id/action-analysis` は 60 秒を上限にする。これは Cloudflare edge cache ではないため DO request 数は減らないが、同じ DO instance が生きている間の連続 refresh では storage read を避けられる。
 

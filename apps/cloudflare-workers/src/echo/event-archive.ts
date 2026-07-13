@@ -390,6 +390,13 @@ export class SqliteEchoEventArchive implements EchoEventArchive {
       ON echo_events(archive_day, created_at_ms)
     `);
 
+    // Alarm events without a session must not force dashboard reads to scan past the bounded result set.
+    this.sql.exec(`
+      CREATE INDEX IF NOT EXISTS idx_echo_events_archive_day_session_created
+      ON echo_events(archive_day, created_at_ms)
+      WHERE session_id IS NOT NULL
+    `);
+
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS echo_action_analysis_daily_stats (
         archive_day TEXT PRIMARY KEY,
@@ -763,6 +770,7 @@ export class SqliteEchoEventArchive implements EchoEventArchive {
         `SELECT *
          FROM echo_events
          WHERE archive_day = ?
+           AND session_id IS NOT NULL
          ORDER BY created_at_ms DESC
          LIMIT ?`,
         archiveDay,
