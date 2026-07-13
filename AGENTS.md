@@ -15,6 +15,15 @@
 - staged / unstaged / worktree / index を確認する場合は、`git status --short`、`git diff --name-status`、`git diff --cached --name-status` などの read-only コマンドで対象を切り分ける。特に `AM` / `MM` のような mixed state では、staged と unstaged を同じものとして扱わない
 - 破壊的または不可逆に近い Git 操作は、ユーザーの言葉を字義通りに処理せず、目的と失われる差分を説明して確認する。ユーザーの最新指示よりも、これまでの合意・レビュー状態・作業の正しさを優先して検証する
 
+### Code and Documentation Roles
+
+- 名前・型・公開 API には、対象が何であるかという **What** を表現する
+- production code には、振る舞いをどう実現するかという **How** を表現する
+- test code には、何が成立し続けるべきかという **What must remain true** を表現する。実装手順を写した test や、test を通すためだけの期待値変更を避ける
+- commit log には、その変更をなぜ行ったかという **Why changed** を記録する
+- code comment には、非自明な制約、現在の形を選ぶ理由、明白に見える代案を採らない理由という **Why this way / Why not** を記述する。コードの逐語的な言い換えは避ける
+- ADR や設計文書には、その architecture を選んだ理由と、判断を見直す条件という **Why this architecture** を残す
+
 ### Git Index Ownership
 
 - staged diff は、ユーザーが内容をレビュー済みと判断した境界として扱う
