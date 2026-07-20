@@ -74,10 +74,10 @@ pnpm dev
 通常の LLM / token limit は `packages/core/src/echo/instance-definitions.ts` の各 instance 定義で管理します。
 API key などの secret と、一時的な上書きだけを環境変数で指定します。
 
-Rapid-MLX や LM Studio の OpenAI 互換サーバーを一時的に使う場合は、対象 instance の prefix を付けてローカルの `apps/cloudflare-workers/.dev.vars` に追加します。
+Rapid-MLX や LM Studio などの OpenAI 互換 Chat Completions server を一時的に使う場合は、対象 instance の prefix を付けてローカルの `apps/cloudflare-workers/.dev.vars` に追加します。
 
 ```dotenv
-MARIE_MAIN_LLM_PROVIDER=rapidmlx
+MARIE_MAIN_LLM_PROVIDER=openai-compatible
 MARIE_MAIN_LLM_MODEL=qwen3.6-27b
 MARIE_MAIN_LLM_BASE_URL=http://localhost:8000/v1
 
@@ -87,12 +87,20 @@ MARIE_HARD_TOKEN_LIMIT_BUFFER_FACTOR=1.5
 ```
 
 prefix は `RIN_` / `MARIE_` を使います。prefix なしの `MAIN_LLM_*` や `DAILY_*_TOKEN_LIMIT` は、instance 定義に該当項目が無い場合の global fallback です。
-provider は Rapid-MLX の `rapidmlx`（alias: `rapid-mlx`）と LM Studio の `lmstudio`（alias: `lm-studio`）を指定できます。
+`openai-compatible` は server 製品に依存しない Chat Completions 接続です。LM Studio と Rapid-MLX のどちらを使う場合もこの値を指定します。
 `*_MAIN_LLM_MODEL` は接続先 runtime でロードしたモデルの identifier に合わせてください。
 OpenAI Responses API の reasoning effort は `*_MAIN_LLM_REASONING_EFFORT` または `MAIN_LLM_REASONING_EFFORT` で一時上書きできます。値は `none` / `minimal` / `low` / `medium` / `high` / `xhigh` です。
-どちらの local runtime でも `*_MAIN_LLM_BASE_URL` は必須です。LM Studio では `*_MAIN_LLM_API_KEY` も必須です。Rapid-MLX では省略すると OpenAI client 用の `not-needed` を使用し、server 側で認証を有効にした場合だけ明示します。
+OpenAI 互換 Chat Completions server では `*_MAIN_LLM_BASE_URL` が必須です。`*_MAIN_LLM_API_KEY` を省略すると OpenAI client 用の `not-needed` を使用するため、server 側で認証を有効にした場合だけ明示します。
 Chat Completions API 利用時は、prompt template が user message を必須とするモデル向けに `developer` message を `user` role として渡します。
 local runtime には `max_tokens: 32768`、`temperature: 0.7`、`top_p: 0.8`、`presence_penalty: 1.5`、`top_k: 20`、`chat_template_kwargs: { enable_thinking: false }` を固定で指定します。
+
+標準の LM Studio / Rapid-MLX には独自 cache field を送りません。E.C.H.O. 向け session cache protocol を実装した専用 runtime を使う場合だけ、次を追加します。
+
+```dotenv
+MARIE_MAIN_LLM_RUNTIME_PROFILE=echo-session-cache-v1
+```
+
+この version 付き profile は、instance ごとの session ID と、最初の完了済み exchange を境に `pinned` から `rolling` へ切り替わる slot を独自 `cache` body で送ります。会話履歴そのものは通常の Chat Completions と同じく `messages` で再送します。
 
 ### Secret 設定例
 

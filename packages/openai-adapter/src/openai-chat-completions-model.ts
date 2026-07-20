@@ -35,6 +35,20 @@ import type { ReasoningEffort } from 'openai/resources/shared';
 
 export type OpenAIChatCompletionsExtraBody = Record<string, unknown>;
 
+/**
+ * 動的 request body 拡張へ渡す、adapter が保持する exchange 状態。
+ */
+export interface OpenAIChatCompletionsRequestContext {
+  readonly hasCompletedExchange: boolean;
+}
+
+/**
+ * Chat Completions request ごとに追加 body を生成する拡張。
+ */
+export type OpenAIChatCompletionsRequestBodyExtension = (
+  context: OpenAIChatCompletionsRequestContext
+) => OpenAIChatCompletionsExtraBody;
+
 export interface OpenAIChatCompletionsModelOptions {
   apiKey: string;
   model: string;
@@ -47,6 +61,7 @@ export interface OpenAIChatCompletionsModelOptions {
   presencePenalty?: number;
   frequencyPenalty?: number;
   extraBody?: OpenAIChatCompletionsExtraBody;
+  requestBodyExtension?: OpenAIChatCompletionsRequestBodyExtension;
 }
 
 const EMPTY_CHAT_USAGE: CompletionUsage = {
@@ -65,6 +80,7 @@ export class OpenAIChatCompletionsModel implements ModelPort {
   private readonly client: OpenAI;
   private readonly messages: ChatCompletionMessageParam[] = [];
   private readonly events: EchoEventPort | undefined;
+  private hasCompletedChatExchange = false;
 
   /**
    * Chat Completions API を使う `ModelPort` adapter を構築する。
@@ -116,6 +132,7 @@ export class OpenAIChatCompletionsModel implements ModelPort {
     }
 
     this.messages.push(toAssistantMessageParam(assistantMessage));
+    this.hasCompletedChatExchange = true;
 
     if (!response.usage) {
       await this.emitProviderWarning(request, {
@@ -237,8 +254,13 @@ export class OpenAIChatCompletionsModel implements ModelPort {
   private createParams(
     request: ModelRequest
   ): ChatCompletionCreateParamsNonStreaming & OpenAIChatCompletionsExtraBody {
+    const requestBodyExtension = this.options.requestBodyExtension?.({
+      hasCompletedExchange: this.hasCompletedChatExchange,
+    });
+
     return {
       ...this.options.extraBody,
+      ...requestBodyExtension,
       messages: [...this.messages],
       model: this.options.model,
       frequency_penalty: this.options.frequencyPenalty,

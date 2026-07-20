@@ -55,6 +55,10 @@ import { isValidInstanceId } from '@echo-chamber/core/types/echo-config';
 import { formatDatetime } from '@echo-chamber/core/utils/datetime';
 import { getErrorMessage } from '@echo-chamber/core/utils/error';
 import { getUnreadMessageCount } from '@echo-chamber/discord-adapter/notification-utils';
+import {
+  ECHO_SESSION_CACHE_RUNTIME_PROFILE,
+  createEchoSessionCacheRequestBodyExtension,
+} from '@echo-chamber/openai-adapter/echo-session-cache-v1';
 import { OpenAIChatCompletionsModel } from '@echo-chamber/openai-adapter/openai-chat-completions-model';
 import { OpenAIResponsesModel } from '@echo-chamber/openai-adapter/openai-responses-model';
 
@@ -1513,10 +1517,8 @@ export class Echo extends DurableObject<Env> {
    * @returns メイン LLM 用の OpenAI-compatible model adapter
    */
   private createMainLLMClient(): ModelPort {
-    const config = resolveMainLLMConfig(
-      this._env,
-      this.getInstanceDefinitionOrThrow()
-    );
+    const definition = this.getInstanceDefinitionOrThrow();
+    const config = resolveMainLLMConfig(this._env, definition);
 
     if (config.api === 'chat_completions') {
       if (config.model === undefined) {
@@ -1533,6 +1535,12 @@ export class Echo extends DurableObject<Env> {
         topP: config.topP,
         presencePenalty: config.presencePenalty,
         extraBody: config.extraBody,
+        requestBodyExtension:
+          config.runtimeProfile === ECHO_SESSION_CACHE_RUNTIME_PROFILE
+            ? createEchoSessionCacheRequestBodyExtension(
+                `echo:${definition.id}`
+              )
+            : undefined,
       });
     }
 

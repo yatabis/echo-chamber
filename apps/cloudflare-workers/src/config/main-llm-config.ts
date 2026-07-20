@@ -3,6 +3,7 @@ import type {
   EchoMainLLMProvider,
   EchoMainLLMReasoningEffort,
 } from '@echo-chamber/core/echo/instance-definitions';
+import { ECHO_SESSION_CACHE_RUNTIME_PROFILE } from '@echo-chamber/openai-adapter/echo-session-cache-v1';
 
 export const MAX_TOKENS = 32768;
 export const TEMPERATURE = 0.7;
@@ -10,11 +11,14 @@ export const TOP_P = 0.8;
 export const PRESENCE_PENALTY = 1.5;
 export const TOP_K = 20;
 export const DEFAULT_OPENAI_RESPONSES_MODEL = 'gpt-5.6';
-const DEFAULT_RAPID_MLX_API_KEY = 'not-needed';
+const DEFAULT_OPENAI_COMPATIBLE_API_KEY = 'not-needed';
 
 export type MainLLMProvider = EchoMainLLMProvider;
 export type MainLLMApi = 'responses' | 'chat_completions';
 export type MainLLMExtraBody = Record<string, unknown>;
+export type MainLLMRuntimeProfile =
+  | 'standard'
+  | typeof ECHO_SESSION_CACHE_RUNTIME_PROFILE;
 
 type MainLLMConfigKey =
   | 'provider'
@@ -56,6 +60,7 @@ export interface MainLLMConfig {
   presencePenalty?: number;
   reasoningEffort?: EchoMainLLMReasoningEffort;
   extraBody?: MainLLMExtraBody;
+  runtimeProfile: MainLLMRuntimeProfile;
 }
 
 /**
@@ -71,6 +76,7 @@ export interface MainLLMEnv {
   MAIN_LLM_BASE_URL?: string;
   MAIN_LLM_API_KEY?: string;
   MAIN_LLM_REASONING_EFFORT?: string;
+  MAIN_LLM_RUNTIME_PROFILE?: string;
 }
 
 /**
@@ -199,22 +205,49 @@ function resolveProvider(provider: string | undefined): MainLLMProvider {
   if (normalized === undefined || normalized === 'openai') {
     return 'openai';
   }
-  if (normalized === 'lmstudio' || normalized === 'lm-studio') {
-    return 'lmstudio';
-  }
-  if (normalized === 'rapidmlx' || normalized === 'rapid-mlx') {
-    return 'rapidmlx';
+  if (normalized === 'openai-compatible') {
+    return 'openai-compatible';
   }
 
   throw new Error(
-    `Unsupported MAIN_LLM_PROVIDER: ${provider}. Use "openai", "lmstudio", or "rapidmlx".`
+    `Unsupported MAIN_LLM_PROVIDER: ${provider}. Use "openai" or "openai-compatible".`
   );
 }
 
 /**
- * OpenAI 互換 Chat Completions endpoint に渡す拡張パラメータを返す。
+ * instance 固有 env、global env の順に runtime profile を解決する。
  *
- * @returns LM Studio と Rapid-MLX が受け取れる拡張 request body
+ * @param env Worker 環境変数
+ * @param definition Echo instance 定義
+ * @returns 解決した runtime profile
+ */
+function resolveRuntimeProfile(
+  env: MainLLMEnv,
+  definition: EchoInstanceDefinition
+): MainLLMRuntimeProfile {
+  const instanceRuntimeProfile = normalizeOptionalEnv(
+    readEnv(env, `${getInstanceEnvPrefix(definition)}_MAIN_LLM_RUNTIME_PROFILE`)
+  );
+  const normalized = (
+    instanceRuntimeProfile ?? normalizeOptionalEnv(env.MAIN_LLM_RUNTIME_PROFILE)
+  )?.toLowerCase();
+
+  if (normalized === undefined || normalized === 'standard') {
+    return 'standard';
+  }
+  if (normalized === ECHO_SESSION_CACHE_RUNTIME_PROFILE) {
+    return ECHO_SESSION_CACHE_RUNTIME_PROFILE;
+  }
+
+  throw new Error(
+    `Unsupported MAIN_LLM_RUNTIME_PROFILE: ${normalized}. Use "standard" or "${ECHO_SESSION_CACHE_RUNTIME_PROFILE}".`
+  );
+}
+
+/**
+ * OpenAI 互換 Chat Completions endpoint に渡す共通拡張パラメータを返す。
+ *
+ * @returns OpenAI-compatible endpoint が受け取れる拡張 request body
  */
 function createChatCompletionsExtraBody(): MainLLMExtraBody {
   return {
@@ -245,8 +278,7 @@ function canUseDefinitionProviderDetails(
  *
  * provider/model/baseURL は instance 固有 env、instance 定義、global env の順に解決する。
  * API key は instance 固有 env、global env の順に解決し、OpenAI だけは
- * `OPENAI_API_KEY`、認証なしの Rapid-MLX は dummy key へ fallback する。
- * LM Studio と Rapid-MLX は OpenAI 互換 Chat Completions endpoint として接続する。
+ * `OPENAI_API_KEY`、OpenAI-compatible endpoint は dummy key へ fallback する。
  *
  * @param env Worker の環境変数
  * @param definition Echo instance 定義
@@ -259,6 +291,7 @@ export function resolveMainLLMConfig(
   const provider = resolveProvider(
     resolveMainLLMValue(env, definition, 'provider')
   );
+  const runtimeProfile = resolveRuntimeProfile(env, definition);
   const skipDefinitionProviderDetails = !canUseDefinitionProviderDetails(
     definition,
     provider
@@ -272,6 +305,12 @@ export function resolveMainLLMConfig(
   const providerApiKey = resolveMainLLMValue(env, definition, 'apiKey');
 
   if (provider === 'openai') {
+    if (runtimeProfile !== 'standard') {
+      throw new Error(
+        `MAIN_LLM_RUNTIME_PROFILE "${runtimeProfile}" requires MAIN_LLM_PROVIDER "openai-compatible".`
+      );
+    }
+
     const reasoningEffort = resolveReasoningEffort(
       resolveMainLLMValue(env, definition, 'reasoningEffort', {
         skipDefinition: skipDefinitionProviderDetails,
@@ -285,6 +324,7 @@ export function resolveMainLLMConfig(
       model: model ?? DEFAULT_OPENAI_RESPONSES_MODEL,
       baseURL,
       reasoningEffort,
+      runtimeProfile,
     };
   }
 
@@ -302,14 +342,7 @@ export function resolveMainLLMConfig(
     );
   }
 
-  const apiKey =
-    providerApiKey ??
-    (provider === 'rapidmlx' ? DEFAULT_RAPID_MLX_API_KEY : undefined);
-  if (apiKey === undefined) {
-    throw new Error(
-      `MAIN_LLM_API_KEY is required when MAIN_LLM_PROVIDER is "${providerName}".`
-    );
-  }
+  const apiKey = providerApiKey ?? DEFAULT_OPENAI_COMPATIBLE_API_KEY;
 
   return {
     provider,
@@ -322,5 +355,6 @@ export function resolveMainLLMConfig(
     topP: TOP_P,
     presencePenalty: PRESENCE_PENALTY,
     extraBody: createChatCompletionsExtraBody(),
+    runtimeProfile,
   };
 }

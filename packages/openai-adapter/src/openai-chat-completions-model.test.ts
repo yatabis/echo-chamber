@@ -4,6 +4,7 @@ import type { EchoEventPort } from '@echo-chamber/core/ports/echo-event';
 
 import {
   OpenAIChatCompletionsModel,
+  type OpenAIChatCompletionsExtraBody,
   toChatCompletionTool,
   toChatModelUsage,
 } from './openai-chat-completions-model';
@@ -183,6 +184,13 @@ describe('OpenAIChatCompletionsModel', () => {
       apiKey: 'local-key',
       model: 'qwen3.6',
       events: mockEvents,
+      requestBodyExtension: ({
+        hasCompletedExchange,
+      }): OpenAIChatCompletionsExtraBody => ({
+        runtime_extension: {
+          exchange_state: hasCompletedExchange ? 'subsequent' : 'initial',
+        },
+      }),
     });
 
     mockChatCreate
@@ -294,8 +302,19 @@ describe('OpenAIChatCompletionsModel', () => {
       },
     });
     expect(mockChatCreate).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        runtime_extension: {
+          exchange_state: 'initial',
+        },
+      })
+    );
+    expect(mockChatCreate).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
+        runtime_extension: {
+          exchange_state: 'subsequent',
+        },
         messages: [
           {
             role: 'user',
