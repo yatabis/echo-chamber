@@ -8,3 +8,4 @@ build/
 coverage/
 html/
 apps/cloudflare-workers/public/dashboard/
+.artifacts/model-evaluation/

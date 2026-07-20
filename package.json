@@ -14,9 +14,13 @@
     "lint:inspect": "eslint --inspect-config",
     "format": "prettier --check --write \"**/*.{js,ts,jsx,tsx,json,md}\"",
     "format:check": "prettier --check \"**/*.{js,ts,jsx,tsx,json,md}\"",
-    "typecheck": "pnpm --filter @echo-chamber/core typecheck && pnpm --filter @echo-chamber/contracts typecheck && pnpm --filter @echo-chamber/openai-adapter typecheck && pnpm --filter @echo-chamber/discord-adapter typecheck && pnpm --filter @echo-chamber/cloudflare-runtime typecheck && pnpm --filter @echo-chamber/cloudflare-workers typecheck && pnpm --filter @echo-chamber/dashboard typecheck",
+    "typecheck": "pnpm --filter @echo-chamber/core typecheck && pnpm --filter @echo-chamber/contracts typecheck && pnpm --filter @echo-chamber/openai-adapter typecheck && pnpm --filter @echo-chamber/model-evaluation typecheck && pnpm --filter @echo-chamber/discord-adapter typecheck && pnpm --filter @echo-chamber/cloudflare-runtime typecheck && pnpm --filter @echo-chamber/cloudflare-workers typecheck && pnpm --filter @echo-chamber/dashboard typecheck",
     "test:run": "pnpm --filter @echo-chamber/core test:run && pnpm --filter @echo-chamber/contracts test:run && pnpm --filter @echo-chamber/openai-adapter test:run && pnpm --filter @echo-chamber/discord-adapter test:run && pnpm --filter @echo-chamber/cloudflare-runtime test:run && pnpm --filter @echo-chamber/cloudflare-workers test:run",
     "test:coverage": "pnpm --filter @echo-chamber/core test:coverage && pnpm --filter @echo-chamber/contracts test:coverage && pnpm --filter @echo-chamber/openai-adapter test:coverage && pnpm --filter @echo-chamber/discord-adapter test:coverage && pnpm --filter @echo-chamber/cloudflare-runtime test:coverage && pnpm --filter @echo-chamber/cloudflare-workers test:coverage",
+    "eval": "pnpm --filter @echo-chamber/model-evaluation eval",
+    "eval:check": "pnpm --filter @echo-chamber/model-evaluation eval:check",
+    "eval:session-prefix-cache": "pnpm --filter @echo-chamber/model-evaluation eval:session-prefix-cache",
+    "eval:rescore": "pnpm --filter @echo-chamber/model-evaluation eval:rescore",
     "dashboard:build": "pnpm --filter @echo-chamber/dashboard build"
   },
   "devDependencies": {

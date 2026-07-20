@@ -8,6 +8,9 @@ yarn-error.log*
 lerna-debug.log*
 .pnpm-debug.log*
 
+# macOS metadata
+.DS_Store
+
 # Diagnostic reports (https://nodejs.org/api/report.html)
 
 report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
@@ -186,6 +189,9 @@ apps/cloudflare-workers/public/dashboard/
 
 # Vitest HTML reports
 **/html/
+
+# Local model evaluation artifacts
+/.artifacts/model-evaluation/
 
 # Playwright artifacts
 /.playwright-cli/

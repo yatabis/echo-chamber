@@ -173,6 +173,18 @@ importers:
         specifier: 0.38.16
         version: 0.38.16
 
+  packages/model-evaluation:
+    dependencies:
+      '@echo-chamber/core':
+        specifier: workspace:*
+        version: link:../core
+      '@echo-chamber/openai-adapter':
+        specifier: workspace:*
+        version: link:../openai-adapter
+      openai:
+        specifier: 6.46.0
+        version: 6.46.0(ws@8.18.0)(zod@4.0.5)
+
   packages/openai-adapter:
     dependencies:
       '@echo-chamber/core':

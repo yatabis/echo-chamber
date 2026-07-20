@@ -12,7 +12,8 @@ apps/
 packages/
   core/                      # Echo agent のドメイン / application 層（tool spec, prompt, session, ports）
   contracts/                 # Worker / Dashboard 間の API contract（DTO + zod schema）
-  openai-adapter/            # ModelPort の OpenAI Responses 実装
+  openai-adapter/            # ModelPort の OpenAI / OpenAI互換 API実装
+  model-evaluation/          # E.C.H.O. runtime behavior / local model 評価
   discord-adapter/           # Chat / Notification / ThoughtLog の Discord 実装
   cloudflare-runtime/        # Memory / Note など Cloudflare runtime 実装
 ```
@@ -22,6 +23,7 @@ packages/
 - `packages/core` は Cloudflare 固有型や provider SDK に依存しない
 - `packages/contracts` は API 境界の型と schema を持ち、UI 実装や runtime 実装を持たない
 - adapter package は `packages/core` に依存する
+- `packages/model-evaluation` は評価対象の `core` / adapter に依存し、production package からは参照しない
 - `packages/cloudflare-runtime` は `packages/core` に依存し、Cloudflare 固有実装を閉じ込める
 - `apps/cloudflare-workers` は composition root として adapter / core を束ねる
 - `apps/dashboard` は agent core ではなく API contract に依存する形へ寄せる
@@ -156,6 +158,10 @@ pnpm --filter @echo-chamber/cloudflare-workers exec wrangler kv key put --bindin
 | `pnpm dashboard:build`                              | Dashboard ビルド（Worker assets に出力）                           |
 | `pnpm test:run`                                     | `core` / `contracts` / adapter / runtime / worker のテスト実行     |
 | `pnpm test:coverage`                                | `core` / `contracts` / adapter / runtime / worker の coverage 集約 |
+| `pnpm eval:check`                                   | モデル評価器のシナリオ・採点・集計ロジックを検証                   |
+| `pnpm eval`                                         | Rapid-MLX上でQwen3.6のE.C.H.O. runtime評価を実行                   |
+| `pnpm eval:session-prefix-cache`                    | 専用session prefix-cache contractを実機検証                        |
+| `pnpm eval:rescore`                                 | 保存済み評価結果を現在の採点条件で再採点                           |
 | `pnpm lint:check` / `pnpm typecheck` / `pnpm check` | 品質チェック                                                       |
 
 ## HTTP エンドポイント
@@ -193,6 +199,7 @@ pnpm --filter @echo-chamber/cloudflare-workers exec wrangler kv key put --bindin
 - Dashboard は現状、専用 test script ではなく build / typecheck と contract parser で整合を保つ
 - `pnpm test:coverage` は monorepo 内の package / worker coverage を順に実行する
 - `pnpm test:coverage` は `@cloudflare/vitest-pool-workers` の都合で sandbox 外の実行を前提にする
+- model evaluationは通常のtest/coverageから分離し、`pnpm eval:*` で明示的に実行する
 
 ## 運用メモ
 
