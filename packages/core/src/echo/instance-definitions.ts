@@ -5,7 +5,7 @@ import { TOKEN_LIMITS } from './constants';
 
 import type { EchoInstanceId } from '../types/echo-config';
 
-export type EchoMainLLMProvider = 'openai' | 'lmstudio';
+export type EchoMainLLMProvider = 'openai' | 'lmstudio' | 'rapidmlx';
 export type EchoMainLLMReasoningEffort =
   | 'none'
   | 'minimal'

@@ -173,6 +173,55 @@ describe('resolveMainLLMConfig', () => {
     });
   });
 
+  it('Rapid-MLX は公開 Chat Completions 拡張だけを返す', () => {
+    expect(
+      resolveMainLLMConfig(
+        createEnv(),
+        createDefinition({
+          mainLlm: {
+            provider: 'rapidmlx',
+            model: 'qwen3.6-27b',
+            baseURL: 'http://localhost:8000/v1',
+          },
+        })
+      )
+    ).toEqual({
+      provider: 'rapidmlx',
+      api: 'chat_completions',
+      apiKey: 'not-needed',
+      model: 'qwen3.6-27b',
+      baseURL: 'http://localhost:8000/v1',
+      maxTokens: MAX_TOKENS,
+      temperature: TEMPERATURE,
+      topP: TOP_P,
+      presencePenalty: PRESENCE_PENALTY,
+      extraBody: {
+        top_k: TOP_K,
+        chat_template_kwargs: { enable_thinking: false },
+      },
+    });
+  });
+
+  it('Rapid-MLX の provider alias と明示 API key を受け付ける', () => {
+    expect(
+      resolveMainLLMConfig(
+        createEnv({
+          MARIE_MAIN_LLM_PROVIDER: 'rapid-mlx',
+          MARIE_MAIN_LLM_API_KEY: 'local-key',
+          MARIE_MAIN_LLM_MODEL: 'qwen3.6-27b',
+          MARIE_MAIN_LLM_BASE_URL: 'http://127.0.0.1:4321/v1',
+        }),
+        getEchoInstanceDefinition('marie')
+      )
+    ).toMatchObject({
+      provider: 'rapidmlx',
+      api: 'chat_completions',
+      apiKey: 'local-key',
+      model: 'qwen3.6-27b',
+      baseURL: 'http://127.0.0.1:4321/v1',
+    });
+  });
+
   it('provider を LM Studio に切り替えた場合は OpenAI definition model を流用しない', () => {
     expect(() =>
       resolveMainLLMConfig(
@@ -260,7 +309,7 @@ describe('resolveMainLLMConfig', () => {
         getEchoInstanceDefinition('rin')
       )
     ).toThrow(
-      'Unsupported MAIN_LLM_PROVIDER: anthropic. Use "openai" or "lmstudio".'
+      'Unsupported MAIN_LLM_PROVIDER: anthropic. Use "openai", "lmstudio", or "rapidmlx".'
     );
   });
 

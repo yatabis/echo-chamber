@@ -10,6 +10,7 @@ export const TOP_P = 0.8;
 export const PRESENCE_PENALTY = 1.5;
 export const TOP_K = 20;
 export const DEFAULT_OPENAI_RESPONSES_MODEL = 'gpt-5.6';
+const DEFAULT_RAPID_MLX_API_KEY = 'not-needed';
 
 export type MainLLMProvider = EchoMainLLMProvider;
 export type MainLLMApi = 'responses' | 'chat_completions';
@@ -201,10 +202,25 @@ function resolveProvider(provider: string | undefined): MainLLMProvider {
   if (normalized === 'lmstudio' || normalized === 'lm-studio') {
     return 'lmstudio';
   }
+  if (normalized === 'rapidmlx' || normalized === 'rapid-mlx') {
+    return 'rapidmlx';
+  }
 
   throw new Error(
-    `Unsupported MAIN_LLM_PROVIDER: ${provider}. Use "openai" or "lmstudio".`
+    `Unsupported MAIN_LLM_PROVIDER: ${provider}. Use "openai", "lmstudio", or "rapidmlx".`
   );
+}
+
+/**
+ * OpenAI 互換 Chat Completions endpoint に渡す拡張パラメータを返す。
+ *
+ * @returns LM Studio と Rapid-MLX が受け取れる拡張 request body
+ */
+function createChatCompletionsExtraBody(): MainLLMExtraBody {
+  return {
+    top_k: TOP_K,
+    chat_template_kwargs: { enable_thinking: false },
+  };
 }
 
 /**
@@ -228,8 +244,9 @@ function canUseDefinitionProviderDetails(
  * Worker 環境変数と instance 定義からメイン LLM の接続設定を解決する。
  *
  * provider/model/baseURL は instance 固有 env、instance 定義、global env の順に解決する。
- * API key は instance 固有 env、global env、`OPENAI_API_KEY` の順に解決する。
- * LM Studio は OpenAI 互換 Chat Completions endpoint として接続する。
+ * API key は instance 固有 env、global env の順に解決し、OpenAI だけは
+ * `OPENAI_API_KEY`、認証なしの Rapid-MLX は dummy key へ fallback する。
+ * LM Studio と Rapid-MLX は OpenAI 互換 Chat Completions endpoint として接続する。
  *
  * @param env Worker の環境変数
  * @param definition Echo instance 定義
@@ -271,37 +288,39 @@ export function resolveMainLLMConfig(
     };
   }
 
+  const providerName = provider;
+
   if (model === undefined) {
     throw new Error(
-      'MAIN_LLM_MODEL is required when MAIN_LLM_PROVIDER is "lmstudio".'
+      `MAIN_LLM_MODEL is required when MAIN_LLM_PROVIDER is "${providerName}".`
     );
   }
 
   if (baseURL === undefined) {
     throw new Error(
-      'MAIN_LLM_BASE_URL is required when MAIN_LLM_PROVIDER is "lmstudio".'
+      `MAIN_LLM_BASE_URL is required when MAIN_LLM_PROVIDER is "${providerName}".`
     );
   }
 
-  if (providerApiKey === undefined) {
+  const apiKey =
+    providerApiKey ??
+    (provider === 'rapidmlx' ? DEFAULT_RAPID_MLX_API_KEY : undefined);
+  if (apiKey === undefined) {
     throw new Error(
-      'MAIN_LLM_API_KEY is required when MAIN_LLM_PROVIDER is "lmstudio".'
+      `MAIN_LLM_API_KEY is required when MAIN_LLM_PROVIDER is "${providerName}".`
     );
   }
 
   return {
     provider,
     api: 'chat_completions',
-    apiKey: providerApiKey,
+    apiKey,
     model,
     baseURL,
     maxTokens: MAX_TOKENS,
     temperature: TEMPERATURE,
     topP: TOP_P,
     presencePenalty: PRESENCE_PENALTY,
-    extraBody: {
-      top_k: TOP_K,
-      chat_template_kwargs: { enable_thinking: false },
-    },
+    extraBody: createChatCompletionsExtraBody(),
   };
 }

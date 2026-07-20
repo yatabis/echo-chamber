@@ -74,13 +74,12 @@ pnpm dev
 通常の LLM / token limit は `packages/core/src/echo/instance-definitions.ts` の各 instance 定義で管理します。
 API key などの secret と、一時的な上書きだけを環境変数で指定します。
 
-LM Studio の OpenAI 互換サーバーを一時的に使う場合は、対象 instance の prefix を付けてローカルの `apps/cloudflare-workers/.dev.vars` に追加します。
+Rapid-MLX や LM Studio の OpenAI 互換サーバーを一時的に使う場合は、対象 instance の prefix を付けてローカルの `apps/cloudflare-workers/.dev.vars` に追加します。
 
 ```dotenv
-MARIE_MAIN_LLM_PROVIDER=lmstudio
+MARIE_MAIN_LLM_PROVIDER=rapidmlx
 MARIE_MAIN_LLM_MODEL=qwen3.6-27b
-MARIE_MAIN_LLM_BASE_URL=http://localhost:1234/v1
-MARIE_MAIN_LLM_API_KEY=lm-studio
+MARIE_MAIN_LLM_BASE_URL=http://localhost:8000/v1
 
 MARIE_DAILY_HARD_TOKEN_LIMIT=250000
 MARIE_DAILY_SOFT_TOKEN_LIMIT=150000
@@ -88,11 +87,12 @@ MARIE_HARD_TOKEN_LIMIT_BUFFER_FACTOR=1.5
 ```
 
 prefix は `RIN_` / `MARIE_` を使います。prefix なしの `MAIN_LLM_*` や `DAILY_*_TOKEN_LIMIT` は、instance 定義に該当項目が無い場合の global fallback です。
-`*_MAIN_LLM_MODEL` は LM Studio でロードしたモデルの identifier に合わせてください。
+provider は Rapid-MLX の `rapidmlx`（alias: `rapid-mlx`）と LM Studio の `lmstudio`（alias: `lm-studio`）を指定できます。
+`*_MAIN_LLM_MODEL` は接続先 runtime でロードしたモデルの identifier に合わせてください。
 OpenAI Responses API の reasoning effort は `*_MAIN_LLM_REASONING_EFFORT` または `MAIN_LLM_REASONING_EFFORT` で一時上書きできます。値は `none` / `minimal` / `low` / `medium` / `high` / `xhigh` です。
-LM Studio では `*_MAIN_LLM_BASE_URL` と `*_MAIN_LLM_API_KEY` も必須です。LM Studio 側で認証を無効にしている場合でも、OpenAI client 用に任意の API key 文字列を設定してください。
+どちらの local runtime でも `*_MAIN_LLM_BASE_URL` は必須です。LM Studio では `*_MAIN_LLM_API_KEY` も必須です。Rapid-MLX では省略すると OpenAI client 用の `not-needed` を使用し、server 側で認証を有効にした場合だけ明示します。
 Chat Completions API 利用時は、prompt template が user message を必須とするモデル向けに `developer` message を `user` role として渡します。
-LM Studio には `max_tokens: 32768`、`temperature: 0.7`、`top_p: 0.8`、`presence_penalty: 1.5`、`top_k: 20`、`chat_template_kwargs: { enable_thinking: false }` を固定で指定します。
+local runtime には `max_tokens: 32768`、`temperature: 0.7`、`top_p: 0.8`、`presence_penalty: 1.5`、`top_k: 20`、`chat_template_kwargs: { enable_thinking: false }` を固定で指定します。
 
 ### Secret 設定例
 
