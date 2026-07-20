@@ -27,10 +27,11 @@
 ### Git Index Ownership
 
 - staged diff は、ユーザーが内容をレビュー済みと判断した境界として扱う
-- Agent は `git add`、`git restore --staged`、`git reset`、`git apply --cached`、interactive staging など、stage / unstage / index を変更する操作を一切行わない。タスク遂行上必要に見えても、stage 操作はユーザーに委ねる
+- Agent は、ユーザーの明示的な許可がない限り、`git add`、`git restore --staged`、`git reset`、`git apply --cached`、interactive staging など、stage / unstage / index を変更する操作を行わない。通常は stage 操作をユーザーに委ねる
+- ユーザーが stage / unstage / index 操作を明示的に許可した場合は、示された目的と範囲に限って実行できる。許可はその依頼中の指定操作だけに有効であり、別のファイルや後続タスクへ持ち越さない。単なる commit 依頼を stage 操作の許可とはみなさない
 - Agent が関与していない staged diff の追加・削除・変更は、ユーザーがレビューして stage した、または不明点を確認するため unstage した可能性があるものとして扱う
 - 身に覚えのない staged 状態を発見しても、勝手に戻す、補完する、再度 stage する、worktree の状態へ揃えるなどの操作を行わない
-- staged 状態について判断が必要な場合や、ユーザーの意図と異なる可能性がある場合は、index に触れる前に必ずユーザーへ確認する
+- staged 状態について判断が必要な場合や、ユーザーの意図と異なる可能性がある場合は、index に触れる前に必ずユーザーへ確認し、必要な操作について明示的な許可を得る。許可が得られなければ index には触れない
 
 ## Architectural Invariants
 
