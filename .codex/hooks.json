@@ -1,0 +1,28 @@
+{
+  "description": "Run the repository quality gate after Codex changes the worktree.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/quality-gate.js\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/quality-gate.js\"",
+            "timeout": 900,
+            "statusMessage": "Running repository quality checks"
+          }
+        ]
+      }
+    ]
+  }
+}
