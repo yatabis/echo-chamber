@@ -42,7 +42,8 @@ export const ECHO_INSTANCE_DEFINITIONS = {
     systemPrompt: systemPromptRin,
     mainLlm: {
       provider: 'openai',
-      model: 'gpt-5.5',
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'none',
     },
     tokenLimits: {
       dailyHardLimit: TOKEN_LIMITS.DAILY_HARD_LIMIT,
@@ -56,7 +57,7 @@ export const ECHO_INSTANCE_DEFINITIONS = {
     systemPrompt: systemPromptMarie,
     mainLlm: {
       provider: 'openai',
-      model: 'gpt-5.6-luna',
+      model: 'gpt-5.6-terra',
       reasoningEffort: 'low',
     },
     tokenLimits: {

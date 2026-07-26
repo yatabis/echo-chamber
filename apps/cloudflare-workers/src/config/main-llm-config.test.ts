@@ -42,9 +42,9 @@ describe('resolveMainLLMConfig', () => {
       provider: 'openai',
       api: 'responses',
       apiKey: 'openai-key',
-      model: 'gpt-5.5',
+      model: 'gpt-5.6-sol',
       baseURL: undefined,
-      reasoningEffort: undefined,
+      reasoningEffort: 'none',
       runtimeProfile: 'standard',
     });
   });
@@ -70,7 +70,7 @@ describe('resolveMainLLMConfig', () => {
     ).toMatchObject({
       provider: 'openai',
       api: 'responses',
-      model: 'gpt-5.6-luna',
+      model: 'gpt-5.6-terra',
       reasoningEffort: 'low',
     });
   });

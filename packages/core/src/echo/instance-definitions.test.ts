@@ -11,7 +11,8 @@ const expectedInstanceRuntimeSettings = {
   rin: {
     mainLlm: {
       provider: 'openai',
-      model: 'gpt-5.5',
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'none',
     },
     tokenLimits: {
       dailyHardLimit: 500_000,
@@ -22,7 +23,7 @@ const expectedInstanceRuntimeSettings = {
   marie: {
     mainLlm: {
       provider: 'openai',
-      model: 'gpt-5.6-luna',
+      model: 'gpt-5.6-terra',
       reasoningEffort: 'low',
     },
     tokenLimits: {
