@@ -65,6 +65,22 @@ Set `ECHO_EVAL_PRODUCTION_REPETITIONS=0` to skip the stochastic sentinels, or an
 
 Set `ECHO_EVAL_CELL_FILTER` to a JavaScript regular-expression string to select whole evaluation cells. For example, `^deployment-sampling-single-session-sentinels$` runs only the repeated non-thinking production-sampling single-session cell and avoids rerunning controlled or stateful cells that are not part of the current question.
 
+Set `ECHO_EVAL_PRODUCTION_SAMPLING_FILE` to apply another model's documented sampling values to the production-sampling cells without changing the controlled-greedy cells. The default remains the Qwen3.6/E.C.H.O. profile above. The override is strict JSON with camel-case field names; the evaluator keeps non-thinking mode and the 1,024-token safety cap fixed:
+
+```json
+{
+  "description": "Agents-A1 official sampling values in the E.C.H.O. non-thinking evaluator; output remains capped at 1,024 tokens per turn.",
+  "temperature": 0.85,
+  "topP": 0.95,
+  "topK": 20,
+  "minP": 0.0,
+  "repetitionPenalty": 1.0,
+  "presencePenalty": 1.1
+}
+```
+
+The result protocol stores both the resolved generation profile and the override-file path. This makes the run reproducible but does not make a sampling profile model-specific automatically; the caller must supply the profile that belongs to the evaluated model.
+
 ## Artifact retention
 
 Store durable local evaluation results, server logs, smoke runs, and machine-local evaluation-target files under `.artifacts/model-evaluation/`. Use `/private/tmp` instead for disposable runs. The repository-local artifact directory is ignored because these generated files contain machine-specific paths and can be large. Commit only a deliberately curated, human-readable report under `docs/` after its evidence and limitations are stable; do not place raw evaluation artifacts there.

@@ -15,6 +15,7 @@ import {
   aggregateWorkflowResults,
 } from '../../qwen36-eat-readiness/aggregate';
 import { loadEvaluationTargets } from '../../qwen36-eat-readiness/evaluation-targets';
+import { loadProductionSamplingOverride } from '../../qwen36-eat-readiness/production-sampling-profile';
 import { runRuntimeScenario } from '../../qwen36-eat-readiness/runtime-harness';
 import { IMPLICIT_RUNTIME_SCENARIOS } from '../../qwen36-eat-readiness/runtime-implicit-scenarios';
 import {
@@ -181,6 +182,7 @@ function readKvCacheDtype(): 'int4' | 'int8' | 'bf16' {
 function createScenarioCells(input: {
   smokeMode: boolean;
   productionRepetitions: number;
+  productionSamplingProfile: RuntimeGenerationProfile;
 }): ScenarioCellDefinition[] {
   const explicit = input.smokeMode
     ? RUNTIME_SCENARIOS.slice(0, 1)
@@ -219,7 +221,7 @@ function createScenarioCells(input: {
       id: 'deployment-sampling-single-session-sentinels',
       purpose:
         'Small repeated sample under the current production sampling values.',
-      generationProfile: PRODUCTION_SAMPLING_PROFILE,
+      generationProfile: input.productionSamplingProfile,
       repetitions: input.productionRepetitions,
       fixtures: deploymentSentinels,
     });
@@ -230,6 +232,7 @@ function createScenarioCells(input: {
 function createWorkflowCells(input: {
   smokeMode: boolean;
   productionRepetitions: number;
+  productionSamplingProfile: RuntimeGenerationProfile;
 }): WorkflowCellDefinition[] {
   const controlledProduction = input.smokeMode
     ? RUNTIME_WORKFLOWS.filter((fixture) =>
@@ -260,7 +263,7 @@ function createWorkflowCells(input: {
       id: 'deployment-sampling-stateful-sentinels',
       purpose:
         'Repeated state-boundary and failure-recovery sentinels under production sampling.',
-      generationProfile: PRODUCTION_SAMPLING_PROFILE,
+      generationProfile: input.productionSamplingProfile,
       repetitions: input.productionRepetitions,
       fixtures: input.smokeMode
         ? deploymentSentinels.slice(0, 1)
@@ -412,6 +415,12 @@ liveTest(
       'ECHO_EVAL_PRODUCTION_REPETITIONS',
       smokeMode ? 1 : 2
     );
+    const productionSamplingOverridePath =
+      process.env.ECHO_EVAL_PRODUCTION_SAMPLING_FILE;
+    const productionSamplingProfile =
+      productionSamplingOverridePath === undefined
+        ? PRODUCTION_SAMPLING_PROFILE
+        : loadProductionSamplingOverride(productionSamplingOverridePath);
     const allTargets = createEvaluationTargets();
     const targets = smokeMode ? allTargets.slice(0, 1) : allTargets;
     const caseFilterSource = process.env.ECHO_EVAL_CASE_FILTER;
@@ -421,11 +430,19 @@ liveTest(
     const cellFilter =
       cellFilterSource === undefined ? null : new RegExp(cellFilterSource);
     const scenarioCells = filterScenarioCells(
-      createScenarioCells({ smokeMode, productionRepetitions }),
+      createScenarioCells({
+        smokeMode,
+        productionRepetitions,
+        productionSamplingProfile,
+      }),
       caseFilter
     ).filter((cell) => cellFilter === null || cellFilter.test(cell.id));
     const workflowCells = filterWorkflowCells(
-      createWorkflowCells({ smokeMode, productionRepetitions }),
+      createWorkflowCells({
+        smokeMode,
+        productionRepetitions,
+        productionSamplingProfile,
+      }),
       caseFilter
     ).filter((cell) => cellFilter === null || cellFilter.test(cell.id));
     if (scenarioCells.length === 0 && workflowCells.length === 0) {
@@ -522,8 +539,8 @@ liveTest(
           'not supported by the current runtime; queued_priority_after_session_boundary measures the implemented next-session behavior instead',
         externalPorts:
           'stateful synthetic implementations of production port contracts; no Discord, KV, SQLite, note store, or Zenn side effect',
-        productionSamplingCaveat:
-          'temperature/top-p/top-k/min-p/presence-penalty/repetition-penalty match the official Qwen3.6 non-thinking recommendation and current Rapid-MLX config; max output is capped at 1,024 tokens per turn instead of the recommended and production 32,768 ceiling',
+        productionSamplingOverridePath: productionSamplingOverridePath ?? null,
+        productionSamplingCaveat: productionSamplingProfile.description,
         pflash: false,
         kvCacheDtype,
       },
