@@ -4,9 +4,10 @@
 
 ## 役割
 
-- OpenAI Responses API 実装
+- OpenAI Responses API / OpenAI互換Chat Completions API実装
 - OpenAI function tool 形式への変換
 - OpenAI 固有レスポンス型の吸収
+- version付きrequest body拡張の提供
 
 ## 依存ルール
 
