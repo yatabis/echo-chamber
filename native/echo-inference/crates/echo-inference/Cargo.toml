@@ -1,0 +1,21 @@
+[package]
+name = "echo-inference"
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[features]
+default = []
+moe-performance-diagnostics = []
+
+[dependencies]
+echo-inference-state.workspace = true
+echo-mlx.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokenizers.workspace = true
+
+[lints]
+workspace = true

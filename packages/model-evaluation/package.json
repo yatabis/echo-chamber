@@ -6,12 +6,17 @@
   "scripts": {
     "eval": "ECHO_LOCAL_MODEL_EVAL=1 vitest run src/runners/rapid-mlx/live-eval.test.ts",
     "eval:check": "vitest run src/qwen36-eat-readiness --exclude src/qwen36-eat-readiness/rescore-result.test.ts",
+    "eval:native-rapid-performance": "ECHO_NATIVE_RAPID_PERFORMANCE_GATE=1 vitest run src/runners/native/performance-gate.test.ts",
+    "eval:native-stateful-performance": "ECHO_NATIVE_STATEFUL_PERFORMANCE_GATE=1 vitest run src/runners/native/stateful-performance-gate.test.ts",
+    "eval:native-long-session-performance": "ECHO_NATIVE_LONG_SESSION_PERFORMANCE_GATE=1 vitest run src/runners/native/long-session-performance-gate.test.ts",
+    "eval:native-rapid-long-session-performance": "ECHO_NATIVE_RAPID_LONG_SESSION_PERFORMANCE_GATE=1 vitest run src/runners/native/long-session-rapid-performance-gate.test.ts",
     "eval:session-prefix-cache": "ECHO_LOCAL_SESSION_PREFIX_CACHE_PROBE=1 vitest run src/runners/rapid-mlx/session-prefix-cache-probe.test.ts",
     "eval:rescore": "ECHO_EVAL_RESCORE_RESULT=1 vitest run src/qwen36-eat-readiness/rescore-result.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@echo-chamber/core": "workspace:*",
+    "@echo-chamber/native-inference-adapter": "workspace:*",
     "@echo-chamber/openai-adapter": "workspace:*",
     "openai": "6.46.0"
   }

@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "chat_template_sha256": "e84f32a23fdda27689f868aa4a1a5621f41133e51a48d7f3efcbea2839574259",
+  "eos_token_id": 248046,
+  "cases": [
+    {
+      "name": "text_only_non_thinking",
+      "rendered_exact": true,
+      "token_ids_exact": true,
+      "token_count": 21
+    },
+    {
+      "name": "echo_startup_tool_round_trip",
+      "rendered_exact": true,
+      "token_ids_exact": true,
+      "token_count": 427
+    },
+    {
+      "name": "assistant_text_and_multiple_tool_results",
+      "rendered_exact": true,
+      "token_ids_exact": true,
+      "token_count": 441
+    }
+  ],
+  "exact": true
+}

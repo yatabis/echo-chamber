@@ -24,6 +24,9 @@
         "./packages/openai-adapter/src/index.ts"
       ],
       "@echo-chamber/openai-adapter/*": ["./packages/openai-adapter/src/*"],
+      "@echo-chamber/native-inference-adapter/*": [
+        "./packages/native-inference-adapter/src/*"
+      ],
       "@echo-chamber/discord-adapter": [
         "./packages/discord-adapter/src/index.ts"
       ],

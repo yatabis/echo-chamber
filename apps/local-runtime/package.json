@@ -1,0 +1,19 @@
+{
+  "name": "@echo-chamber/local-runtime",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "probe:real-lifecycle": "vite-node src/real-lifecycle-probe.ts",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@echo-chamber/core": "workspace:*",
+    "@echo-chamber/native-inference-adapter": "workspace:*"
+  },
+  "devDependencies": {
+    "vite-node": "3.2.4"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "@echo-chamber/native-inference-adapter",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./native-inference-client": "./src/native-inference-client.ts",
+    "./native-inference-model": "./src/native-inference-model.ts"
+  },
+  "scripts": {
+    "probe:real-model": "vite-node src/real-model-probe.ts",
+    "probe:real-length": "vite-node src/real-length-probe.ts",
+    "probe:real-recovery": "vite-node src/real-recovery-probe.ts",
+    "probe:stream-overhead": "vite-node src/streaming-overhead-probe.ts",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@echo-chamber/core": "workspace:*"
+  },
+  "devDependencies": {
+    "vite-node": "3.2.4"
+  }
+}
