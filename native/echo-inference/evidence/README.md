@@ -22,7 +22,11 @@ fixtures plus the complete-model parity contract and result. The 2026-08-01
 set retains the final fused-router validation and both-order A/B measurements.
 The 2026-07-31 conclusions are fully compiled into its README. The 2026-08-03
 README retains the protocol-v7 short, stateful, and long-session performance
-conclusions. Raw performance and diagnostic outputs remain local-only.
+conclusions. The 2026-08-04 README retains the production-buffered promotion,
+independent 2K–32K context curve, 20-minute sustained-load, and serial
+multi-instance conclusions, plus the retained adaptive-prefill decision and
+its Native/MLX-LM execution-shape comparison. Raw performance and diagnostic
+outputs remain local-only.
 
 ## Local diagnostic archive
 

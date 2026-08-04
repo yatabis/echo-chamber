@@ -103,6 +103,7 @@ export interface NativeRuntimeMetrics {
   input_tokens_processed: number;
   generated_tokens: number;
   model_step_count: number;
+  input_model_execution_count: number;
   input_execution_nanos: number;
   input_graph_construction_nanos: number;
   input_materialization_nanos: number;

@@ -50,7 +50,7 @@ pub use full_model::{
 pub use gdn::{GdnLayerParity, run_gdn_layer_parity};
 pub use hybrid_block::{HybridBlockParity, run_hybrid_block_parity};
 pub use local_server::{LocalServerConfig, LocalServerError, serve_local_stdio};
-pub use model_state::MlxInferenceState;
+pub use model_state::{MlxInferenceState, NewSessionGdnPolicy};
 #[cfg(feature = "moe-performance-diagnostics")]
 pub use moe_performance::{MoePerformanceDiagnostic, run_moe_performance_diagnostic};
 pub use runtime::{

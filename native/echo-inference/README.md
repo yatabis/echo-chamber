@@ -34,8 +34,8 @@ The three request transitions are:
 - `initial`: no current state exists; start from empty GDN and attention state;
 - `continuation`: reuse the complete current KV/GDN state and process only the
   newly supplied suffix;
-- `new_session`: retain the current GDN state, clear every attention KV cache,
-  and process a complete fresh prompt.
+- `new_session`: by default retain the current GDN convolution and recurrent
+  state, clear every attention KV cache, and process a complete fresh prompt.
 
 The TypeScript adapter derives that transition from two facts. A
 `previousResponseToken` supplied after a successful response from the same
@@ -45,6 +45,15 @@ opaque, process-local continuation capability, not an LLM token or durable
 cursor. Its contents are not decoded or persisted. Restoring a process starts
 with state but no live response token, so its first request is necessarily a
 `new_session`.
+
+For the bounded cross-session quality experiment only,
+`ECHO_NATIVE_NEW_SESSION_GDN_POLICY=carry_recurrent_only` clears each GDN
+layer's three-position convolution history while retaining its recurrent
+matrix. `carry_convolution_only` retains that short-range history while
+clearing the recurrent matrix to complete the component ablation. The default
+and only production behavior remains `carry_all`; the selected policy is
+reported in the Native `ready.engine` payload. Unsupported values fail at
+startup.
 
 Normal EOS completion commits. Cancellation, diagnostic-stream delivery
 failure, and model or protocol errors roll back the active transaction and
@@ -168,6 +177,37 @@ cargo run --release -p echo-inference -- serve-stdio \
   /absolute/path/to/model \
   8
 ```
+
+### Long-input prefill
+
+The resident runtime keeps the single-execution path below 8,192 newly
+executed input tokens. Inputs at or above that boundary are processed as
+sequential 2,048-token model executions while carrying the complete in-memory
+KV and GDN state between executions. Previously committed prefix tokens are
+reported separately as `cached_prefix_tokens` and do not count toward this
+boundary. This bounds long-prefill intermediate memory without changing decode
+or the short-input graph.
+
+Both boundaries can be overridden at process startup:
+
+```bash
+ECHO_NATIVE_PREFILL_CHUNK_SIZE_TOKENS=4096 \
+ECHO_NATIVE_PREFILL_CHUNK_AT_OR_ABOVE_TOKENS=8192 \
+cargo run --release -p echo-inference -- serve-stdio \
+  /absolute/path/to/model \
+  8
+```
+
+Setting `ECHO_NATIVE_PREFILL_CHUNK_SIZE_TOKENS=0` disables chunking. A response
+reports `input_model_execution_count`, so a caller can distinguish one logical
+input from the number of model executions used to process it.
+
+Chunking is mathematically equivalent to one full prefill, but it is not a
+bit-exact transformation of BF16 hybrid-model state: GDN scans and downstream
+layers accumulate floating-point operations in a different execution shape.
+The 2,048-token path matches MLX-LM's corresponding default prefill shape.
+E.C.H.O. therefore treats the chunked result as the canonical state for long
+inputs instead of comparing it bit-for-bit with the single-execution state.
 
 `run-moe-performance-diagnostic` is excluded from ordinary builds. Set
 `ECHO_MOE_PERFORMANCE_MODE` to `full`, `none`, `router_only`, `routed_only`,

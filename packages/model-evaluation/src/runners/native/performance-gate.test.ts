@@ -26,6 +26,7 @@ import { EphemeralNativeStateRoots } from './ephemeral-state-roots';
 
 import type {
   ChatCompletionChunk,
+  ChatCompletionCreateParamsNonStreaming,
   ChatCompletionCreateParamsStreaming,
 } from 'openai/resources/chat/completions';
 
@@ -43,6 +44,7 @@ const BENCHMARK_PROMPT = [
 
 type AttemptPhase = 'warmup' | 'measured';
 type EngineName = 'native' | 'rapid-mlx';
+type DeliveryMode = 'streaming' | 'buffered';
 type FinishReason =
   | 'length'
   | 'stop'
@@ -63,6 +65,13 @@ interface GateConfig {
   warmupRuns: number;
   measuredRuns: number;
   engineOrder: readonly [EngineName, EngineName];
+  deliveryMode: DeliveryMode;
+}
+
+interface AttemptContext {
+  phase: AttemptPhase;
+  index: number;
+  deliveryMode: DeliveryMode;
 }
 
 interface BaseAttempt {
@@ -72,24 +81,32 @@ interface BaseAttempt {
   cachedPromptTokens: number;
   completionTokens: number;
   finishReason: FinishReason;
-  visibleTtftMs: number;
+  visibleTtftMs: number | null;
   totalMs: number;
-  decodeWindowMs: number;
-  externalDecodeTokensPerSecond: number;
+  decodeWindowMs: number | null;
+  externalDecodeTokensPerSecond: number | null;
   outputSha256: string;
 }
 
 interface NativeAttempt extends BaseAttempt {
-  firstTokenEventMs: number;
+  firstTokenEventMs: number | null;
   streamedTokenEvents: number;
   internal: NativeRuntimeMetrics;
 }
 
 interface RapidAttempt extends BaseAttempt {
-  contentChunks: number;
+  contentChunks: number | null;
 }
 
 interface RapidMlxStreamingParams extends ChatCompletionCreateParamsStreaming {
+  chat_template_kwargs: { enable_thinking: false };
+  top_k: number;
+  min_p: number;
+  repetition_penalty: number;
+}
+
+interface RapidMlxBufferedParams
+  extends ChatCompletionCreateParamsNonStreaming {
   chat_template_kwargs: { enable_thinking: false };
   top_k: number;
   min_p: number;
@@ -108,9 +125,9 @@ interface AttemptSummary {
   count: number;
   promptTokens: number[];
   completionTokens: number[];
-  medianVisibleTtftMs: number;
+  medianVisibleTtftMs: number | null;
   medianTotalMs: number;
-  medianExternalDecodeTokensPerSecond: number;
+  medianExternalDecodeTokensPerSecond: number | null;
 }
 
 function requiredEnvironmentVariable(name: string): string {
@@ -151,6 +168,19 @@ function parseEngineOrder(
   }
 }
 
+function parseDeliveryMode(
+  value = process.env.ECHO_PERF_DELIVERY_MODE
+): DeliveryMode {
+  const mode = value ?? 'streaming';
+  switch (mode) {
+    case 'streaming':
+    case 'buffered':
+      return mode;
+    default:
+      throw new Error('ECHO_PERF_DELIVERY_MODE must be streaming or buffered');
+  }
+}
+
 function loadConfig(): GateConfig {
   return {
     nativeBinaryPath: requiredEnvironmentVariable(
@@ -166,6 +196,7 @@ function loadConfig(): GateConfig {
     warmupRuns: parsePositiveInteger('ECHO_PERF_WARMUP_RUNS', 1),
     measuredRuns: parsePositiveInteger('ECHO_PERF_MEASURED_RUNS', 7),
     engineOrder: parseEngineOrder(),
+    deliveryMode: parseDeliveryMode(),
   };
 }
 
@@ -231,7 +262,8 @@ function decodeRate(completionTokens: number, decodeWindowMs: number): number {
 
 function nativeCommand(
   phase: AttemptPhase,
-  index: number
+  index: number,
+  deliveryMode: DeliveryMode
 ): NativeGenerateCommand {
   const identity = `${phase}-${index}`;
   return {
@@ -239,7 +271,7 @@ function nativeCommand(
     request_id: `native-performance-${identity}`,
     instance_id: `native-performance-${identity}`,
     state_transition: 'initial',
-    stream_tokens: true,
+    stream_tokens: deliveryMode === 'streaming',
     input: [{ role: 'user', content: BENCHMARK_PROMPT }],
     tools: [],
     max_new_tokens: MAX_NEW_TOKENS,
@@ -258,10 +290,10 @@ function nativeCommand(
 async function runNativeAttempt(
   client: NativeInferenceClient,
   stateRoots: EphemeralNativeStateRoots,
-  phase: AttemptPhase,
-  index: number
+  context: AttemptContext
 ): Promise<NativeAttempt> {
-  const command = nativeCommand(phase, index);
+  const { phase, index, deliveryMode } = context;
+  const command = nativeCommand(phase, index, deliveryMode);
   await stateRoots.open(client, command.instance_id);
   const startedAt = performance.now();
   let firstTokenAt: number | undefined;
@@ -276,11 +308,22 @@ async function runNativeAttempt(
     streamedTokenEvents += 1;
   });
   const completedAt = performance.now();
-  if (firstTokenAt === undefined || firstVisibleAt === undefined) {
+  if (
+    deliveryMode === 'streaming' &&
+    (firstTokenAt === undefined || firstVisibleAt === undefined)
+  ) {
     throw new Error(`native ${phase} ${index} emitted no visible token`);
   }
+  if (deliveryMode === 'buffered' && streamedTokenEvents !== 0) {
+    throw new Error(
+      `native ${phase} ${index} emitted token events in buffered mode`
+    );
+  }
   const completionTokens = event.response.metrics.generated_tokens;
-  const decodeWindowMs = completedAt - firstVisibleAt;
+  const visibleTtftMs =
+    firstVisibleAt === undefined ? null : firstVisibleAt - startedAt;
+  const decodeWindowMs =
+    firstVisibleAt === undefined ? null : completedAt - firstVisibleAt;
   return {
     phase,
     index,
@@ -288,11 +331,15 @@ async function runNativeAttempt(
     cachedPromptTokens: event.response.metrics.cached_prefix_tokens,
     completionTokens,
     finishReason: event.response.finish_reason,
-    firstTokenEventMs: firstTokenAt - startedAt,
-    visibleTtftMs: firstVisibleAt - startedAt,
+    firstTokenEventMs:
+      firstTokenAt === undefined ? null : firstTokenAt - startedAt,
+    visibleTtftMs,
     totalMs: completedAt - startedAt,
     decodeWindowMs,
-    externalDecodeTokensPerSecond: decodeRate(completionTokens, decodeWindowMs),
+    externalDecodeTokensPerSecond:
+      decodeWindowMs === null
+        ? null
+        : decodeRate(completionTokens, decodeWindowMs),
     streamedTokenEvents,
     outputSha256: sha256Text(event.text),
     internal: event.response.metrics,
@@ -323,7 +370,13 @@ async function runNativeBlock(
     for (const phase of attemptPhases(config)) {
       const index =
         phase === 'warmup' ? (warmupIndex += 1) : (measuredIndex += 1);
-      attempts.push(await runNativeAttempt(client, stateRoots, phase, index));
+      attempts.push(
+        await runNativeAttempt(client, stateRoots, {
+          phase,
+          index,
+          deliveryMode: config.deliveryMode,
+        })
+      );
     }
     return {
       readyElapsedMs,
@@ -340,7 +393,7 @@ async function runNativeBlock(
   }
 }
 
-function rapidParams(model: string): RapidMlxStreamingParams {
+function rapidStreamingParams(model: string): RapidMlxStreamingParams {
   return {
     model,
     messages: [{ role: 'user', content: BENCHMARK_PROMPT }],
@@ -355,6 +408,24 @@ function rapidParams(model: string): RapidMlxStreamingParams {
     seed: 42,
     stream: true,
     stream_options: { include_usage: true },
+    chat_template_kwargs: { enable_thinking: false },
+  };
+}
+
+function rapidBufferedParams(model: string): RapidMlxBufferedParams {
+  return {
+    model,
+    messages: [{ role: 'user', content: BENCHMARK_PROMPT }],
+    max_tokens: MAX_NEW_TOKENS,
+    temperature: 0,
+    top_p: 1,
+    top_k: 0,
+    min_p: 0,
+    repetition_penalty: 1,
+    presence_penalty: 0,
+    frequency_penalty: 0,
+    seed: 42,
+    stream: false,
     chat_template_kwargs: { enable_thinking: false },
   };
 }
@@ -376,14 +447,16 @@ function consumeRapidChunk(
   }
 }
 
-async function runRapidAttempt(
+async function runRapidStreamingAttempt(
   client: OpenAI,
   model: string,
   phase: AttemptPhase,
   index: number
 ): Promise<RapidAttempt> {
   const startedAt = performance.now();
-  const stream = await client.chat.completions.create(rapidParams(model));
+  const stream = await client.chat.completions.create(
+    rapidStreamingParams(model)
+  );
   const state: RapidStreamState = {
     finishReason: null,
     usage: undefined,
@@ -421,6 +494,64 @@ async function runRapidAttempt(
     contentChunks: state.contentChunks,
     outputSha256: sha256Text(state.output),
   };
+}
+
+async function runRapidBufferedAttempt(
+  client: OpenAI,
+  model: string,
+  phase: AttemptPhase,
+  index: number
+): Promise<RapidAttempt> {
+  const startedAt = performance.now();
+  const response = await client.chat.completions.create(
+    rapidBufferedParams(model)
+  );
+  const completedAt = performance.now();
+  const choice = response.choices[0];
+  const output = choice?.message.content;
+  if (
+    choice === undefined ||
+    typeof output !== 'string' ||
+    output === '' ||
+    response.usage === undefined
+  ) {
+    throw new Error(`Rapid-MLX ${phase} ${index} omitted output or usage`);
+  }
+  return {
+    phase,
+    index,
+    promptTokens: response.usage.prompt_tokens,
+    cachedPromptTokens:
+      response.usage.prompt_tokens_details?.cached_tokens ?? 0,
+    completionTokens: response.usage.completion_tokens,
+    finishReason: choice.finish_reason,
+    visibleTtftMs: null,
+    totalMs: completedAt - startedAt,
+    decodeWindowMs: null,
+    externalDecodeTokensPerSecond: null,
+    contentChunks: null,
+    outputSha256: sha256Text(output),
+  };
+}
+
+async function runRapidAttempt(
+  client: OpenAI,
+  model: string,
+  context: AttemptContext
+): Promise<RapidAttempt> {
+  return context.deliveryMode === 'streaming'
+    ? await runRapidStreamingAttempt(
+        client,
+        model,
+        context.phase,
+        context.index
+      )
+    : await runRapidBufferedAttempt(
+        client,
+        model,
+        context.phase,
+        context.index
+      );
 }
 
 async function readRapidStatus(baseURL: string): Promise<unknown> {
@@ -469,7 +600,11 @@ async function runRapidBlock(
       const index =
         phase === 'warmup' ? (warmupIndex += 1) : (measuredIndex += 1);
       attempts.push(
-        await runRapidAttempt(client, servedModelName, phase, index)
+        await runRapidAttempt(client, servedModelName, {
+          phase,
+          index,
+          deliveryMode: config.deliveryMode,
+        })
       );
       if (phase === 'warmup' && warmupIndex === config.warmupRuns) {
         result.statusAfterWarmup = await readRapidStatus(server.baseURL);
@@ -508,17 +643,28 @@ function median(values: readonly number[]): number {
   return (lower + upper) / 2;
 }
 
+function nullableMedian(values: readonly (number | null)[]): number | null {
+  const available = values.filter((value): value is number => value !== null);
+  if (available.length === 0) {
+    return null;
+  }
+  if (available.length !== values.length) {
+    throw new Error('metric availability differs between measured attempts');
+  }
+  return median(available);
+}
+
 function summarizeAttempts(attempts: readonly BaseAttempt[]): AttemptSummary {
   const measured = measuredAttempts(attempts);
   return {
     count: measured.length,
     promptTokens: measured.map((attempt) => attempt.promptTokens),
     completionTokens: measured.map((attempt) => attempt.completionTokens),
-    medianVisibleTtftMs: median(
+    medianVisibleTtftMs: nullableMedian(
       measured.map((attempt) => attempt.visibleTtftMs)
     ),
     medianTotalMs: median(measured.map((attempt) => attempt.totalMs)),
-    medianExternalDecodeTokensPerSecond: median(
+    medianExternalDecodeTokensPerSecond: nullableMedian(
       measured.map((attempt) => attempt.externalDecodeTokensPerSecond)
     ),
   };
@@ -526,6 +672,24 @@ function summarizeAttempts(attempts: readonly BaseAttempt[]): AttemptSummary {
 
 function allEqual(values: readonly number[], expected: number): boolean {
   return values.every((value) => value === expected);
+}
+
+function nullableRatio(
+  numerator: number | null,
+  denominator: number | null
+): number | null {
+  if (numerator === null || denominator === null) {
+    return null;
+  }
+  return numerator / denominator;
+}
+
+function isAtMostWithTolerance(ratio: number | null): boolean | null {
+  return ratio === null ? null : ratio <= 1 + PERFORMANCE_TOLERANCE;
+}
+
+function isAtLeastWithTolerance(ratio: number | null): boolean | null {
+  return ratio === null ? null : ratio >= 1 - PERFORMANCE_TOLERANCE;
 }
 
 function compareBlocks(
@@ -560,36 +724,47 @@ function compareBlocks(
       (attempt) => attempt.cachedPromptTokens === 0
     ),
   };
+  const greedyOutputHashesMatch = nativeMeasured.map(
+    (attempt, index) =>
+      attempt.outputSha256 === rapidMeasured[index]?.outputSha256
+  );
+  const visibleTtftNativeOverRapid = nullableRatio(
+    nativeSummary.medianVisibleTtftMs,
+    rapidSummary.medianVisibleTtftMs
+  );
+  const decodeRateNativeOverRapid = nullableRatio(
+    nativeSummary.medianExternalDecodeTokensPerSecond,
+    rapidSummary.medianExternalDecodeTokensPerSecond
+  );
   const ratios = {
-    visibleTtftNativeOverRapid:
-      nativeSummary.medianVisibleTtftMs / rapidSummary.medianVisibleTtftMs,
+    visibleTtftNativeOverRapid,
     totalTimeNativeOverRapid:
       nativeSummary.medianTotalMs / rapidSummary.medianTotalMs,
-    decodeRateNativeOverRapid:
-      nativeSummary.medianExternalDecodeTokensPerSecond /
-      rapidSummary.medianExternalDecodeTokensPerSecond,
+    decodeRateNativeOverRapid,
   };
   const performance = {
-    visibleTtftWithinFivePercent:
-      ratios.visibleTtftNativeOverRapid <= 1 + PERFORMANCE_TOLERANCE,
+    visibleTtftWithinFivePercent: isAtMostWithTolerance(
+      ratios.visibleTtftNativeOverRapid
+    ),
     totalTimeWithinFivePercent:
       ratios.totalTimeNativeOverRapid <= 1 + PERFORMANCE_TOLERANCE,
-    decodeRateWithinFivePercent:
-      ratios.decodeRateNativeOverRapid >= 1 - PERFORMANCE_TOLERANCE,
+    decodeRateWithinFivePercent: isAtLeastWithTolerance(
+      ratios.decodeRateNativeOverRapid
+    ),
   };
   return {
     comparableConditions,
-    greedyOutputHashesMatch: nativeMeasured.map(
-      (attempt, index) =>
-        attempt.outputSha256 === rapidMeasured[index]?.outputSha256
-    ),
+    greedyOutputHashesMatch,
     nativeSummary,
     rapidSummary,
     ratios,
     performance,
     admitted:
       Object.values(comparableConditions).every(Boolean) &&
-      Object.values(performance).every(Boolean),
+      greedyOutputHashesMatch.every(Boolean) &&
+      performance.totalTimeWithinFivePercent &&
+      performance.visibleTtftWithinFivePercent !== false &&
+      performance.decodeRateWithinFivePercent !== false,
   };
 }
 
@@ -607,6 +782,11 @@ test('admits both sequential engine orders and rejects ambiguous input', () => {
   expect(() => parseEngineOrder('alternating')).toThrow(
     'ECHO_PERF_ENGINE_ORDER must be native-first or rapid-first'
   );
+  expect(parseDeliveryMode('streaming')).toBe('streaming');
+  expect(parseDeliveryMode('buffered')).toBe('buffered');
+  expect(() => parseDeliveryMode('token-batches')).toThrow(
+    'ECHO_PERF_DELIVERY_MODE must be streaming or buffered'
+  );
 });
 
 // The model and two runtimes must be loaded sequentially on one unified-memory GPU.
@@ -617,7 +797,7 @@ liveTest(
     assertInputPaths(config);
     mkdirSync(dirname(config.outputPath), { recursive: true });
     const result: Record<string, unknown> = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       generatedAt: new Date().toISOString(),
       conditions: {
         order: config.engineOrder,
@@ -626,6 +806,8 @@ liveTest(
         maxNewTokens: MAX_NEW_TOKENS,
         warmupRuns: config.warmupRuns,
         measuredRuns: config.measuredRuns,
+        deliveryMode: config.deliveryMode,
+        externalTtftAndDecodeRateAvailable: config.deliveryMode === 'streaming',
         sampling: {
           temperature: 0,
           topP: 1,
@@ -692,11 +874,23 @@ liveTest(
       nativePrefixCacheDisabled: true,
       rapidPrefixCacheDisabled: true,
     });
-    expect(comparison.performance).toEqual({
-      visibleTtftWithinFivePercent: true,
-      totalTimeWithinFivePercent: true,
-      decodeRateWithinFivePercent: true,
-    });
+    expect(comparison.greedyOutputHashesMatch).toEqual(
+      Array.from({ length: config.measuredRuns }, () => true)
+    );
+    expect(comparison.performance).toEqual(
+      config.deliveryMode === 'streaming'
+        ? {
+            visibleTtftWithinFivePercent: true,
+            totalTimeWithinFivePercent: true,
+            decodeRateWithinFivePercent: true,
+          }
+        : {
+            visibleTtftWithinFivePercent: null,
+            totalTimeWithinFivePercent: true,
+            decodeRateWithinFivePercent: null,
+          }
+    );
+    expect(comparison.admitted).toBe(true);
   },
   30 * 60_000
 );

@@ -101,10 +101,14 @@ function sanitizeEventPayload(event: EchoEvent): Record<string, unknown> {
     return payload;
   }
 
-  const response =
-    typeof payload.response === 'object' && payload.response !== null
-      ? (payload.response as Record<string, unknown>)
-      : {};
+  // OpenAI-compatible providers attach the full wire response, which must be
+  // reduced before it is retained in evaluation artifacts. Native inference
+  // already emits a bounded metrics-only payload, so preserve it verbatim.
+  if (typeof payload.response !== 'object' || payload.response === null) {
+    return payload;
+  }
+
+  const response = payload.response as Record<string, unknown>;
   const choices = Array.isArray(response.choices)
     ? response.choices.map((choice) => {
         if (typeof choice !== 'object' || choice === null) {

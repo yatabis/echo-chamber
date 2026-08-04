@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
+import type {
+  EchoEvent,
+  EchoEventPort,
+} from '@echo-chamber/core/ports/echo-event';
 import type { ModelRequest } from '@echo-chamber/core/ports/model';
 
 import { NativeInferenceClient } from './native-inference-client';
@@ -222,6 +226,32 @@ describe('NativeInferenceModel', () => {
     });
   });
 
+  it('records the actual state transition on every native exchange event', async () => {
+    const events: EchoEvent[] = [];
+    const eventPort: EchoEventPort = {
+      async emit(event): Promise<void> {
+        events.push(event);
+        await Promise.resolve();
+      },
+    };
+    const { model, transport } = setupModel(undefined, eventPort);
+    transport.onSend = autoResponder();
+
+    await model.openState('/state/rin');
+    const initial = await model.generate(request('initial'));
+    await model.generate({
+      ...request('continuation'),
+      previousResponseToken: initial.responseToken,
+    });
+    await model.generate(request('new session'));
+
+    expect(
+      events
+        .filter((event) => event.type === 'model.exchange.recorded')
+        .map((event) => event.payload?.stateTransition)
+    ).toEqual(['initial', 'continuation', 'new_session']);
+  });
+
   it('rejects continuation after restart because no live token was issued', async () => {
     const { model, transport } = setupModel();
     transport.onSend = (wire, current): void => {
@@ -339,7 +369,10 @@ describe('NativeInferenceModel', () => {
   });
 });
 
-function setupModel(onToken?: () => void): {
+function setupModel(
+  onToken?: () => void,
+  events?: EchoEventPort
+): {
   model: NativeInferenceModel;
   transport: FakeTransport;
 } {
@@ -351,6 +384,7 @@ function setupModel(onToken?: () => void): {
     maxTokens: 128,
     seedSource: (): number => 42,
     ...(onToken === undefined ? {} : { onToken }),
+    ...(events === undefined ? {} : { events }),
   });
   transport.ready();
   return { model, transport };
@@ -413,6 +447,7 @@ function completed(
         ),
         generated_tokens: generated.length,
         model_step_count: generated.length + 1,
+        input_model_execution_count: 1,
         input_execution_nanos: 1,
         input_graph_construction_nanos: 2,
         input_materialization_nanos: 3,

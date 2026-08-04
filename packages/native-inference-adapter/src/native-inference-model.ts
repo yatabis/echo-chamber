@@ -189,7 +189,8 @@ export class NativeInferenceModel implements ModelPort {
       return await this.acceptCompleted(
         request,
         prepared.toolFingerprint,
-        event
+        event,
+        flow
       );
     } finally {
       this.activeRequestId = undefined;
@@ -299,7 +300,8 @@ export class NativeInferenceModel implements ModelPort {
   private async acceptCompleted(
     request: ModelRequest,
     toolFingerprint: string,
-    event: NativeCompletedEvent
+    event: NativeCompletedEvent,
+    flow: NativeRequestFlow
   ): Promise<ModelResponse> {
     this.validateCompleted(event);
     const output = event.output.map(toModelOutputItem);
@@ -313,7 +315,7 @@ export class NativeInferenceModel implements ModelPort {
     this.toolFingerprint = toolFingerprint;
     this.engineId = event.response.engine_id;
 
-    await this.emitExchange(request, event, output, usage);
+    await this.emitExchange({ request, event, output, usage, flow });
     if (event.tool_parse_warning !== undefined) {
       await this.emitToolParseWarning(request, event.tool_parse_warning);
     }
@@ -370,26 +372,28 @@ export class NativeInferenceModel implements ModelPort {
     return requestId;
   }
 
-  private async emitExchange(
-    request: ModelRequest,
-    event: NativeCompletedEvent,
-    output: readonly ModelOutputItem[],
-    usage: ModelUsage
-  ): Promise<void> {
+  private async emitExchange(input: {
+    request: ModelRequest;
+    event: NativeCompletedEvent;
+    output: readonly ModelOutputItem[];
+    usage: ModelUsage;
+    flow: NativeRequestFlow;
+  }): Promise<void> {
     await emitEchoEvent(this.events, {
       type: 'model.exchange.recorded',
       severity: 'debug',
-      summary: `model exchange recorded: native engine ${event.response.engine_id}`,
+      summary: `model exchange recorded: native engine ${input.event.response.engine_id}`,
       payload: {
         provider: PROVIDER_NAME,
         instanceId: this.instanceId,
-        turnIndex: request.turnIndex,
-        stateSequenceLength: event.response.state_sequence_length,
-        inputItemCount: request.input.length,
-        outputItemCount: output.length,
-        finishReason: event.response.finish_reason,
-        usage,
-        metrics: event.response.metrics,
+        turnIndex: input.request.turnIndex,
+        stateTransition: input.flow,
+        stateSequenceLength: input.event.response.state_sequence_length,
+        inputItemCount: input.request.input.length,
+        outputItemCount: input.output.length,
+        finishReason: input.event.response.finish_reason,
+        usage: input.usage,
+        metrics: input.event.response.metrics,
       },
     });
   }

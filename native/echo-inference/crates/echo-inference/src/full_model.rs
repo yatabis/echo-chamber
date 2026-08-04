@@ -449,6 +449,7 @@ pub fn run_resident_runtime_parity(
         model_directory,
         ResidentEngineConfig {
             max_new_tokens_per_request: manifest.generation_steps,
+            ..ResidentEngineConfig::default()
         },
     )
     .map_err(|error| state_operation_error("load resident runtime", error))?;
@@ -780,6 +781,7 @@ pub fn run_new_session_parity(
         model_directory,
         ResidentEngineConfig {
             max_new_tokens_per_request: manifest.generation_steps.max(1),
+            ..ResidentEngineConfig::default()
         },
     )
     .map_err(|error| state_operation_error("load new-session resident runtime", error))?;
@@ -820,9 +822,12 @@ pub fn run_new_session_parity(
         &mut oracle_differences,
     )?;
 
-    let transitioned = first_session_state
-        .payload
-        .begin_new_session(engine.gpu(), 1, &plan)?;
+    let transitioned = first_session_state.payload.begin_new_session(
+        engine.gpu(),
+        1,
+        &plan,
+        crate::NewSessionGdnPolicy::CarryAll,
+    )?;
     transitioned.validate(&plan, 1)?;
     let transition_gdn_max_absolute_difference = compare_gdn_state_values(
         engine.gpu(),

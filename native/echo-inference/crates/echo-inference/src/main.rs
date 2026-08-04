@@ -6,11 +6,11 @@ use std::process::ExitCode;
 #[cfg(feature = "moe-performance-diagnostics")]
 use echo_inference::run_moe_performance_diagnostic;
 use echo_inference::{
-    LocalServerConfig, inspect_model, produce_durable_state_parity, restore_durable_state_parity,
-    run_attention_layer_parity, run_chat_template_parity, run_decoder_layer_parity,
-    run_durable_state_parity, run_full_model_parity, run_gdn_layer_parity, run_hybrid_block_parity,
-    run_live_state_parity, run_new_session_parity, run_resident_runtime_parity,
-    run_sampling_parity, serve_local_stdio,
+    LocalServerConfig, NewSessionGdnPolicy, ResidentEngineConfig, inspect_model,
+    produce_durable_state_parity, restore_durable_state_parity, run_attention_layer_parity,
+    run_chat_template_parity, run_decoder_layer_parity, run_durable_state_parity,
+    run_full_model_parity, run_gdn_layer_parity, run_hybrid_block_parity, run_live_state_parity,
+    run_new_session_parity, run_resident_runtime_parity, run_sampling_parity, serve_local_stdio,
 };
 use echo_mlx::SafeTensors;
 
@@ -173,14 +173,80 @@ fn serve_stdio_command(arguments: &mut impl Iterator<Item = String>) -> Result<(
         .transpose()?
         .unwrap_or(LocalServerConfig::default().max_outstanding_requests);
     reject_extra_arguments(arguments)?;
+    let engine_defaults = ResidentEngineConfig::default();
+    let chunk_size_override =
+        optional_nonnegative_environment("ECHO_NATIVE_PREFILL_CHUNK_SIZE_TOKENS")?;
+    let chunk_at_or_above_override =
+        optional_positive_environment("ECHO_NATIVE_PREFILL_CHUNK_AT_OR_ABOVE_TOKENS")?;
+    if chunk_size_override == Some(0) && chunk_at_or_above_override.is_some() {
+        return Err(
+            "ECHO_NATIVE_PREFILL_CHUNK_AT_OR_ABOVE_TOKENS cannot be set when chunk size is 0"
+                .into(),
+        );
+    }
+    let prefill_chunk_size_tokens = match chunk_size_override {
+        Some(0) => None,
+        Some(value) => Some(value),
+        None => engine_defaults.prefill_chunk_size_tokens,
+    };
+    let prefill_chunk_at_or_above_tokens =
+        chunk_at_or_above_override.unwrap_or(engine_defaults.prefill_chunk_at_or_above_tokens);
+    let new_session_gdn_policy = new_session_gdn_policy_environment()?;
     serve_local_stdio(
         Path::new(&model_directory),
         LocalServerConfig {
             max_outstanding_requests,
+            engine: ResidentEngineConfig {
+                prefill_chunk_size_tokens,
+                prefill_chunk_at_or_above_tokens,
+                new_session_gdn_policy,
+                ..ResidentEngineConfig::default()
+            },
             ..LocalServerConfig::default()
         },
     )?;
     Ok(())
+}
+
+fn new_session_gdn_policy_environment() -> Result<NewSessionGdnPolicy, Box<dyn Error>> {
+    match env::var("ECHO_NATIVE_NEW_SESSION_GDN_POLICY") {
+        Ok(value) => parse_new_session_gdn_policy(&value).map_err(Into::into),
+        Err(env::VarError::NotPresent) => Ok(NewSessionGdnPolicy::CarryAll),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn parse_new_session_gdn_policy(value: &str) -> Result<NewSessionGdnPolicy, String> {
+    match value {
+        "carry_all" => Ok(NewSessionGdnPolicy::CarryAll),
+        "carry_recurrent_only" => Ok(NewSessionGdnPolicy::CarryRecurrentOnly),
+        "carry_convolution_only" => Ok(NewSessionGdnPolicy::CarryConvolutionOnly),
+        _ => Err(format!(
+            "ECHO_NATIVE_NEW_SESSION_GDN_POLICY must be carry_all, carry_recurrent_only, or carry_convolution_only, observed {value}"
+        )),
+    }
+}
+
+fn optional_positive_environment(name: &str) -> Result<Option<usize>, Box<dyn Error>> {
+    match env::var(name) {
+        Ok(value) => {
+            let parsed = value.parse::<usize>()?;
+            if parsed == 0 {
+                return Err(format!("{name} must be greater than zero").into());
+            }
+            Ok(Some(parsed))
+        }
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn optional_nonnegative_environment(name: &str) -> Result<Option<usize>, Box<dyn Error>> {
+    match env::var(name) {
+        Ok(value) => Ok(Some(value.parse::<usize>()?)),
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn run_chat_template_command(
@@ -426,4 +492,29 @@ fn reject_extra_arguments(
         return Err(format!("unexpected argument: {argument}").into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_only_supported_new_session_gdn_policies() {
+        assert_eq!(
+            parse_new_session_gdn_policy("carry_all"),
+            Ok(NewSessionGdnPolicy::CarryAll)
+        );
+        assert_eq!(
+            parse_new_session_gdn_policy("carry_recurrent_only"),
+            Ok(NewSessionGdnPolicy::CarryRecurrentOnly)
+        );
+        assert_eq!(
+            parse_new_session_gdn_policy("carry_convolution_only"),
+            Ok(NewSessionGdnPolicy::CarryConvolutionOnly)
+        );
+        assert_eq!(
+            parse_new_session_gdn_policy("fresh").expect_err("unsupported policy"),
+            "ECHO_NATIVE_NEW_SESSION_GDN_POLICY must be carry_all, carry_recurrent_only, or carry_convolution_only, observed fresh"
+        );
+    }
 }

@@ -1,7 +1,20 @@
 use echo_mlx::{Array, DType, Gpu};
+use serde::Serialize;
 
 use super::gdn::validate_array;
 use super::{EngineError, ModelPlan};
+
+/// GDN components retained when a complete fresh prompt starts a new session.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NewSessionGdnPolicy {
+    /// Retain both the short-range convolution history and recurrent matrix.
+    CarryAll,
+    /// Clear the short-range convolution history and retain only the recurrent matrix.
+    CarryRecurrentOnly,
+    /// Retain the short-range convolution history and clear the recurrent matrix.
+    CarryConvolutionOnly,
+}
 
 #[derive(Debug)]
 pub(crate) enum LayerState {
@@ -234,14 +247,15 @@ impl MlxInferenceState {
 
     /// Derives the initial cache for a new E.C.H.O. thinking session.
     ///
-    /// Both GDN tensors retain the preceding session's immutable MLX graph
-    /// nodes. Every full-attention KV tensor is replaced with a zero-length
-    /// cache so the fresh prompt cannot attend to the prior token lineage.
+    /// GDN retention follows `policy`. Every full-attention KV tensor is
+    /// replaced with a zero-length cache so the fresh prompt cannot attend to
+    /// the prior token lineage.
     pub(crate) fn begin_new_session(
         &self,
         gpu: &Gpu,
         batch_size: usize,
         plan: &ModelPlan,
+        policy: NewSessionGdnPolicy,
     ) -> Result<Self, EngineError> {
         self.validate(plan, batch_size)?;
         let mut layers = Vec::with_capacity(self.layers.len());
@@ -250,10 +264,7 @@ impl MlxInferenceState {
                 LayerState::Gdn {
                     convolution,
                     recurrent,
-                } => layers.push(LayerState::Gdn {
-                    convolution: convolution.try_clone().map_err(EngineError::Mlx)?,
-                    recurrent: recurrent.try_clone().map_err(EngineError::Mlx)?,
-                }),
+                } => layers.push(new_session_gdn_state(gpu, convolution, recurrent, policy)?),
                 LayerState::Attention { .. } => {
                     layers.push(empty_attention_state(gpu, batch_size, plan)?);
                 }
@@ -261,6 +272,34 @@ impl MlxInferenceState {
         }
         Ok(Self::new(layers))
     }
+}
+
+fn new_session_gdn_state(
+    gpu: &Gpu,
+    convolution: &Array,
+    recurrent: &Array,
+    policy: NewSessionGdnPolicy,
+) -> Result<LayerState, EngineError> {
+    let convolution = match policy {
+        NewSessionGdnPolicy::CarryAll | NewSessionGdnPolicy::CarryConvolutionOnly => {
+            convolution.try_clone().map_err(EngineError::Mlx)?
+        }
+        NewSessionGdnPolicy::CarryRecurrentOnly => {
+            gpu.zeros_like(convolution).map_err(EngineError::Mlx)?
+        }
+    };
+    let recurrent = match policy {
+        NewSessionGdnPolicy::CarryAll | NewSessionGdnPolicy::CarryRecurrentOnly => {
+            recurrent.try_clone().map_err(EngineError::Mlx)?
+        }
+        NewSessionGdnPolicy::CarryConvolutionOnly => {
+            gpu.zeros_like(recurrent).map_err(EngineError::Mlx)?
+        }
+    };
+    Ok(LayerState::Gdn {
+        convolution,
+        recurrent,
+    })
 }
 
 fn empty_attention_state(
@@ -293,5 +332,108 @@ impl LayerState {
             } => [convolution, recurrent],
             Self::Attention { keys, values } => [keys, values],
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn new_session_component_policies_clear_and_retain_exact_tensors() {
+        let gpu = Gpu::new();
+        let convolution = Array::from_f32_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[1, 3, 2])
+            .expect("convolution fixture");
+        let convolution = gpu
+            .astype(&convolution, DType::BFloat16)
+            .expect("BF16 convolution fixture");
+        let recurrent = Array::from_f32_slice(&[7.0, 8.0, 9.0, 10.0], &[1, 1, 2, 2])
+            .expect("recurrent fixture");
+
+        let LayerState::Gdn {
+            convolution: carried_convolution,
+            recurrent: carried_recurrent,
+        } = new_session_gdn_state(
+            &gpu,
+            &convolution,
+            &recurrent,
+            NewSessionGdnPolicy::CarryRecurrentOnly,
+        )
+        .expect("recurrent-only transition")
+        else {
+            panic!("transition must remain a GDN state");
+        };
+        let zero_convolution = gpu.zeros_like(&convolution).expect("zero convolution");
+
+        assert_eq!(
+            gpu.max_abs_difference(&carried_convolution, &zero_convolution)
+                .expect("cleared convolution difference"),
+            0.0
+        );
+        assert!(
+            gpu.max_abs_difference(&carried_convolution, &convolution)
+                .expect("original convolution difference")
+                > 0.0
+        );
+        assert_eq!(
+            gpu.max_abs_difference(&carried_recurrent, &recurrent)
+                .expect("retained recurrent difference"),
+            0.0
+        );
+
+        let LayerState::Gdn {
+            convolution: fully_carried_convolution,
+            recurrent: fully_carried_recurrent,
+        } = new_session_gdn_state(
+            &gpu,
+            &convolution,
+            &recurrent,
+            NewSessionGdnPolicy::CarryAll,
+        )
+        .expect("complete-carry transition")
+        else {
+            panic!("transition must remain a GDN state");
+        };
+        assert_eq!(
+            gpu.max_abs_difference(&fully_carried_convolution, &convolution)
+                .expect("carried convolution difference"),
+            0.0
+        );
+        assert_eq!(
+            gpu.max_abs_difference(&fully_carried_recurrent, &recurrent)
+                .expect("carried recurrent difference"),
+            0.0
+        );
+
+        let LayerState::Gdn {
+            convolution: convolution_only,
+            recurrent: cleared_recurrent,
+        } = new_session_gdn_state(
+            &gpu,
+            &convolution,
+            &recurrent,
+            NewSessionGdnPolicy::CarryConvolutionOnly,
+        )
+        .expect("convolution-only transition")
+        else {
+            panic!("transition must remain a GDN state");
+        };
+        let zero_recurrent = gpu.zeros_like(&recurrent).expect("zero recurrent");
+        assert_eq!(
+            gpu.max_abs_difference(&convolution_only, &convolution)
+                .expect("retained convolution difference"),
+            0.0
+        );
+        assert_eq!(
+            gpu.max_abs_difference(&cleared_recurrent, &zero_recurrent)
+                .expect("cleared recurrent difference"),
+            0.0
+        );
+        assert!(
+            gpu.max_abs_difference(&cleared_recurrent, &recurrent)
+                .expect("original recurrent difference")
+                > 0.0
+        );
     }
 }

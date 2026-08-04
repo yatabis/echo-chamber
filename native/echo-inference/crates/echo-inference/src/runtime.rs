@@ -19,13 +19,15 @@ use super::full_model::{
     execute_runtime_model, prepare_runtime_state, schedule_runtime_execution,
 };
 use super::gdn::GdnKernel;
-use super::model_state::MlxInferenceState;
+use super::model_state::{MlxInferenceState, NewSessionGdnPolicy};
 use super::sampling::{SamplingConfig, sample_token};
 use super::snapshot::{CurrentStateOwner, PublishedMlxCheckpoint, RestoredMlxCheckpoint};
 use super::weights::{BoundModelWeights, ShardedWeights};
 use super::{EngineError, ModelPlan, identify_model};
 
 static NEXT_ENGINE_ID: AtomicU64 = AtomicU64::new(1);
+const DEFAULT_PREFILL_CHUNK_SIZE_TOKENS: usize = 2_048;
+const DEFAULT_PREFILL_CHUNK_AT_OR_ABOVE_TOKENS: usize = 8_192;
 
 /// State transition selected for one E.C.H.O. inference request.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -37,8 +39,9 @@ pub enum RequestState {
     Continuation,
     /// Starts a fresh token lineage from the current state.
     ///
-    /// GDN state is carried forward while full-attention KV is reset before
-    /// the complete fresh prompt is processed.
+    /// GDN retention follows the engine's explicit boundary policy while
+    /// full-attention KV is reset before the complete fresh prompt is
+    /// processed.
     NewSession,
 }
 
@@ -83,12 +86,23 @@ pub struct InferenceRequest {
 pub struct ResidentEngineConfig {
     /// Maximum generated tokens admitted for one request.
     pub max_new_tokens_per_request: usize,
+    /// Size of each input execution when long prefill is chunked.
+    ///
+    /// `None` retains the single-execution fast path for every input length.
+    pub prefill_chunk_size_tokens: Option<usize>,
+    /// Inputs at or above this boundary use `prefill_chunk_size_tokens`.
+    pub prefill_chunk_at_or_above_tokens: usize,
+    /// GDN components retained when `new_session` starts a fresh token lineage.
+    pub new_session_gdn_policy: NewSessionGdnPolicy,
 }
 
 impl Default for ResidentEngineConfig {
     fn default() -> Self {
         Self {
             max_new_tokens_per_request: 4_096,
+            prefill_chunk_size_tokens: Some(DEFAULT_PREFILL_CHUNK_SIZE_TOKENS),
+            prefill_chunk_at_or_above_tokens: DEFAULT_PREFILL_CHUNK_AT_OR_ABOVE_TOKENS,
+            new_session_gdn_policy: NewSessionGdnPolicy::CarryAll,
         }
     }
 }
@@ -106,6 +120,8 @@ pub struct ResidentEngineInfo {
     pub weight_tensor_count: usize,
     /// Wall-clock duration spent admitting, identifying, and loading the model.
     pub model_load_nanos: u64,
+    /// GDN components retained at a `new_session` boundary.
+    pub new_session_gdn_policy: NewSessionGdnPolicy,
     /// Process-wide Metal allocator observations immediately after admission.
     pub metal_memory: RuntimeMemoryStats,
 }
@@ -143,8 +159,10 @@ pub struct RuntimeMetrics {
     pub input_tokens_processed: usize,
     /// Number of tokens generated and advanced into state.
     pub generated_tokens: usize,
-    /// One input execution plus one state-advancing execution per generated token.
+    /// Input executions plus one state-advancing execution per generated token.
     pub model_step_count: usize,
+    /// Number of model executions used to process this request's input tokens.
+    pub input_model_execution_count: usize,
     /// Materialized input-suffix execution duration.
     pub input_execution_nanos: u64,
     /// CPU-side construction time for the input-suffix MLX graph.
@@ -274,6 +292,7 @@ struct ModelRun {
     decode_finalization_nanos: u64,
     model_execution_nanos: u64,
     state_advance_steps: usize,
+    input_model_execution_count: usize,
 }
 
 impl ResidentEngine {
@@ -291,6 +310,12 @@ impl ResidentEngine {
         if config.max_new_tokens_per_request == 0 {
             return Err(RuntimeError::InvalidRequest {
                 detail: "max_new_tokens_per_request must be greater than zero".into(),
+            });
+        }
+        if config.prefill_chunk_size_tokens == Some(0) {
+            return Err(RuntimeError::InvalidRequest {
+                detail: "prefill_chunk_size_tokens must be greater than zero when configured"
+                    .into(),
             });
         }
         let load_started = Instant::now();
@@ -315,6 +340,7 @@ impl ResidentEngine {
             weight_shard_count,
             weight_tensor_count,
             model_load_nanos: duration_nanos(load_started.elapsed()),
+            new_session_gdn_policy: config.new_session_gdn_policy,
             metal_memory: metal_memory.into(),
         };
         Ok(Self {
@@ -561,7 +587,10 @@ impl ResidentEngine {
                 cached_prefix_tokens,
                 input_tokens_processed,
                 generated_tokens: generated_token_count,
-                model_step_count: model_run.state_advance_steps + 1,
+                model_step_count: model_run
+                    .state_advance_steps
+                    .saturating_add(model_run.input_model_execution_count),
+                input_model_execution_count: model_run.input_model_execution_count,
                 input_execution_nanos: model_run.input_execution_nanos,
                 input_graph_construction_nanos: model_run.input_graph_construction_nanos,
                 input_materialization_nanos: model_run.input_materialization_nanos,
@@ -601,7 +630,12 @@ impl ResidentEngine {
             (RequestState::Continuation, Some(base)) => Ok((base.payload.sequence_length()?, None)),
             (RequestState::NewSession, Some(base)) => Ok((
                 0,
-                Some(base.payload.begin_new_session(&self.gpu, 1, &self.plan)?),
+                Some(base.payload.begin_new_session(
+                    &self.gpu,
+                    1,
+                    &self.plan,
+                    self.config.new_session_gdn_policy,
+                )?),
             )),
             (RequestState::Initial, Some(_))
             | (RequestState::Continuation | RequestState::NewSession, None) => {
@@ -627,13 +661,13 @@ impl ResidentEngine {
         }
         let model_started = Instant::now();
         let input_started = Instant::now();
-        let input_graph_started = Instant::now();
         let input_shape = input_ids.shape();
-        let input_token_count = input_shape.get(1).copied().ok_or_else(|| {
-            EngineError::Unsupported(format!(
-                "runtime token input must be rank 2, observed {input_shape:?}"
-            ))
-        })?;
+        let [input_batch_size, input_token_count] = <[usize; 2]>::try_from(input_shape.clone())
+            .map_err(|input_shape| {
+                EngineError::Unsupported(format!(
+                    "runtime token input must be rank 2, observed {input_shape:?}"
+                ))
+            })?;
         let closing_capacity = usize::from(request.length_eos_token.is_some());
         let additional_tokens = input_token_count
             .checked_add(request.max_new_tokens)
@@ -643,19 +677,73 @@ impl ResidentEngine {
             })?;
         let runtime_state =
             prepare_runtime_state(&self.gpu, initial_state, 1, additional_tokens, &self.plan)?;
-        let mut execution = execute_runtime_model(
-            &self.gpu,
-            input_ids,
-            runtime_state,
-            &self.weights,
-            &self.plan,
-            &self.gdn_kernel,
-            &self.moe_kernel,
-        )?;
-        let input_graph_construction_nanos = duration_nanos(input_graph_started.elapsed());
-        let input_materialization_started = Instant::now();
-        evaluate_runtime_execution(&self.gpu, &execution)?;
-        let input_materialization_nanos = duration_nanos(input_materialization_started.elapsed());
+        let chunk_size = selected_prefill_chunk_size(self.config, input_token_count);
+        let mut input_graph_construction_nanos = 0_u64;
+        let mut input_materialization_nanos = 0_u64;
+        let (mut execution, input_model_execution_count) = if let Some(chunk_size) = chunk_size {
+            let mut state = runtime_state;
+            let mut final_execution = None;
+            let mut execution_count = 0_usize;
+            for chunk_start in (0..input_token_count).step_by(chunk_size) {
+                if observer.is_cancelled() {
+                    return Err(RuntimeError::Cancelled {
+                        instance_id: request.instance_id.clone(),
+                    });
+                }
+                let chunk_stop = chunk_start
+                    .saturating_add(chunk_size)
+                    .min(input_token_count);
+                let graph_started = Instant::now();
+                let chunk = slice_token_chunk(
+                    &self.gpu,
+                    input_ids,
+                    input_batch_size,
+                    chunk_start,
+                    chunk_stop,
+                )?;
+                let chunk_execution = execute_runtime_model(
+                    &self.gpu,
+                    &chunk,
+                    state,
+                    &self.weights,
+                    &self.plan,
+                    &self.gdn_kernel,
+                    &self.moe_kernel,
+                )?;
+                input_graph_construction_nanos = input_graph_construction_nanos
+                    .saturating_add(duration_nanos(graph_started.elapsed()));
+                let materialization_started = Instant::now();
+                evaluate_runtime_execution(&self.gpu, &chunk_execution)?;
+                input_materialization_nanos = input_materialization_nanos
+                    .saturating_add(duration_nanos(materialization_started.elapsed()));
+                execution_count = execution_count.saturating_add(1);
+                if chunk_stop == input_token_count {
+                    final_execution = Some(chunk_execution);
+                    break;
+                }
+                state = chunk_execution.state;
+            }
+            let execution = final_execution.ok_or_else(|| {
+                EngineError::Unsupported("chunked prefill produced no execution".into())
+            })?;
+            (execution, execution_count)
+        } else {
+            let graph_started = Instant::now();
+            let execution = execute_runtime_model(
+                &self.gpu,
+                input_ids,
+                runtime_state,
+                &self.weights,
+                &self.plan,
+                &self.gdn_kernel,
+                &self.moe_kernel,
+            )?;
+            input_graph_construction_nanos = duration_nanos(graph_started.elapsed());
+            let materialization_started = Instant::now();
+            evaluate_runtime_execution(&self.gpu, &execution)?;
+            input_materialization_nanos = duration_nanos(materialization_started.elapsed());
+            (execution, 1)
+        };
         let input_execution_nanos = duration_nanos(input_started.elapsed());
 
         let decode_started = Instant::now();
@@ -767,6 +855,7 @@ impl ResidentEngine {
             decode_finalization_nanos,
             model_execution_nanos: duration_nanos(model_started.elapsed()),
             state_advance_steps,
+            input_model_execution_count,
         })
     }
 
@@ -820,6 +909,37 @@ fn token_array(tokens: &[u32]) -> Result<Array, RuntimeError> {
     Array::from_i32_slice(&tokens, &[1, tokens.len()])
         .map_err(EngineError::Mlx)
         .map_err(RuntimeError::Engine)
+}
+
+fn slice_token_chunk(
+    gpu: &Gpu,
+    input_ids: &Array,
+    batch_size: usize,
+    start: usize,
+    stop: usize,
+) -> Result<Array, RuntimeError> {
+    let batch_size = i32::try_from(batch_size).map_err(|error| {
+        EngineError::Unsupported(format!("input batch size does not fit int32: {error}"))
+    })?;
+    let start = i32::try_from(start).map_err(|error| {
+        EngineError::Unsupported(format!("prefill chunk start does not fit int32: {error}"))
+    })?;
+    let stop = i32::try_from(stop).map_err(|error| {
+        EngineError::Unsupported(format!("prefill chunk stop does not fit int32: {error}"))
+    })?;
+    gpu.slice(input_ids, &[0, start], &[batch_size, stop], &[1, 1])
+        .map_err(EngineError::Mlx)
+        .map_err(RuntimeError::Engine)
+}
+
+fn selected_prefill_chunk_size(
+    config: ResidentEngineConfig,
+    input_token_count: usize,
+) -> Option<usize> {
+    config.prefill_chunk_size_tokens.filter(|chunk_size| {
+        input_token_count >= config.prefill_chunk_at_or_above_tokens
+            && input_token_count > *chunk_size
+    })
 }
 
 fn duration_nanos(duration: Duration) -> u64 {
@@ -1174,5 +1294,24 @@ mod tests {
             queue.enqueue(request("marie", 2)),
             Err(SchedulerError::QueueFull { capacity: 1 })
         ));
+    }
+
+    #[test]
+    fn prefill_chunks_at_the_8k_boundary() {
+        let config = ResidentEngineConfig::default();
+        assert_eq!(selected_prefill_chunk_size(config, 8_191), None);
+        assert_eq!(selected_prefill_chunk_size(config, 8_192), Some(2_048));
+        assert_eq!(selected_prefill_chunk_size(config, 16_384), Some(2_048));
+        assert_eq!(selected_prefill_chunk_size(config, 32_768), Some(2_048));
+        assert_eq!(
+            selected_prefill_chunk_size(
+                ResidentEngineConfig {
+                    prefill_chunk_size_tokens: None,
+                    ..config
+                },
+                32_768,
+            ),
+            None
+        );
     }
 }

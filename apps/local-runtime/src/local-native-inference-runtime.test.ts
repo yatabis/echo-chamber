@@ -441,6 +441,7 @@ function completed(
         input_tokens_processed: 9,
         generated_tokens: 1,
         model_step_count: 2,
+        input_model_execution_count: 1,
         input_execution_nanos: 1,
         input_graph_construction_nanos: 2,
         input_materialization_nanos: 3,

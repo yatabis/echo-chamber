@@ -95,6 +95,7 @@ pub fn run_moe_performance_diagnostic(
         model_directory,
         ResidentEngineConfig {
             max_new_tokens_per_request: max_new_tokens,
+            ..ResidentEngineConfig::default()
         },
     )
     .map_err(|error| EngineError::Unsupported(format!("load diagnostic engine: {error}")))?;

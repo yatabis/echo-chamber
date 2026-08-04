@@ -191,6 +191,56 @@ ECHO_NATIVE_LIBRARY_PATH=/absolute/path/to/mlx-c/build:/absolute/path/to/mlx/lib
 pnpm eval:native-rapid-long-session-performance
 ```
 
+## Native production-workflow gate
+
+This live gate connects the stateful Native adapter to the existing E.C.H.O.
+runtime workflow harness. It uses the current Rin production prompt, the
+canonical runtime tool catalog, the real agent loop, and the harness's
+stateful synthetic chat, memory, note, and context ports. It does not start the
+future local application or SQLite persistence layer, so its timings measure
+model requests and workflow execution rather than a complete local deployment.
+
+One resident native process hosts one stable model/state owner per workflow.
+Within a harness session, tool-result requests use `continuation`; the next
+harness session for the same existence uses `new_session`. Token streaming is
+disabled. After every workflow, the gate publishes the single
+`current.safetensors` snapshot outside the workflow elapsed time and then
+removes all evaluation state during cleanup.
+
+The artifact retains every scored workflow trace and bounded Native runtime
+metrics. It reports newly processed and cached tokens, input/decode/request
+timings, decode throughput, Metal memory, the actual state transition selected
+by the adapter, and snapshot size. Admission requires all behavior checks and
+session completions to pass, continuation cache reuse to be observed, and at
+least one production-shaped request of 8,192 or more newly processed tokens to
+execute through multiple adaptive-prefill model calls.
+
+```sh
+ECHO_NATIVE_WORKFLOW_INFERENCE_BIN=/absolute/path/to/echo-inference \
+ECHO_NATIVE_WORKFLOW_MODEL=/absolute/path/to/Qwen3.6-35B-A3B-MLX-4bit \
+ECHO_NATIVE_WORKFLOW_OUTPUT=/absolute/path/to/native-runtime-workflows.json \
+ECHO_NATIVE_LIBRARY_PATH=/absolute/path/to/mlx-c/build:/absolute/path/to/mlx/lib \
+pnpm eval:native-runtime-workflow
+```
+
+The default generation profile is reproducible `controlled-greedy`. Set
+`ECHO_NATIVE_WORKFLOW_PROFILE=production-sampling` to use the current Qwen
+non-thinking deployment sampling values. `ECHO_NATIVE_WORKFLOW_FILTER` accepts
+a JavaScript regular expression over workflow IDs; `ECHO_NATIVE_WORKFLOW_SEED`
+and `ECHO_NATIVE_WORKFLOW_MAX_TURNS` control the recorded seed schedule and
+per-session agent-loop ceiling. The optional
+`ECHO_NATIVE_WORKFLOW_STATE_MODE=fresh-session-ablation` creates a new Native
+state owner at every harness session. It exists only to isolate the behavioral
+effect of cross-session GDN carry and is not a production candidate.
+`ECHO_NATIVE_WORKFLOW_STATE_MODE=recurrent-only-ablation` keeps one stable
+owner and the ordinary `new_session` transition, but clears the short-range
+GDN convolution history while retaining the recurrent matrix. The runner sets
+the corresponding Native startup policy itself and verifies the policy echoed
+by the engine. `convolution-only-ablation` retains the convolution history and
+clears the recurrent matrix, completing the two-component boundary ablation.
+All ablation modes are diagnostic only; omitting the variable retains complete
+GDN state.
+
 ## Rescoring a saved result
 
 When only scoring rules change, reuse the recorded model exchanges and tool traces instead of rerunning inference. This command overwrites the specified result JSON after appending a rescore-history entry. It cannot evaluate evidence that the original run did not record. Rescoring an older result removes its legacy `promptAblationComparison` summary because the current evaluator no longer recomputes that provisional-prompt experiment.
