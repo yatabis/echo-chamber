@@ -8,14 +8,13 @@ use super::{
     InferenceResponse, MlxInferenceState, ResidentEngine, RuntimeError, RuntimeMetrics,
     duration_nanos, selected_prefill_chunk_size, slice_token_chunk, token_array,
 };
+use crate::MAX_ACTIVE_BATCH_SIZE;
 use crate::full_model::{
     RuntimeModelExecution, compact_runtime_state, evaluate_runtime_execution,
     execute_runtime_model, prepare_merged_runtime_state, prepare_runtime_state,
     schedule_runtime_execution, split_runtime_state,
 };
 use crate::sampling::{sample_token, sample_token_rows};
-
-pub(super) const MAX_ACTIVE_BATCH_SIZE: usize = 6;
 
 /// One request that has completed protocol preparation and can enter a model
 /// batch without blocking for more caller input.
@@ -1179,7 +1178,7 @@ fn slice_logits_row(
 
 #[cfg(test)]
 mod tests {
-    use super::MAX_ACTIVE_BATCH_SIZE;
+    use crate::MAX_ACTIVE_BATCH_SIZE;
 
     #[test]
     fn production_batch_width_is_bounded_at_six() {

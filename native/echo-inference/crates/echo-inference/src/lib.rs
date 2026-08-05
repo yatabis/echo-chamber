@@ -35,6 +35,10 @@ use echo_mlx::{MlxError, SafeTensors};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
+/// Maximum number of resident decode rows admitted by the scheduler and every
+/// fixed-shape batch fast path.
+pub(crate) const MAX_ACTIVE_BATCH_SIZE: usize = 6;
+
 pub use attention::{AttentionLayerParity, run_attention_layer_parity};
 #[cfg(feature = "parallel-generation-diagnostics")]
 pub use batch_quality::{

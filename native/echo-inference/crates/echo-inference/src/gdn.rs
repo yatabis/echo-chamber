@@ -9,7 +9,7 @@ use echo_mlx::{
 use serde::{Deserialize, Serialize};
 
 use super::weights::{BoundGdnWeights, BoundQuantizedWeights, TensorLookup};
-use super::{EngineError, ModelPlan, safetensor_files, sha256_file};
+use super::{EngineError, MAX_ACTIVE_BATCH_SIZE, ModelPlan, safetensor_files, sha256_file};
 
 const GATED_DELTA_SOURCE: &str = r"
         auto n = thread_position_in_grid.z;
@@ -86,27 +86,34 @@ const GDN_DECODE_PREPROCESS_SOURCE: &str = r"
         constexpr uint values_per_lane = 4;
         constexpr uint head_dimension = __HEAD_DIM__;
         constexpr uint key_blocks = __KEY_BLOCKS__;
+        constexpr uint value_blocks = __VALUE_BLOCKS__;
         constexpr uint conv_dimension = __CONV_DIM__;
 
         auto block = threadgroup_position_in_grid.y;
+        auto batch_index = threadgroup_position_in_grid.z;
         auto lane = thread_index_in_simdgroup;
         auto local_base = lane * values_per_lane;
         auto channel_base = block * head_dimension + local_base;
+        auto row_conv_offset = batch_index * conv_dimension;
+        auto row_state_offset = batch_index * 3 * conv_dimension;
 
         bfloat16_t activated[values_per_lane];
         float squared_sum = 0.0f;
         for (uint i = 0; i < values_per_lane; ++i) {
           auto channel = channel_base + i;
           float convolution = 0.0f;
-          convolution += static_cast<float>(conv_state_in[channel]) *
+          convolution += static_cast<float>(
+                             conv_state_in[row_state_offset + channel]) *
               conv_weight[channel * 4];
-          convolution +=
-              static_cast<float>(conv_state_in[conv_dimension + channel]) *
+          convolution += static_cast<float>(
+                             conv_state_in[row_state_offset + conv_dimension +
+                                           channel]) *
               conv_weight[channel * 4 + 1];
           convolution += static_cast<float>(
-                             conv_state_in[2 * conv_dimension + channel]) *
+                             conv_state_in[row_state_offset +
+                                           2 * conv_dimension + channel]) *
               conv_weight[channel * 4 + 2];
-          convolution += static_cast<float>(qkv[channel]) *
+          convolution += static_cast<float>(qkv[row_conv_offset + channel]) *
               conv_weight[channel * 4 + 3];
 
           auto convolution_bf16 = static_cast<bfloat16_t>(convolution);
@@ -119,10 +126,12 @@ const GDN_DECODE_PREPROCESS_SOURCE: &str = r"
               static_cast<bfloat16_t>(convolution_bf16 * sigmoid_value);
           squared_sum += static_cast<float>(activated[i]) * activated[i];
 
-          conv_state_out[channel] = conv_state_in[conv_dimension + channel];
-          conv_state_out[conv_dimension + channel] =
-              conv_state_in[2 * conv_dimension + channel];
-          conv_state_out[2 * conv_dimension + channel] = qkv[channel];
+          conv_state_out[row_state_offset + channel] =
+              conv_state_in[row_state_offset + conv_dimension + channel];
+          conv_state_out[row_state_offset + conv_dimension + channel] =
+              conv_state_in[row_state_offset + 2 * conv_dimension + channel];
+          conv_state_out[row_state_offset + 2 * conv_dimension + channel] =
+              qkv[row_conv_offset + channel];
         }
 
         if (block < 2 * key_blocks) {
@@ -135,6 +144,7 @@ const GDN_DECODE_PREPROCESS_SOURCE: &str = r"
           threadgroup_barrier(mem_flags::mem_threadgroup);
 
           auto output_offset =
+              batch_index * key_blocks * head_dimension +
               (block % key_blocks) * head_dimension + local_base;
           auto scale = block < key_blocks ? q_scale : k_scale;
           for (uint i = 0; i < values_per_lane; ++i) {
@@ -149,21 +159,25 @@ const GDN_DECODE_PREPROCESS_SOURCE: &str = r"
           }
         } else {
           auto value_head = block - 2 * key_blocks;
-          auto output_offset = value_head * head_dimension + local_base;
+          auto value_output_offset =
+              batch_index * value_blocks * head_dimension;
+          auto output_offset =
+              value_output_offset + value_head * head_dimension + local_base;
           for (uint i = 0; i < values_per_lane; ++i) {
             v[output_offset + i] = activated[i];
           }
 
           if (lane == 0) {
-            auto beta_input = b[value_head];
+            auto scalar_offset = batch_index * value_blocks + value_head;
+            auto beta_input = b[scalar_offset];
             bfloat16_t beta_tail =
                 1 / (1 + metal::exp(metal::abs(beta_input)));
-            beta[value_head] = beta_input < 0
+            beta[scalar_offset] = beta_input < 0
                 ? beta_tail
                 : static_cast<bfloat16_t>(1 - beta_tail);
 
             auto biased_a =
-                static_cast<bfloat16_t>(a[value_head] + dt_bias[value_head]);
+                static_cast<bfloat16_t>(a[scalar_offset] + dt_bias[value_head]);
             constexpr bfloat16_t zero = static_cast<bfloat16_t>(0);
             auto maximum = metal::max(biased_a, zero);
             auto minimum = metal::min(biased_a, zero);
@@ -171,7 +185,7 @@ const GDN_DECODE_PREPROCESS_SOURCE: &str = r"
                 maximum + log1p(metal::exp(minimum - maximum)));
             auto exponentiated_a_log =
                 metal::precise::exp(static_cast<float>(a_log[value_head]));
-            decay[value_head] = metal::precise::exp(
+            decay[scalar_offset] = metal::precise::exp(
                 -exponentiated_a_log * static_cast<float>(softplus));
           }
         }
@@ -180,11 +194,15 @@ const GDN_DECODE_PREPROCESS_SOURCE: &str = r"
 const GDN_DECODE_POSTPROCESS_SOURCE: &str = r"
         constexpr uint values_per_lane = 4;
         constexpr uint head_dimension = __HEAD_DIM__;
+        constexpr uint value_heads = __VALUE_HEADS__;
 
         auto value_head = threadgroup_position_in_grid.y;
+        auto batch_index = threadgroup_position_in_grid.z;
         auto lane = thread_index_in_simdgroup;
         auto local_base = lane * values_per_lane;
-        auto offset = value_head * head_dimension + local_base;
+        auto offset =
+            (batch_index * value_heads + value_head) * head_dimension +
+            local_base;
 
         float hidden[values_per_lane];
         float squared_sum = 0.0f;
@@ -363,11 +381,11 @@ impl GdnWeightSource<'_> {
 pub(crate) struct GdnKernel {
     generic_kernel: MetalKernel,
     decode_kernel: MetalKernel,
-    decode_dispatch: MetalKernelDispatch,
+    decode_dispatches: Vec<MetalKernelDispatch>,
     decode_preprocess_kernel: MetalKernel,
-    decode_preprocess_dispatch: MetalKernelDispatch,
+    decode_preprocess_dispatches: Vec<MetalKernelDispatch>,
     decode_postprocess_kernel: MetalKernel,
-    decode_postprocess_dispatch: MetalKernelDispatch,
+    decode_postprocess_dispatches: Vec<MetalKernelDispatch>,
     decode_key_dimension: usize,
     decode_value_dimension: usize,
     decode_key_heads: usize,
@@ -387,10 +405,10 @@ impl GdnKernel {
             GATED_DELTA_SOURCE,
         )
         .map_err(EngineError::Mlx)?;
-        let (decode_kernel, decode_dispatch) = prepare_decode_recurrent_kernel(plan)?;
-        let (decode_preprocess_kernel, decode_preprocess_dispatch) =
+        let (decode_kernel, decode_dispatches) = prepare_decode_recurrent_kernel(plan)?;
+        let (decode_preprocess_kernel, decode_preprocess_dispatches) =
             prepare_decode_preprocess_kernel(plan)?;
-        let (decode_postprocess_kernel, decode_postprocess_dispatch) =
+        let (decode_postprocess_kernel, decode_postprocess_dispatches) =
             prepare_decode_postprocess_kernel(plan)?;
         let key_head_dimension = dimension_f32(plan.key_head_dimension, "key head dimension")?;
         let q_scale = gpu
@@ -406,11 +424,11 @@ impl GdnKernel {
         Ok(Self {
             generic_kernel,
             decode_kernel,
-            decode_dispatch,
+            decode_dispatches,
             decode_preprocess_kernel,
-            decode_preprocess_dispatch,
+            decode_preprocess_dispatches,
             decode_postprocess_kernel,
-            decode_postprocess_dispatch,
+            decode_postprocess_dispatches,
             decode_key_dimension: plan.key_head_dimension,
             decode_value_dimension: plan.value_head_dimension,
             decode_key_heads: plan.key_head_count,
@@ -425,14 +443,29 @@ impl GdnKernel {
 
 fn prepare_decode_recurrent_kernel(
     plan: &ModelPlan,
-) -> Result<(MetalKernel, MetalKernelDispatch), EngineError> {
-    let source = specialize_decode_source(plan);
-    let name = format!(
-        "gated_delta_decode_bf16_f32_dk{}_dv{}_hk{}_hv{}",
+) -> Result<(MetalKernel, Vec<MetalKernelDispatch>), EngineError> {
+    create_decode_recurrent_kernel(
         plan.key_head_dimension,
         plan.value_head_dimension,
         plan.key_head_count,
-        plan.value_head_count
+        plan.value_head_count,
+    )
+}
+
+fn create_decode_recurrent_kernel(
+    key_head_dimension: usize,
+    value_head_dimension: usize,
+    key_head_count: usize,
+    value_head_count: usize,
+) -> Result<(MetalKernel, Vec<MetalKernelDispatch>), EngineError> {
+    let source = specialize_decode_source(
+        key_head_dimension,
+        value_head_dimension,
+        key_head_count,
+        value_head_count,
+    );
+    let name = format!(
+        "gated_delta_decode_bf16_f32_dk{key_head_dimension}_dv{value_head_dimension}_hk{key_head_count}_hv{value_head_count}"
     );
     let kernel = MetalKernel::new(
         &name,
@@ -441,37 +474,63 @@ fn prepare_decode_recurrent_kernel(
         &source,
     )
     .map_err(EngineError::Mlx)?;
-    let dispatch = MetalKernel::prepare_dispatch(
-        &[
-            MetalOutput {
-                shape: vec![1, 1, plan.value_head_count, plan.value_head_dimension],
-                dtype: DType::BFloat16,
-            },
-            MetalOutput {
-                shape: vec![
-                    1,
-                    plan.value_head_count,
-                    plan.value_head_dimension,
-                    plan.key_head_dimension,
+    let dispatches = (1..=MAX_ACTIVE_BATCH_SIZE)
+        .map(|batch_size| {
+            MetalKernel::prepare_dispatch(
+                &[
+                    MetalOutput {
+                        shape: vec![batch_size, 1, value_head_count, value_head_dimension],
+                        dtype: DType::BFloat16,
+                    },
+                    MetalOutput {
+                        shape: vec![
+                            batch_size,
+                            value_head_count,
+                            value_head_dimension,
+                            key_head_dimension,
+                        ],
+                        dtype: DType::Float32,
+                    },
                 ],
-                dtype: DType::Float32,
-            },
-        ],
-        &[],
-        [32, plan.value_head_dimension, plan.value_head_count],
-        [32, 4, 1],
-    )
-    .map_err(EngineError::Mlx)?;
-    Ok((kernel, dispatch))
+                &[],
+                [32, value_head_dimension, batch_size * value_head_count],
+                [32, 4, 1],
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(EngineError::Mlx)?;
+    Ok((kernel, dispatches))
 }
 
 fn prepare_decode_preprocess_kernel(
     plan: &ModelPlan,
-) -> Result<(MetalKernel, MetalKernelDispatch), EngineError> {
-    let source = specialize_decode_preprocess_source(plan);
+) -> Result<(MetalKernel, Vec<MetalKernelDispatch>), EngineError> {
+    create_decode_preprocess_kernel(
+        plan.key_head_dimension,
+        plan.value_head_dimension,
+        plan.key_head_count,
+        plan.value_head_count,
+        plan.convolution_kernel_size,
+    )
+}
+
+fn create_decode_preprocess_kernel(
+    key_head_dimension: usize,
+    value_head_dimension: usize,
+    key_head_count: usize,
+    value_head_count: usize,
+    convolution_kernel_size: usize,
+) -> Result<(MetalKernel, Vec<MetalKernelDispatch>), EngineError> {
+    let convolution_dimension =
+        2 * key_head_count * key_head_dimension + value_head_count * value_head_dimension;
+    let source = specialize_decode_preprocess_source(
+        key_head_dimension,
+        key_head_count,
+        value_head_count,
+        convolution_dimension,
+    );
     let name = format!(
-        "gdn_decode_preprocess_bf16_dk{}_hk{}_hv{}",
-        plan.key_head_dimension, plan.key_head_count, plan.value_head_count
+        "gdn_decode_preprocess_bf16_dk{key_head_dimension}_hk{key_head_count}_hv{value_head_count}"
     );
     let kernel = MetalKernel::new(
         &name,
@@ -490,53 +549,61 @@ fn prepare_decode_preprocess_kernel(
         &source,
     )
     .map_err(EngineError::Mlx)?;
-    let dispatch = MetalKernel::prepare_dispatch(
-        &[
-            MetalOutput {
-                shape: vec![1, 1, plan.key_head_count, plan.key_head_dimension],
-                dtype: DType::BFloat16,
-            },
-            MetalOutput {
-                shape: vec![1, 1, plan.key_head_count, plan.key_head_dimension],
-                dtype: DType::BFloat16,
-            },
-            MetalOutput {
-                shape: vec![1, 1, plan.value_head_count, plan.value_head_dimension],
-                dtype: DType::BFloat16,
-            },
-            MetalOutput {
-                shape: vec![1, 1, plan.value_head_count],
-                dtype: DType::Float32,
-            },
-            MetalOutput {
-                shape: vec![1, 1, plan.value_head_count],
-                dtype: DType::BFloat16,
-            },
-            MetalOutput {
-                shape: vec![
-                    1,
-                    plan.convolution_kernel_size - 1,
-                    plan.convolution_dimension(),
+    let dispatches = (1..=MAX_ACTIVE_BATCH_SIZE)
+        .map(|batch_size| {
+            MetalKernel::prepare_dispatch(
+                &[
+                    MetalOutput {
+                        shape: vec![batch_size, 1, key_head_count, key_head_dimension],
+                        dtype: DType::BFloat16,
+                    },
+                    MetalOutput {
+                        shape: vec![batch_size, 1, key_head_count, key_head_dimension],
+                        dtype: DType::BFloat16,
+                    },
+                    MetalOutput {
+                        shape: vec![batch_size, 1, value_head_count, value_head_dimension],
+                        dtype: DType::BFloat16,
+                    },
+                    MetalOutput {
+                        shape: vec![batch_size, 1, value_head_count],
+                        dtype: DType::Float32,
+                    },
+                    MetalOutput {
+                        shape: vec![batch_size, 1, value_head_count],
+                        dtype: DType::BFloat16,
+                    },
+                    MetalOutput {
+                        shape: vec![
+                            batch_size,
+                            convolution_kernel_size - 1,
+                            convolution_dimension,
+                        ],
+                        dtype: DType::BFloat16,
+                    },
                 ],
-                dtype: DType::BFloat16,
-            },
-        ],
-        &[],
-        [32, 2 * plan.key_head_count + plan.value_head_count, 1],
-        [32, 1, 1],
-    )
-    .map_err(EngineError::Mlx)?;
-    Ok((kernel, dispatch))
+                &[],
+                [32, 2 * key_head_count + value_head_count, batch_size],
+                [32, 1, 1],
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(EngineError::Mlx)?;
+    Ok((kernel, dispatches))
 }
 
 fn prepare_decode_postprocess_kernel(
     plan: &ModelPlan,
-) -> Result<(MetalKernel, MetalKernelDispatch), EngineError> {
-    let source = specialize_decode_postprocess_source(plan);
-    let name = format!(
-        "gdn_decode_postprocess_bf16_dv{}_hv{}",
-        plan.value_head_dimension, plan.value_head_count
-    );
+) -> Result<(MetalKernel, Vec<MetalKernelDispatch>), EngineError> {
+    create_decode_postprocess_kernel(plan.value_head_dimension, plan.value_head_count)
+}
+
+fn create_decode_postprocess_kernel(
+    value_head_dimension: usize,
+    value_head_count: usize,
+) -> Result<(MetalKernel, Vec<MetalKernelDispatch>), EngineError> {
+    let source = specialize_decode_postprocess_source(value_head_dimension, value_head_count);
+    let name = format!("gdn_decode_postprocess_bf16_dv{value_head_dimension}_hv{value_head_count}");
     let kernel = MetalKernel::new(
         &name,
         &["recurrent_output", "z", "norm_weight", "epsilon"],
@@ -544,38 +611,74 @@ fn prepare_decode_postprocess_kernel(
         &source,
     )
     .map_err(EngineError::Mlx)?;
-    let dispatch = MetalKernel::prepare_dispatch(
-        &[MetalOutput {
-            shape: vec![1, 1, plan.value_head_count, plan.value_head_dimension],
-            dtype: DType::BFloat16,
-        }],
-        &[],
-        [32, plan.value_head_count, 1],
-        [32, 1, 1],
-    )
-    .map_err(EngineError::Mlx)?;
-    Ok((kernel, dispatch))
+    let dispatches = (1..=MAX_ACTIVE_BATCH_SIZE)
+        .map(|batch_size| {
+            MetalKernel::prepare_dispatch(
+                &[MetalOutput {
+                    shape: vec![batch_size, 1, value_head_count, value_head_dimension],
+                    dtype: DType::BFloat16,
+                }],
+                &[],
+                [32, value_head_count, batch_size],
+                [32, 1, 1],
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(EngineError::Mlx)?;
+    Ok((kernel, dispatches))
 }
 
-fn specialize_decode_source(plan: &ModelPlan) -> String {
+fn specialize_decode_source(
+    key_head_dimension: usize,
+    value_head_dimension: usize,
+    key_head_count: usize,
+    value_head_count: usize,
+) -> String {
     GATED_DELTA_SOURCE
         .replace("InT", "bfloat16_t")
         .replace("StT", "float")
-        .replace("Dk", &plan.key_head_dimension.to_string())
-        .replace("Dv", &plan.value_head_dimension.to_string())
-        .replace("Hk", &plan.key_head_count.to_string())
-        .replace("Hv", &plan.value_head_count.to_string())
+        .replace("Dk", &key_head_dimension.to_string())
+        .replace("Dv", &value_head_dimension.to_string())
+        .replace("Hk", &key_head_count.to_string())
+        .replace("Hv", &value_head_count.to_string())
 }
 
-fn specialize_decode_preprocess_source(plan: &ModelPlan) -> String {
+fn specialize_decode_preprocess_source(
+    head_dimension: usize,
+    key_head_count: usize,
+    value_head_count: usize,
+    convolution_dimension: usize,
+) -> String {
     GDN_DECODE_PREPROCESS_SOURCE
-        .replace("__HEAD_DIM__", &plan.key_head_dimension.to_string())
-        .replace("__KEY_BLOCKS__", &plan.key_head_count.to_string())
-        .replace("__CONV_DIM__", &plan.convolution_dimension().to_string())
+        .replace("__HEAD_DIM__", &head_dimension.to_string())
+        .replace("__KEY_BLOCKS__", &key_head_count.to_string())
+        .replace("__VALUE_BLOCKS__", &value_head_count.to_string())
+        .replace("__CONV_DIM__", &convolution_dimension.to_string())
 }
 
-fn specialize_decode_postprocess_source(plan: &ModelPlan) -> String {
-    GDN_DECODE_POSTPROCESS_SOURCE.replace("__HEAD_DIM__", &plan.value_head_dimension.to_string())
+fn specialize_decode_postprocess_source(
+    value_head_dimension: usize,
+    value_head_count: usize,
+) -> String {
+    GDN_DECODE_POSTPROCESS_SOURCE
+        .replace("__HEAD_DIM__", &value_head_dimension.to_string())
+        .replace("__VALUE_HEADS__", &value_head_count.to_string())
+}
+
+fn decode_dispatch_for_batch<'a>(
+    dispatches: &'a [MetalKernelDispatch],
+    batch_size: usize,
+    label: &str,
+) -> Result<&'a MetalKernelDispatch, EngineError> {
+    batch_size
+        .checked_sub(1)
+        .and_then(|index| dispatches.get(index))
+        .ok_or_else(|| {
+            EngineError::Unsupported(format!(
+                "{label} supports decode batch sizes 1..={}, observed {batch_size}",
+                dispatches.len()
+            ))
+        })
 }
 
 impl GdnExecution {
@@ -869,7 +972,7 @@ fn execute_gdn_layer_impl(
         )?;
     }
     let use_decode_preprocess = !capture_trace
-        && batch_size == 1
+        && (1..=MAX_ACTIVE_BATCH_SIZE).contains(&batch_size)
         && sequence_length == 1
         && input.dtype() == DType::BFloat16
         && plan.convolution_kernel_size == 4
@@ -877,6 +980,11 @@ fn execute_gdn_layer_impl(
         && plan.convolution_dimension()
             == (2 * plan.key_head_count + plan.value_head_count) * plan.key_head_dimension;
     let (q, k, v, decay, beta, conv_state, conv_input, conv_output) = if use_decode_preprocess {
+        let dispatch = decode_dispatch_for_batch(
+            &kernel.decode_preprocess_dispatches,
+            batch_size,
+            "decode GDN preprocess fusion",
+        )?;
         let outputs = kernel
             .decode_preprocess_kernel
             .apply_prepared(
@@ -892,7 +1000,7 @@ fn execute_gdn_layer_impl(
                     &kernel.q_scale,
                     &kernel.k_scale,
                 ],
-                &kernel.decode_preprocess_dispatch,
+                dispatch,
             )
             .map_err(EngineError::Mlx)?;
         let output_count = outputs.len();
@@ -1016,6 +1124,11 @@ fn execute_gdn_layer_impl(
 
     let norm_weight = weights.norm_weight()?;
     let normalized_output = if use_decode_preprocess {
+        let dispatch = decode_dispatch_for_batch(
+            &kernel.decode_postprocess_dispatches,
+            batch_size,
+            "decode GDN postprocess fusion",
+        )?;
         let outputs = kernel
             .decode_postprocess_kernel
             .apply_prepared(
@@ -1026,7 +1139,7 @@ fn execute_gdn_layer_impl(
                     norm_weight,
                     &kernel.decode_norm_epsilon,
                 ],
-                &kernel.decode_postprocess_dispatch,
+                dispatch,
             )
             .map_err(EngineError::Mlx)?;
         let output_count = outputs.len();
@@ -1433,7 +1546,7 @@ fn gated_delta(
         dynamic_time = gpu.scalar_i32(dimension_i32(sequence_length, "gated-delta time")?);
         &dynamic_time
     };
-    let specialized_decode = batch_size == 1
+    let specialized_decode = (1..=MAX_ACTIVE_BATCH_SIZE).contains(&batch_size)
         && sequence_length == 1
         && q.dtype() == DType::BFloat16
         && state.dtype() == DType::Float32
@@ -1451,9 +1564,12 @@ fn gated_delta(
     ];
     let inputs = &[q, k, v, decay, beta, state, time];
     let outputs = if specialized_decode {
-        kernel
-            .decode_kernel
-            .apply_prepared(gpu, inputs, &kernel.decode_dispatch)
+        let dispatch = decode_dispatch_for_batch(
+            &kernel.decode_dispatches,
+            batch_size,
+            "decode GDN recurrent kernel",
+        )?;
+        kernel.decode_kernel.apply_prepared(gpu, inputs, dispatch)
     } else {
         kernel.generic_kernel.apply(
             gpu,
@@ -1496,4 +1612,411 @@ pub(crate) fn dimension_f32(value: usize, name: &str) -> Result<f32, EngineError
         ))
     })?;
     Ok(f32::from(value))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const HEAD_DIMENSION: usize = 128;
+    const KEY_HEADS: usize = 2;
+    const VALUE_HEADS: usize = 4;
+    const CONVOLUTION_DIMENSION: usize = (2 * KEY_HEADS + VALUE_HEADS) * HEAD_DIMENSION;
+
+    fn deterministic_values(count: usize, seed: u32, amplitude: f32) -> Vec<f32> {
+        let mut state = seed;
+        (0..count)
+            .map(|_| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let bytes = state.to_le_bytes();
+                let sample = u16::from_le_bytes([bytes[2], bytes[3]]);
+                (f32::from(sample) / 32_767.5 - 1.0) * amplitude
+            })
+            .collect()
+    }
+
+    fn bf16_array(gpu: &Gpu, values: &[f32], shape: &[usize], name: &str) -> Array {
+        Array::from_f32_slice(values, shape)
+            .and_then(|value| gpu.astype(&value, DType::BFloat16))
+            .unwrap_or_else(|error| panic!("failed to create {name}: {error}"))
+    }
+
+    #[allow(clippy::float_cmp)]
+    fn assert_exact(gpu: &Gpu, actual: &Array, expected: &Array, label: &str, batch_size: usize) {
+        assert_eq!(
+            actual.shape(),
+            expected.shape(),
+            "{label} shape changed at batch size {batch_size}"
+        );
+        assert_eq!(
+            actual.dtype(),
+            expected.dtype(),
+            "{label} dtype changed at batch size {batch_size}"
+        );
+        assert_eq!(
+            gpu.max_abs_difference(actual, expected)
+                .unwrap_or_else(|error| panic!("failed to compare {label}: {error}")),
+            0.0,
+            "{label} values changed at batch size {batch_size}"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn batched_decode_preprocess_matches_mlx_exactly() {
+        let gpu = Gpu::new();
+        let (kernel, dispatches) = create_decode_preprocess_kernel(
+            HEAD_DIMENSION,
+            HEAD_DIMENSION,
+            KEY_HEADS,
+            VALUE_HEADS,
+            4,
+        )
+        .expect("decode preprocess kernel");
+        let convolution_weight_values =
+            deterministic_values(CONVOLUTION_DIMENSION * 4, 0x243f_6a88, 0.125);
+        let convolution_weight = bf16_array(
+            &gpu,
+            &convolution_weight_values,
+            &[CONVOLUTION_DIMENSION, 4, 1],
+            "convolution weights",
+        );
+        let a_log = bf16_array(&gpu, &[-2.0, -1.75, -1.5, -1.25], &[VALUE_HEADS], "A_log");
+        let dt_bias = bf16_array(
+            &gpu,
+            &[-0.25, -0.125, 0.125, 0.25],
+            &[VALUE_HEADS],
+            "dt bias",
+        );
+        let q_scale = gpu
+            .scalar_like(1.0 / 128.0, DType::BFloat16)
+            .expect("q scale");
+        let k_scale = gpu
+            .scalar_like(1.0 / 128.0_f32.sqrt(), DType::BFloat16)
+            .expect("k scale");
+
+        for batch_size in 1..=MAX_ACTIVE_BATCH_SIZE {
+            let seed_offset = u32::try_from(batch_size).expect("batch seed");
+            let qkv_values = deterministic_values(
+                batch_size * CONVOLUTION_DIMENSION,
+                0x85a3_08d3 ^ seed_offset,
+                0.5,
+            );
+            let qkv = bf16_array(
+                &gpu,
+                &qkv_values,
+                &[batch_size, 1, CONVOLUTION_DIMENSION],
+                "qkv",
+            );
+            let a_values =
+                deterministic_values(batch_size * VALUE_HEADS, 0x1319_8a2e ^ seed_offset, 0.75);
+            let a = bf16_array(&gpu, &a_values, &[batch_size, 1, VALUE_HEADS], "a");
+            let b_values =
+                deterministic_values(batch_size * VALUE_HEADS, 0x0370_7344 ^ seed_offset, 1.5);
+            let b = bf16_array(&gpu, &b_values, &[batch_size, 1, VALUE_HEADS], "b");
+            let state_values = deterministic_values(
+                batch_size * 3 * CONVOLUTION_DIMENSION,
+                0xa409_3822 ^ seed_offset,
+                0.5,
+            );
+            let initial_state = bf16_array(
+                &gpu,
+                &state_values,
+                &[batch_size, 3, CONVOLUTION_DIMENSION],
+                "convolution state",
+            );
+
+            let dispatch = decode_dispatch_for_batch(
+                &dispatches,
+                batch_size,
+                "test decode GDN preprocess fusion",
+            )
+            .expect("preprocess dispatch");
+            let outputs = kernel
+                .apply_prepared(
+                    &gpu,
+                    &[
+                        &qkv,
+                        &a,
+                        &b,
+                        &initial_state,
+                        &convolution_weight,
+                        &a_log,
+                        &dt_bias,
+                        &q_scale,
+                        &k_scale,
+                    ],
+                    dispatch,
+                )
+                .expect("batched decode preprocess");
+            let [
+                actual_q,
+                actual_k,
+                actual_v,
+                actual_decay,
+                actual_beta,
+                actual_state,
+            ] = <[Array; 6]>::try_from(outputs).expect("six preprocess outputs");
+
+            let convolution_input = gpu
+                .concatenate(&[&initial_state, &qkv], 1)
+                .expect("reference convolution input");
+            let expected_state =
+                tail_sequence(&gpu, &convolution_input, 3, "reference convolution state")
+                    .expect("reference convolution state");
+            let convolution_output = gpu
+                .conv1d(
+                    &convolution_input,
+                    &convolution_weight,
+                    1,
+                    0,
+                    1,
+                    i32::try_from(CONVOLUTION_DIMENSION).expect("convolution groups"),
+                )
+                .and_then(|value| gpu.silu(&value))
+                .expect("reference convolution");
+            let key_dimension = KEY_HEADS * HEAD_DIMENSION;
+            let expected_q =
+                last_axis_slice(&gpu, &convolution_output, 0, key_dimension, "reference q")
+                    .and_then(|value| {
+                        gpu.reshape(&value, &[batch_size, 1, KEY_HEADS, HEAD_DIMENSION])
+                            .map_err(EngineError::Mlx)
+                    })
+                    .and_then(|value| scale_normalized(&gpu, &value, &q_scale))
+                    .expect("reference normalized q");
+            let expected_k = last_axis_slice(
+                &gpu,
+                &convolution_output,
+                key_dimension,
+                2 * key_dimension,
+                "reference k",
+            )
+            .and_then(|value| {
+                gpu.reshape(&value, &[batch_size, 1, KEY_HEADS, HEAD_DIMENSION])
+                    .map_err(EngineError::Mlx)
+            })
+            .and_then(|value| scale_normalized(&gpu, &value, &k_scale))
+            .expect("reference normalized k");
+            let expected_v = last_axis_slice(
+                &gpu,
+                &convolution_output,
+                2 * key_dimension,
+                CONVOLUTION_DIMENSION,
+                "reference v",
+            )
+            .and_then(|value| {
+                gpu.reshape(&value, &[batch_size, 1, VALUE_HEADS, HEAD_DIMENSION])
+                    .map_err(EngineError::Mlx)
+            })
+            .expect("reference v");
+            let expected_decay = gpu
+                .compute_g(&a_log, &a, &dt_bias)
+                .expect("reference decay");
+            let expected_beta = gpu.sigmoid(&b).expect("reference beta");
+
+            for (label, actual, expected) in [
+                ("q", &actual_q, &expected_q),
+                ("k", &actual_k, &expected_k),
+                ("v", &actual_v, &expected_v),
+                ("decay", &actual_decay, &expected_decay),
+                ("beta", &actual_beta, &expected_beta),
+                ("convolution state", &actual_state, &expected_state),
+            ] {
+                assert_exact(&gpu, actual, expected, label, batch_size);
+            }
+        }
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn prepared_batched_recurrent_dispatch_matches_dynamic_kernel_exactly() {
+        let gpu = Gpu::new();
+        let generic_kernel = MetalKernel::new(
+            "gated_delta_step_batch_reference",
+            &["q", "k", "v", "g", "beta", "state_in", "T"],
+            &["y", "state_out"],
+            GATED_DELTA_SOURCE,
+        )
+        .expect("generic recurrent kernel");
+        let (decode_kernel, dispatches) =
+            create_decode_recurrent_kernel(HEAD_DIMENSION, HEAD_DIMENSION, KEY_HEADS, VALUE_HEADS)
+                .expect("prepared recurrent kernel");
+        let time = gpu.scalar_i32(1);
+        let templates = [
+            MetalTemplate::DType("InT", DType::BFloat16),
+            MetalTemplate::DType("StT", DType::Float32),
+            MetalTemplate::Int("Dk", i32::try_from(HEAD_DIMENSION).expect("Dk")),
+            MetalTemplate::Int("Dv", i32::try_from(HEAD_DIMENSION).expect("Dv")),
+            MetalTemplate::Int("Hk", i32::try_from(KEY_HEADS).expect("Hk")),
+            MetalTemplate::Int("Hv", i32::try_from(VALUE_HEADS).expect("Hv")),
+        ];
+
+        for batch_size in 1..=MAX_ACTIVE_BATCH_SIZE {
+            let seed_offset = u32::try_from(batch_size).expect("batch seed");
+            let q = bf16_array(
+                &gpu,
+                &deterministic_values(
+                    batch_size * KEY_HEADS * HEAD_DIMENSION,
+                    0x299f_31d0 ^ seed_offset,
+                    0.125,
+                ),
+                &[batch_size, 1, KEY_HEADS, HEAD_DIMENSION],
+                "q",
+            );
+            let k = bf16_array(
+                &gpu,
+                &deterministic_values(
+                    batch_size * KEY_HEADS * HEAD_DIMENSION,
+                    0x082e_fa98 ^ seed_offset,
+                    0.125,
+                ),
+                &[batch_size, 1, KEY_HEADS, HEAD_DIMENSION],
+                "k",
+            );
+            let v = bf16_array(
+                &gpu,
+                &deterministic_values(
+                    batch_size * VALUE_HEADS * HEAD_DIMENSION,
+                    0xec4e_6c89 ^ seed_offset,
+                    0.5,
+                ),
+                &[batch_size, 1, VALUE_HEADS, HEAD_DIMENSION],
+                "v",
+            );
+            let decay_values = (0..batch_size * VALUE_HEADS)
+                .map(|index| {
+                    let bucket = u8::try_from(index % 9).expect("decay bucket");
+                    0.75 + f32::from(bucket) / 100.0
+                })
+                .collect::<Vec<_>>();
+            let decay =
+                Array::from_f32_slice(&decay_values, &[batch_size, 1, VALUE_HEADS]).expect("decay");
+            let beta_values = (0..batch_size * VALUE_HEADS)
+                .map(|index| {
+                    let bucket = u8::try_from(index % 7).expect("beta bucket");
+                    0.25 + f32::from(bucket) / 16.0
+                })
+                .collect::<Vec<_>>();
+            let beta = bf16_array(&gpu, &beta_values, &[batch_size, 1, VALUE_HEADS], "beta");
+            let state = Array::from_f32_slice(
+                &deterministic_values(
+                    batch_size * VALUE_HEADS * HEAD_DIMENSION * HEAD_DIMENSION,
+                    0x4528_21e6 ^ seed_offset,
+                    0.03125,
+                ),
+                &[batch_size, VALUE_HEADS, HEAD_DIMENSION, HEAD_DIMENSION],
+            )
+            .expect("recurrent state");
+            let inputs = [&q, &k, &v, &decay, &beta, &state, &time];
+            let expected = generic_kernel
+                .apply(
+                    &gpu,
+                    &inputs,
+                    &[
+                        MetalOutput {
+                            shape: vec![batch_size, 1, VALUE_HEADS, HEAD_DIMENSION],
+                            dtype: DType::BFloat16,
+                        },
+                        MetalOutput {
+                            shape: state.shape(),
+                            dtype: DType::Float32,
+                        },
+                    ],
+                    &templates,
+                    [32, HEAD_DIMENSION, batch_size * VALUE_HEADS],
+                    [32, 4, 1],
+                )
+                .expect("dynamic recurrent reference");
+            let [expected_output, expected_state] =
+                <[Array; 2]>::try_from(expected).expect("two reference outputs");
+            let dispatch = decode_dispatch_for_batch(
+                &dispatches,
+                batch_size,
+                "test decode GDN recurrent kernel",
+            )
+            .expect("recurrent dispatch");
+            let actual = decode_kernel
+                .apply_prepared(&gpu, &inputs, dispatch)
+                .expect("prepared recurrent output");
+            let [actual_output, actual_state] =
+                <[Array; 2]>::try_from(actual).expect("two prepared outputs");
+
+            assert_exact(
+                &gpu,
+                &actual_output,
+                &expected_output,
+                "recurrent output",
+                batch_size,
+            );
+            assert_exact(
+                &gpu,
+                &actual_state,
+                &expected_state,
+                "recurrent state",
+                batch_size,
+            );
+        }
+    }
+
+    #[test]
+    fn batched_decode_postprocess_matches_mlx_exactly() {
+        let gpu = Gpu::new();
+        let (kernel, dispatches) = create_decode_postprocess_kernel(HEAD_DIMENSION, VALUE_HEADS)
+            .expect("decode postprocess kernel");
+        let norm_weight = bf16_array(
+            &gpu,
+            &deterministic_values(HEAD_DIMENSION, 0xbe54_66cf, 0.25)
+                .into_iter()
+                .map(|value| value + 1.0)
+                .collect::<Vec<_>>(),
+            &[HEAD_DIMENSION],
+            "norm weight",
+        );
+        let epsilon = gpu.scalar_like(1e-6, DType::Float32).expect("norm epsilon");
+
+        for batch_size in 1..=MAX_ACTIVE_BATCH_SIZE {
+            let seed_offset = u32::try_from(batch_size).expect("batch seed");
+            let recurrent_output = bf16_array(
+                &gpu,
+                &deterministic_values(
+                    batch_size * VALUE_HEADS * HEAD_DIMENSION,
+                    0xc0ac_29b7 ^ seed_offset,
+                    2.0,
+                ),
+                &[batch_size, 1, VALUE_HEADS, HEAD_DIMENSION],
+                "recurrent output",
+            );
+            let z = bf16_array(
+                &gpu,
+                &deterministic_values(
+                    batch_size * VALUE_HEADS * HEAD_DIMENSION,
+                    0xc97c_50dd ^ seed_offset,
+                    3.0,
+                ),
+                &[batch_size, 1, VALUE_HEADS, HEAD_DIMENSION],
+                "z",
+            );
+            let normalized = gpu
+                .rms_norm(&recurrent_output, Some(&norm_weight), 1e-6)
+                .expect("reference RMS norm");
+            let expected = gpu
+                .precise_swiglu(&recurrent_output, &z, &normalized)
+                .expect("reference precise SwiGLU");
+            let dispatch = decode_dispatch_for_batch(
+                &dispatches,
+                batch_size,
+                "test decode GDN postprocess fusion",
+            )
+            .expect("postprocess dispatch");
+            let outputs = kernel
+                .apply_prepared(
+                    &gpu,
+                    &[&recurrent_output, &z, &norm_weight, &epsilon],
+                    dispatch,
+                )
+                .expect("batched decode postprocess");
+            let [actual] = <[Array; 1]>::try_from(outputs).expect("one postprocess output");
+            assert_exact(&gpu, &actual, &expected, "postprocess", batch_size);
+        }
+    }
 }

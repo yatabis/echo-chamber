@@ -13,7 +13,7 @@ use super::gdn::{
     quantized_linear_with_config, require_tensor, validate_array,
 };
 use super::weights::{BoundMoeWeights, BoundQuantizedWeights, TensorLookup};
-use super::{EngineError, ModelPlan, sha256_file};
+use super::{EngineError, MAX_ACTIVE_BATCH_SIZE, ModelPlan, sha256_file};
 
 const MOE_DECODE_ROUTER_SOURCE: &str = r"
         constexpr uint expert_count = __EXPERT_COUNT__;
@@ -22,6 +22,7 @@ const MOE_DECODE_ROUTER_SOURCE: &str = r"
         constexpr uint selection_values_per_lane =
             __SELECTION_VALUES_PER_LANE__;
 
+        auto batch_index = threadgroup_position_in_grid.y;
         auto lid = thread_position_in_threadgroup.x;
         auto lane = thread_index_in_simdgroup;
         auto simd_group = simdgroup_index_in_threadgroup;
@@ -34,11 +35,12 @@ const MOE_DECODE_ROUTER_SOURCE: &str = r"
 
         float logits[values_per_thread];
         float exponentials[values_per_thread];
+        auto row_input_offset = batch_index * expert_count;
         auto input_offset = lid * values_per_thread;
         for (uint i = 0; i < values_per_thread; ++i) {
           auto index = input_offset + i;
           logits[i] = index < expert_count
-              ? static_cast<float>(router_logits[index])
+              ? static_cast<float>(router_logits[row_input_offset + index])
               : Limits<float>::min;
         }
 
@@ -143,8 +145,9 @@ const MOE_DECODE_ROUTER_SOURCE: &str = r"
               total = selected_probabilities[i] + total;
             }
             for (uint i = 0; i < selected_count; ++i) {
-              expert_indices[i] = selected_indices[i];
-              expert_scores[i] = static_cast<bfloat16_t>(
+              auto output_index = batch_index * selected_count + i;
+              expert_indices[output_index] = selected_indices[i];
+              expert_scores[output_index] = static_cast<bfloat16_t>(
                   selected_probabilities[i] / total);
             }
           }
@@ -156,6 +159,7 @@ const MOE_DECODE_ROUTER_SOURCE: &str = r"
 const MOE_DECODE_EXPERT_GATE_UP_SOURCE: &str = r"
         constexpr uint input_dimension = __INPUT_DIMENSION__;
         constexpr uint intermediate_dimension = __INTERMEDIATE_DIMENSION__;
+        constexpr uint selected_count = __SELECTED_COUNT__;
         constexpr uint rows_per_threadgroup = 8;
         constexpr uint results_per_simdgroup = 4;
         constexpr uint values_per_thread = 16;
@@ -164,11 +168,12 @@ const MOE_DECODE_EXPERT_GATE_UP_SOURCE: &str = r"
         constexpr uint groups_per_row = input_dimension / group_size;
         constexpr uint bytes_per_row = input_dimension / 2;
 
-        auto expert_slot = threadgroup_position_in_grid.z;
+        auto selection_slot = threadgroup_position_in_grid.z;
+        auto batch_index = selection_slot / selected_count;
         auto output_block = threadgroup_position_in_grid.y;
         auto simd_group = simdgroup_index_in_threadgroup;
         auto lane = thread_index_in_simdgroup;
-        auto expert_index = expert_indices[expert_slot];
+        auto expert_index = expert_indices[selection_slot];
         auto output_row =
             output_block * rows_per_threadgroup
             + simd_group * results_per_simdgroup;
@@ -191,7 +196,8 @@ const MOE_DECODE_EXPERT_GATE_UP_SOURCE: &str = r"
             + expert_group_offset + output_row * groups_per_row + lane / 4;
         auto up_biases = expert_up_biases
             + expert_group_offset + output_row * groups_per_row + lane / 4;
-        auto input_values = expert_input + lane * values_per_thread;
+        auto input_values = expert_input
+            + batch_index * input_dimension + lane * values_per_thread;
 
         float gate_results[results_per_simdgroup] = {0.0f};
         float up_results[results_per_simdgroup] = {0.0f};
@@ -256,7 +262,7 @@ const MOE_DECODE_EXPERT_GATE_UP_SOURCE: &str = r"
         }
 
         auto output_offset =
-            expert_slot * intermediate_dimension + output_row;
+            selection_slot * intermediate_dimension + output_row;
         for (uint row = 0; row < results_per_simdgroup; ++row) {
           gate_results[row] = simd_sum(gate_results[row]);
           up_results[row] = simd_sum(up_results[row]);
@@ -282,11 +288,13 @@ const MOE_DECODE_ROUTED_DOWN_REDUCE_SOURCE: &str = r"
         constexpr uint groups_per_row = input_dimension / group_size;
         constexpr uint bytes_per_row = input_dimension / 2;
 
+        auto batch_index = threadgroup_position_in_grid.z;
         auto expert_slot = simdgroup_index_in_threadgroup;
+        auto selection_offset = batch_index * selected_count;
         auto lane = thread_index_in_simdgroup;
         auto output_row =
             threadgroup_position_in_grid.y * results_per_simdgroup;
-        auto expert_index = expert_indices[expert_slot];
+        auto expert_index = expert_indices[selection_offset + expert_slot];
 
         auto expert_byte_offset =
             expert_index * output_dimension * bytes_per_row;
@@ -300,7 +308,8 @@ const MOE_DECODE_ROUTED_DOWN_REDUCE_SOURCE: &str = r"
         auto down_biases = expert_down_biases
             + expert_group_offset + output_row * groups_per_row + lane / 4;
         auto input_values = expert_activated
-            + expert_slot * input_dimension + lane * values_per_thread;
+            + (selection_offset + expert_slot) * input_dimension
+            + lane * values_per_thread;
 
         float results[results_per_simdgroup] = {0.0f};
         float input_thread[values_per_thread];
@@ -353,7 +362,7 @@ const MOE_DECODE_ROUTED_DOWN_REDUCE_SOURCE: &str = r"
           if (lane == 0) {
             auto projected = static_cast<bfloat16_t>(results[row]);
             weighted[expert_slot][row] = static_cast<bfloat16_t>(
-                projected * expert_scores[expert_slot]);
+                projected * expert_scores[selection_offset + expert_slot]);
           }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -363,7 +372,8 @@ const MOE_DECODE_ROUTED_DOWN_REDUCE_SOURCE: &str = r"
           for (uint index = 0; index < selected_count; ++index) {
             total = weighted[index][lane] + total;
           }
-          routed_output[output_row + lane] = total;
+          routed_output[
+              batch_index * output_dimension + output_row + lane] = total;
         }
     ";
 
@@ -451,7 +461,7 @@ pub(crate) struct MoeExecution {
     trace: Option<BTreeMap<&'static str, Array>>,
 }
 
-/// Reusable fixed-shape routing resources for one-token `MoE` decode.
+/// Reusable fixed-shape routing resources for one-token batched `MoE` decode.
 ///
 /// The kernel reproduces MLX's precise softmax rounding and stable
 /// `argpartition` tail before normalizing the selected scores. Keeping all
@@ -459,7 +469,7 @@ pub(crate) struct MoeExecution {
 /// small dispatches without changing the admitted BF16 behavior.
 pub(crate) struct MoeKernel {
     decode_router_kernel: MetalKernel,
-    decode_router_dispatch: MetalKernelDispatch,
+    decode_router_dispatches: Vec<MetalKernelDispatch>,
     decode_expert_gate_up: Option<MoeExpertGateUpKernel>,
     decode_routed_down_reduce: Option<MoeRoutedDownReduceKernel>,
     expert_count: usize,
@@ -470,17 +480,33 @@ pub(crate) struct MoeKernel {
 
 struct MoeExpertGateUpKernel {
     kernel: MetalKernel,
-    dispatch: MetalKernelDispatch,
+    dispatches: Vec<MetalKernelDispatch>,
     input_dimension: usize,
     intermediate_dimension: usize,
 }
 
 struct MoeRoutedDownReduceKernel {
     kernel: MetalKernel,
-    dispatch: MetalKernelDispatch,
+    dispatches: Vec<MetalKernelDispatch>,
     input_dimension: usize,
     output_dimension: usize,
     selected_count: usize,
+}
+
+fn decode_dispatch_for_batch<'a>(
+    dispatches: &'a [MetalKernelDispatch],
+    batch_size: usize,
+    label: &str,
+) -> Result<&'a MetalKernelDispatch, EngineError> {
+    batch_size
+        .checked_sub(1)
+        .and_then(|index| dispatches.get(index))
+        .ok_or_else(|| {
+            EngineError::Unsupported(format!(
+                "{label} supports decode batch sizes 1..={}, observed {batch_size}",
+                dispatches.len()
+            ))
+        })
 }
 
 impl MoeKernel {
@@ -529,25 +555,29 @@ impl MoeKernel {
             &source,
         )
         .map_err(EngineError::Mlx)?;
-        let decode_router_dispatch = MetalKernel::prepare_dispatch(
-            &[
-                MetalOutput {
-                    shape: vec![1, 1, experts_per_token],
-                    dtype: DType::Uint32,
-                },
-                MetalOutput {
-                    shape: vec![1, 1, experts_per_token],
-                    dtype: DType::BFloat16,
-                },
-            ],
-            &[],
-            [thread_count, 1, 1],
-            [thread_count, 1, 1],
-        )
-        .map_err(EngineError::Mlx)?;
+        let decode_router_dispatches = (1..=MAX_ACTIVE_BATCH_SIZE)
+            .map(|batch_size| {
+                MetalKernel::prepare_dispatch(
+                    &[
+                        MetalOutput {
+                            shape: vec![batch_size, 1, experts_per_token],
+                            dtype: DType::Uint32,
+                        },
+                        MetalOutput {
+                            shape: vec![batch_size, 1, experts_per_token],
+                            dtype: DType::BFloat16,
+                        },
+                    ],
+                    &[],
+                    [thread_count, batch_size, 1],
+                    [thread_count, 1, 1],
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(EngineError::Mlx)?;
         Ok(Self {
             decode_router_kernel,
-            decode_router_dispatch,
+            decode_router_dispatches,
             decode_expert_gate_up: None,
             decode_routed_down_reduce: None,
             expert_count,
@@ -564,7 +594,7 @@ impl MoeKernel {
         sequence_length: usize,
         plan: &ModelPlan,
     ) -> bool {
-        batch_size == 1
+        (1..=MAX_ACTIVE_BATCH_SIZE).contains(&batch_size)
             && sequence_length == 1
             && input.dtype() == DType::BFloat16
             && plan.norm_topk_prob
@@ -576,10 +606,16 @@ impl MoeKernel {
         &self,
         gpu: &Gpu,
         router_logits: &Array,
+        batch_size: usize,
     ) -> Result<(Array, Array), EngineError> {
+        let dispatch = decode_dispatch_for_batch(
+            &self.decode_router_dispatches,
+            batch_size,
+            "decode MoE router fusion",
+        )?;
         let mut outputs = self
             .decode_router_kernel
-            .apply_prepared(gpu, &[router_logits], &self.decode_router_dispatch)
+            .apply_prepared(gpu, &[router_logits], dispatch)
             .map_err(EngineError::Mlx)?;
         let expert_scores = outputs.pop().ok_or_else(|| {
             EngineError::Unsupported("decode MoE router kernel omitted expert scores".into())
@@ -596,10 +632,16 @@ impl MoeKernel {
         input: &Array,
         expert_indices: &Array,
         weights: &BoundMoeWeights,
+        batch_size: usize,
     ) -> Result<Option<(Array, Array)>, EngineError> {
         let Some(kernel) = &self.decode_expert_gate_up else {
             return Ok(None);
         };
+        let dispatch = decode_dispatch_for_batch(
+            &kernel.dispatches,
+            batch_size,
+            "decode expert gate/up fusion",
+        )?;
         let mut outputs = kernel
             .kernel
             .apply_prepared(
@@ -614,7 +656,7 @@ impl MoeKernel {
                     input,
                     expert_indices,
                 ],
-                &kernel.dispatch,
+                dispatch,
             )
             .map_err(EngineError::Mlx)?;
         let expert_up = outputs.pop().ok_or_else(|| {
@@ -636,7 +678,7 @@ impl MoeKernel {
     ) -> bool {
         self.decode_expert_gate_up.as_ref().is_some_and(|kernel| {
             !capture_trace
-                && batch_size == 1
+                && (1..=MAX_ACTIVE_BATCH_SIZE).contains(&batch_size)
                 && sequence_length == 1
                 && input.dtype() == DType::BFloat16
                 && plan.hidden_size == kernel.input_dimension
@@ -651,10 +693,16 @@ impl MoeKernel {
         expert_indices: &Array,
         expert_scores: &Array,
         weights: &BoundMoeWeights,
+        batch_size: usize,
     ) -> Result<Option<Array>, EngineError> {
         let Some(kernel) = &self.decode_routed_down_reduce else {
             return Ok(None);
         };
+        let dispatch = decode_dispatch_for_batch(
+            &kernel.dispatches,
+            batch_size,
+            "decode routed down/reduce fusion",
+        )?;
         let mut outputs = kernel
             .kernel
             .apply_prepared(
@@ -667,7 +715,7 @@ impl MoeKernel {
                     expert_indices,
                     expert_scores,
                 ],
-                &kernel.dispatch,
+                dispatch,
             )
             .map_err(EngineError::Mlx)?;
         let routed_output = outputs.pop().ok_or_else(|| {
@@ -690,7 +738,7 @@ impl MoeKernel {
             .is_some_and(|kernel| {
                 !capture_trace
                     && !use_sorted_dispatch
-                    && batch_size == 1
+                    && (1..=MAX_ACTIVE_BATCH_SIZE).contains(&batch_size)
                     && sequence_length == 1
                     && input.dtype() == DType::BFloat16
                     && plan.moe_intermediate_size == kernel.input_dimension
@@ -730,7 +778,8 @@ fn create_decode_expert_gate_up_kernel(
         .replace(
             "__INTERMEDIATE_DIMENSION__",
             &intermediate_dimension.to_string(),
-        );
+        )
+        .replace("__SELECTED_COUNT__", &experts_per_token.to_string());
     let name = format!(
         "moe_decode_expert_gate_up_bf16_q4_h{input_dimension}_m{intermediate_dimension}_e{expert_count}_top{experts_per_token}"
     );
@@ -750,26 +799,34 @@ fn create_decode_expert_gate_up_kernel(
         &source,
     )
     .map_err(EngineError::Mlx)?;
-    let output_shape = vec![1, 1, experts_per_token, 1, intermediate_dimension];
-    let dispatch = MetalKernel::prepare_dispatch(
-        &[
-            MetalOutput {
-                shape: output_shape.clone(),
-                dtype: DType::BFloat16,
-            },
-            MetalOutput {
-                shape: output_shape,
-                dtype: DType::BFloat16,
-            },
-        ],
-        &[],
-        [64, intermediate_dimension / 8, experts_per_token],
-        [64, 1, 1],
-    )
-    .map_err(EngineError::Mlx)?;
+    let dispatches = (1..=MAX_ACTIVE_BATCH_SIZE)
+        .map(|batch_size| {
+            let output_shape = vec![batch_size, 1, experts_per_token, 1, intermediate_dimension];
+            MetalKernel::prepare_dispatch(
+                &[
+                    MetalOutput {
+                        shape: output_shape.clone(),
+                        dtype: DType::BFloat16,
+                    },
+                    MetalOutput {
+                        shape: output_shape,
+                        dtype: DType::BFloat16,
+                    },
+                ],
+                &[],
+                [
+                    64,
+                    intermediate_dimension / 8,
+                    batch_size * experts_per_token,
+                ],
+                [64, 1, 1],
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(EngineError::Mlx)?;
     Ok(MoeExpertGateUpKernel {
         kernel,
-        dispatch,
+        dispatches,
         input_dimension,
         intermediate_dimension,
     })
@@ -823,19 +880,23 @@ fn create_decode_routed_down_reduce_kernel(
     )
     .map_err(EngineError::Mlx)?;
     let thread_count = selected_count * 32;
-    let dispatch = MetalKernel::prepare_dispatch(
-        &[MetalOutput {
-            shape: vec![1, 1, output_dimension],
-            dtype: DType::BFloat16,
-        }],
-        &[],
-        [thread_count, output_dimension / 4, 1],
-        [thread_count, 1, 1],
-    )
-    .map_err(EngineError::Mlx)?;
+    let dispatches = (1..=MAX_ACTIVE_BATCH_SIZE)
+        .map(|batch_size| {
+            MetalKernel::prepare_dispatch(
+                &[MetalOutput {
+                    shape: vec![batch_size, 1, output_dimension],
+                    dtype: DType::BFloat16,
+                }],
+                &[],
+                [thread_count, output_dimension / 4, batch_size],
+                [thread_count, 1, 1],
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(EngineError::Mlx)?;
     Ok(MoeRoutedDownReduceKernel {
         kernel,
-        dispatch,
+        dispatches,
         input_dimension,
         output_dimension,
         selected_count,
@@ -1425,7 +1486,8 @@ fn execute_sparse_moe_impl(
     let use_fused_decode_route =
         !capture_trace && kernel.supports_decode_route(input, batch_size, sequence_length, plan);
     let (expert_indices, expert_scores, router_probabilities) = if use_fused_decode_route {
-        let (expert_indices, expert_scores) = kernel.route_decode(gpu, &router_logits)?;
+        let (expert_indices, expert_scores) =
+            kernel.route_decode(gpu, &router_logits, batch_size)?;
         (expert_indices, expert_scores, None)
     } else {
         let router_probabilities = gpu
@@ -1524,9 +1586,13 @@ fn execute_sparse_moe_impl(
         capture_trace,
     ) {
         match weights {
-            MoeWeightSource::Bound(bound_weights) => {
-                kernel.expert_gate_up_decode(gpu, gather_inputs, gather_indices, bound_weights)?
-            }
+            MoeWeightSource::Bound(bound_weights) => kernel.expert_gate_up_decode(
+                gpu,
+                gather_inputs,
+                gather_indices,
+                bound_weights,
+                batch_size,
+            )?,
             MoeWeightSource::Named { .. } => None,
         }
     } else {
@@ -1600,6 +1666,7 @@ fn execute_sparse_moe_impl(
                 gather_indices,
                 &expert_scores,
                 bound_weights,
+                batch_size,
             )?,
             MoeWeightSource::Named { .. } => None,
         }
@@ -2061,13 +2128,14 @@ mod tests {
     fn fused_decode_router_matches_mlx_bf16_routing_exactly() {
         let gpu = Gpu::new();
         let kernel = MoeKernel::for_dimensions(256, 8).expect("decode router kernel");
+        let cases = router_logit_cases();
 
-        for (case_index, values) in router_logit_cases().into_iter().enumerate() {
-            let logits = Array::from_f32_slice(&values, &[1, 1, 256]).expect("float32 logits");
+        for (case_index, values) in cases.iter().enumerate() {
+            let logits = Array::from_f32_slice(values, &[1, 1, 256]).expect("float32 logits");
             let logits = gpu.astype(&logits, DType::BFloat16).expect("BF16 logits");
             let (expected_indices, expected_scores) = reference_decode_route(&gpu, &logits);
             let (actual_indices, actual_scores) =
-                kernel.route_decode(&gpu, &logits).expect("fused route");
+                kernel.route_decode(&gpu, &logits, 1).expect("fused route");
 
             let index_difference = gpu
                 .max_abs_difference(&actual_indices, &expected_indices)
@@ -2082,6 +2150,39 @@ mod tests {
             assert_eq!(
                 score_difference, 0.0,
                 "router case {case_index} produced different scores"
+            );
+        }
+
+        for batch_size in 2..=MAX_ACTIVE_BATCH_SIZE {
+            let values = cases
+                .iter()
+                .take(batch_size)
+                .flatten()
+                .copied()
+                .collect::<Vec<_>>();
+            let logits = Array::from_f32_slice(&values, &[batch_size, 1, 256])
+                .expect("batched float32 logits");
+            let logits = gpu
+                .astype(&logits, DType::BFloat16)
+                .expect("batched BF16 logits");
+            let (expected_indices, expected_scores) = reference_decode_route(&gpu, &logits);
+            let (actual_indices, actual_scores) = kernel
+                .route_decode(&gpu, &logits, batch_size)
+                .expect("batched fused route");
+
+            assert_eq!(actual_indices.shape(), expected_indices.shape());
+            assert_eq!(actual_scores.shape(), expected_scores.shape());
+            assert_eq!(
+                gpu.max_abs_difference(&actual_indices, &expected_indices)
+                    .expect("batched index difference"),
+                0.0,
+                "decode router indices changed at batch size {batch_size}"
+            );
+            assert_eq!(
+                gpu.max_abs_difference(&actual_scores, &expected_scores)
+                    .expect("batched score difference"),
+                0.0,
+                "decode router scores changed at batch size {batch_size}"
             );
         }
     }
@@ -2160,89 +2261,111 @@ mod tests {
         .and_then(|value| gpu.astype(&value, DType::BFloat16))
         .expect("up biases");
 
-        let mut input_state = 0x3141_5926_u32;
-        let input_values = (0..INPUT_DIMENSION)
-            .map(|_| {
-                input_state = input_state
-                    .wrapping_mul(1_664_525)
-                    .wrapping_add(1_013_904_223);
-                let bytes = input_state.to_le_bytes();
-                let sample = u16::from_le_bytes([bytes[2], bytes[3]]);
-                f32::from(sample) / 257.0 - 128.0
-            })
-            .collect::<Vec<_>>();
-        let input = Array::from_f32_slice(&input_values, &[1, 1, 1, 1, INPUT_DIMENSION])
-            .and_then(|value| gpu.astype(&value, DType::BFloat16))
-            .expect("expert input");
-        let expert_indices =
-            Array::from_i32_slice(&[15, 0, 7, 3, 11, 5, 14, 1], &[1, 1, EXPERTS_PER_TOKEN])
-                .and_then(|value| gpu.astype(&value, DType::Uint32))
-                .expect("expert indices");
+        let selected_experts = [15, 0, 7, 3, 11, 5, 14, 1];
+        for batch_size in 1..=MAX_ACTIVE_BATCH_SIZE {
+            let mut input_state = 0x3141_5926_u32 ^ u32::try_from(batch_size).expect("batch seed");
+            let input_values = (0..batch_size * INPUT_DIMENSION)
+                .map(|_| {
+                    input_state = input_state
+                        .wrapping_mul(1_664_525)
+                        .wrapping_add(1_013_904_223);
+                    let bytes = input_state.to_le_bytes();
+                    let sample = u16::from_le_bytes([bytes[2], bytes[3]]);
+                    f32::from(sample) / 257.0 - 128.0
+                })
+                .collect::<Vec<_>>();
+            let input =
+                Array::from_f32_slice(&input_values, &[batch_size, 1, 1, 1, INPUT_DIMENSION])
+                    .and_then(|value| gpu.astype(&value, DType::BFloat16))
+                    .expect("expert input");
+            let mut expert_index_values = Vec::with_capacity(batch_size * EXPERTS_PER_TOKEN);
+            for batch_index in 0..batch_size {
+                let offset = i32::try_from(batch_index).expect("batch index");
+                for expert_index in selected_experts {
+                    expert_index_values.push(
+                        (expert_index + offset)
+                            % i32::try_from(EXPERT_COUNT).expect("expert count"),
+                    );
+                }
+            }
+            let expert_indices =
+                Array::from_i32_slice(&expert_index_values, &[batch_size, 1, EXPERTS_PER_TOKEN])
+                    .and_then(|value| gpu.astype(&value, DType::Uint32))
+                    .expect("expert indices");
 
-        let expected_gate = gpu
-            .gather_quantized_matmul(
-                &input,
-                &gate_weight,
-                &gate_scales,
-                GatherQuantizedMatmulConfig {
-                    biases: Some(&gate_biases),
-                    rhs_indices: &expert_indices,
-                    transpose: true,
-                    group_size: 64,
-                    bits: 4,
-                    mode: "affine",
-                    sorted_indices: false,
-                },
-            )
-            .expect("reference gate projection");
-        let expected_up = gpu
-            .gather_quantized_matmul(
-                &input,
-                &up_weight,
-                &up_scales,
-                GatherQuantizedMatmulConfig {
-                    biases: Some(&up_biases),
-                    rhs_indices: &expert_indices,
-                    transpose: true,
-                    group_size: 64,
-                    bits: 4,
-                    mode: "affine",
-                    sorted_indices: false,
-                },
-            )
-            .expect("reference up projection");
-        let mut outputs = kernel
-            .kernel
-            .apply_prepared(
-                &gpu,
-                &[
+            let expected_gate = gpu
+                .gather_quantized_matmul(
+                    &input,
                     &gate_weight,
                     &gate_scales,
-                    &gate_biases,
+                    GatherQuantizedMatmulConfig {
+                        biases: Some(&gate_biases),
+                        rhs_indices: &expert_indices,
+                        transpose: true,
+                        group_size: 64,
+                        bits: 4,
+                        mode: "affine",
+                        sorted_indices: false,
+                    },
+                )
+                .expect("reference gate projection");
+            let expected_up = gpu
+                .gather_quantized_matmul(
+                    &input,
                     &up_weight,
                     &up_scales,
-                    &up_biases,
-                    &input,
-                    &expert_indices,
-                ],
-                &kernel.dispatch,
+                    GatherQuantizedMatmulConfig {
+                        biases: Some(&up_biases),
+                        rhs_indices: &expert_indices,
+                        transpose: true,
+                        group_size: 64,
+                        bits: 4,
+                        mode: "affine",
+                        sorted_indices: false,
+                    },
+                )
+                .expect("reference up projection");
+            let dispatch = decode_dispatch_for_batch(
+                &kernel.dispatches,
+                batch_size,
+                "test expert gate/up fusion",
             )
-            .expect("fused expert projections");
-        let actual_up = outputs.pop().expect("fused up projection");
-        let actual_gate = outputs.pop().expect("fused gate projection");
+            .expect("gate/up dispatch");
+            let mut outputs = kernel
+                .kernel
+                .apply_prepared(
+                    &gpu,
+                    &[
+                        &gate_weight,
+                        &gate_scales,
+                        &gate_biases,
+                        &up_weight,
+                        &up_scales,
+                        &up_biases,
+                        &input,
+                        &expert_indices,
+                    ],
+                    dispatch,
+                )
+                .expect("fused expert projections");
+            let actual_up = outputs.pop().expect("fused up projection");
+            let actual_gate = outputs.pop().expect("fused gate projection");
 
-        assert_eq!(actual_gate.shape(), expected_gate.shape());
-        assert_eq!(actual_up.shape(), expected_up.shape());
-        assert_eq!(
-            gpu.max_abs_difference(&actual_gate, &expected_gate)
-                .expect("gate difference"),
-            0.0
-        );
-        assert_eq!(
-            gpu.max_abs_difference(&actual_up, &expected_up)
-                .expect("up difference"),
-            0.0
-        );
+            assert_eq!(actual_gate.shape(), expected_gate.shape());
+            assert_eq!(actual_up.shape(), expected_up.shape());
+            assert_eq!(
+                gpu.max_abs_difference(&actual_gate, &expected_gate)
+                    .expect("gate difference"),
+                0.0,
+                "decode expert gate projection changed at batch size {batch_size}"
+            );
+            assert_eq!(
+                gpu.max_abs_difference(&actual_up, &expected_up)
+                    .expect("up difference"),
+                0.0,
+                "decode expert up projection changed at batch size {batch_size}"
+            );
+        }
     }
 
     #[test]
@@ -2297,84 +2420,109 @@ mod tests {
             .and_then(|value| gpu.astype(&value, DType::BFloat16))
             .expect("down biases");
 
-        let activated_value_count = SELECTED_COUNT * INPUT_DIMENSION;
-        let mut activated_state = 0xbb67_ae85_u32;
-        let activated_values = (0..activated_value_count)
-            .map(|_| {
-                activated_state = activated_state
-                    .wrapping_mul(1_664_525)
-                    .wrapping_add(1_013_904_223);
-                let bytes = activated_state.to_le_bytes();
-                let sample = u16::from_le_bytes([bytes[2], bytes[3]]);
-                f32::from(sample) / 8192.0 - 4.0
-            })
-            .collect::<Vec<_>>();
-        let activated = Array::from_f32_slice(
-            &activated_values,
-            &[1, 1, SELECTED_COUNT, 1, INPUT_DIMENSION],
-        )
-        .and_then(|value| gpu.astype(&value, DType::BFloat16))
-        .expect("expert activations");
-        let expert_indices =
-            Array::from_i32_slice(&[15, 0, 7, 3, 11, 5, 14, 1], &[1, 1, SELECTED_COUNT])
-                .and_then(|value| gpu.astype(&value, DType::Uint32))
-                .expect("expert indices");
-        let expert_scores = Array::from_f32_slice(
-            &[0.031, 0.067, 0.109, 0.143, 0.157, 0.191, 0.127, 0.175],
-            &[1, 1, SELECTED_COUNT],
-        )
-        .and_then(|value| gpu.astype(&value, DType::BFloat16))
-        .expect("expert scores");
-
-        let projected = gpu
-            .gather_quantized_matmul(
-                &activated,
-                &down_weight,
-                &down_scales,
-                GatherQuantizedMatmulConfig {
-                    biases: Some(&down_biases),
-                    rhs_indices: &expert_indices,
-                    transpose: true,
-                    group_size: 64,
-                    bits: 4,
-                    mode: "affine",
-                    sorted_indices: false,
-                },
+        let selected_experts = [15, 0, 7, 3, 11, 5, 14, 1];
+        let selected_scores = [0.031, 0.067, 0.109, 0.143, 0.157, 0.191, 0.127, 0.175];
+        for batch_size in 1..=MAX_ACTIVE_BATCH_SIZE {
+            let activated_value_count = batch_size * SELECTED_COUNT * INPUT_DIMENSION;
+            let mut activated_state =
+                0xbb67_ae85_u32 ^ u32::try_from(batch_size).expect("batch seed");
+            let activated_values = (0..activated_value_count)
+                .map(|_| {
+                    activated_state = activated_state
+                        .wrapping_mul(1_664_525)
+                        .wrapping_add(1_013_904_223);
+                    let bytes = activated_state.to_le_bytes();
+                    let sample = u16::from_le_bytes([bytes[2], bytes[3]]);
+                    f32::from(sample) / 8192.0 - 4.0
+                })
+                .collect::<Vec<_>>();
+            let activated = Array::from_f32_slice(
+                &activated_values,
+                &[batch_size, 1, SELECTED_COUNT, 1, INPUT_DIMENSION],
             )
-            .expect("reference down projection");
-        let projected = gpu
-            .reshape(&projected, &[1, 1, SELECTED_COUNT, OUTPUT_DIMENSION])
-            .expect("reference output shape");
-        let expanded_scores = gpu
-            .reshape(&expert_scores, &[1, 1, SELECTED_COUNT, 1])
-            .expect("reference score shape");
-        let expected = gpu
-            .multiply(&projected, &expanded_scores)
-            .and_then(|scaled| gpu.sum_axis(&scaled, -2, false))
-            .expect("reference weighted reduction");
+            .and_then(|value| gpu.astype(&value, DType::BFloat16))
+            .expect("expert activations");
+            let mut expert_index_values = Vec::with_capacity(batch_size * SELECTED_COUNT);
+            let mut expert_score_values = Vec::with_capacity(batch_size * SELECTED_COUNT);
+            for batch_index in 0..batch_size {
+                let offset = i32::try_from(batch_index).expect("batch index");
+                for expert_index in selected_experts {
+                    expert_index_values.push(
+                        (expert_index + offset)
+                            % i32::try_from(EXPERT_COUNT).expect("expert count"),
+                    );
+                }
+                expert_score_values.extend_from_slice(&selected_scores);
+            }
+            let expert_indices =
+                Array::from_i32_slice(&expert_index_values, &[batch_size, 1, SELECTED_COUNT])
+                    .and_then(|value| gpu.astype(&value, DType::Uint32))
+                    .expect("expert indices");
+            let expert_scores =
+                Array::from_f32_slice(&expert_score_values, &[batch_size, 1, SELECTED_COUNT])
+                    .and_then(|value| gpu.astype(&value, DType::BFloat16))
+                    .expect("expert scores");
 
-        let mut outputs = kernel
-            .kernel
-            .apply_prepared(
-                &gpu,
-                &[
+            let projected = gpu
+                .gather_quantized_matmul(
+                    &activated,
                     &down_weight,
                     &down_scales,
-                    &down_biases,
-                    &activated,
-                    &expert_indices,
-                    &expert_scores,
-                ],
-                &kernel.dispatch,
-            )
-            .expect("fused routed down/reduce");
-        let actual = outputs.pop().expect("fused routed output");
+                    GatherQuantizedMatmulConfig {
+                        biases: Some(&down_biases),
+                        rhs_indices: &expert_indices,
+                        transpose: true,
+                        group_size: 64,
+                        bits: 4,
+                        mode: "affine",
+                        sorted_indices: false,
+                    },
+                )
+                .expect("reference down projection");
+            let projected = gpu
+                .reshape(
+                    &projected,
+                    &[batch_size, 1, SELECTED_COUNT, OUTPUT_DIMENSION],
+                )
+                .expect("reference output shape");
+            let expanded_scores = gpu
+                .reshape(&expert_scores, &[batch_size, 1, SELECTED_COUNT, 1])
+                .expect("reference score shape");
+            let expected = gpu
+                .multiply(&projected, &expanded_scores)
+                .and_then(|scaled| gpu.sum_axis(&scaled, -2, false))
+                .expect("reference weighted reduction");
 
-        assert_eq!(actual.shape(), expected.shape());
-        assert_eq!(
-            gpu.max_abs_difference(&actual, &expected)
-                .expect("routed output difference"),
-            0.0
-        );
+            let dispatch = decode_dispatch_for_batch(
+                &kernel.dispatches,
+                batch_size,
+                "test routed down/reduce fusion",
+            )
+            .expect("routed down/reduce dispatch");
+            let mut outputs = kernel
+                .kernel
+                .apply_prepared(
+                    &gpu,
+                    &[
+                        &down_weight,
+                        &down_scales,
+                        &down_biases,
+                        &activated,
+                        &expert_indices,
+                        &expert_scores,
+                    ],
+                    dispatch,
+                )
+                .expect("fused routed down/reduce");
+            let actual = outputs.pop().expect("fused routed output");
+
+            assert_eq!(actual.shape(), expected.shape());
+            assert_eq!(
+                gpu.max_abs_difference(&actual, &expected)
+                    .expect("routed output difference"),
+                0.0,
+                "decode routed output changed at batch size {batch_size}"
+            );
+        }
     }
 }

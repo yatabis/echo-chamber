@@ -335,6 +335,196 @@ does not authorize two concurrent commits into the same lane. The later
 integrated contract resolved the composition as one durable main lane plus
 separate ephemeral memory and emotion lanes per E.C.H.O. existence.
 
+## Batched MoE decode fusion promotion — 2026-08-06
+
+The production scheduler admitted widths through six, but three exact custom
+MoE decode kernels still had a literal `batch_size == 1` admission condition.
+Widths two through six therefore fell back to separate generic MLX operations
+for router selection, expert gate/up projection, and routed down projection
+plus reduction. This was not a model-correctness bug, but it was a material
+performance-path omission after continuous batching became production code.
+
+The retained implementation gives each decode row an independent Metal
+threadgroup and keeps fixed dispatch/output metadata resident for widths one
+through six. The three extended operations are:
+
+- precise BF16 256-way router softmax, stable top-eight selection, and selected
+  score normalization;
+- affine-Q4 expert gate and up projections; and
+- affine-Q4 expert down projection, BF16 score multiplication, and top-eight
+  reduction.
+
+The path remains limited to one-token decode. Prefill and the sorted expert
+path for 64 or more selections are unchanged.
+
+All three kernels matched the corresponding official MLX operations exactly
+at every width from one through six in fixed-shape tests. The integrated
+bound-weight resident path then matched an official MLX-LM oracle for two
+unequal histories of 72 and 81 tokens, a one-token continuation, and 32
+generated tokens: both output rows were exact and the maximum difference over
+each row's 80 final KV/GDN tensors was `0.0`. The retained width-six full-model
+oracle also passed again: all 40 layer outputs, logits, eight generated steps,
+and final KV/GDN state reported maximum difference `0.0`.
+
+The greedy A/B used the same local affine-Q4 model, one warmup, two measured
+64-token rounds per width, and resident contexts of 4K, 16K, and 32K tokens.
+The table reports aggregate decode tokens per second: all generated row tokens
+divided by the shared decode interval. The baseline ran before the candidate.
+
+| Context | Width | Before | Batched fusion |  Change |
+| ------: | ----: | -----: | -------------: | ------: |
+|      4K |     1 |  84.78 |          84.28 |  -0.59% |
+|      4K |     2 | 109.21 |         121.04 | +10.83% |
+|      4K |     3 | 126.21 |         140.04 | +10.96% |
+|      4K |     4 | 135.09 |         148.90 | +10.22% |
+|      4K |     5 | 140.37 |         158.47 | +12.89% |
+|      4K |     6 | 142.64 |         160.32 | +12.40% |
+|     16K |     1 |  71.77 |          71.78 |  +0.00% |
+|     16K |     2 |  88.59 |          95.23 |  +7.50% |
+|     16K |     3 |  99.00 |         107.56 |  +8.66% |
+|     16K |     4 | 106.00 |         113.76 |  +7.32% |
+|     16K |     5 | 106.91 |         116.36 |  +8.83% |
+|     16K |     6 | 107.91 |         115.44 |  +6.97% |
+|     32K |     1 |  60.20 |          60.30 |  +0.16% |
+|     32K |     2 |  71.04 |          74.91 |  +5.45% |
+|     32K |     3 |  77.57 |          82.40 |  +6.23% |
+|     32K |     4 |  80.11 |          85.31 |  +6.50% |
+|     32K |     5 |  82.38 |          88.60 |  +7.55% |
+|     32K |     6 |  82.75 |          88.30 |  +6.70% |
+
+The production-sampling A/B reversed execution order by running the candidate
+before the baseline. It used one warmup and three measured 64-token rounds at
+4K, with each row retaining its own sampler seed and generated-token presence
+history.
+
+| Width | Before | Batched fusion |  Change |
+| ----: | -----: | -------------: | ------: |
+|     1 |  79.07 |          79.26 |  +0.23% |
+|     2 | 100.33 |         111.20 | +10.83% |
+|     3 | 114.99 |         126.21 |  +9.76% |
+|     4 | 123.57 |         134.90 |  +9.17% |
+|     5 | 128.06 |         140.44 |  +9.67% |
+|     6 | 130.61 |         144.26 | +10.45% |
+
+Production width-six median TTFT decreased from 98.14 ms to 88.02 ms. The
+width-one internal controls remained within 0.59% across both suites, while
+every affected width/context improved by at least 5.45%. Width-six active
+Metal allocation was unchanged at all three context tiers, and both greedy
+runs reported the same final peak allocation of 25,248,938,772 bytes.
+
+Both candidates passed co-tenant replacement, row reversal, pairwise-distinct
+state, exact state-length, and width-six-through-one shrinking-membership
+checks. The fused version is therefore retained. These measurements supersede
+the throughput figures in the preceding width-extension table for the current
+implementation; they do not change the hard maximum of six or the policy not
+to wait merely to fill a batch.
+
+The baseline and candidate release binary SHA-256 values were respectively
+`99571243d824a3427daa66e32fdc3fa1cc652bce09baf0f60f6923a4cf355c5d`
+and
+`c02423fbc4396e7f401f993e87fcd6594977f9733b8f53169a82e0be0583398b`.
+Both were built from working trees based on
+`3dec88fb7309a08d916bd3a7e68de20c24395434` on
+`feat/native-inference-engine`. The four raw A/B outputs are retained only in
+the ignored local archive at
+`.artifacts/model-evaluation/native-inference/evidence/2026-08-06/`; they are
+not Git candidates. The two official-oracle stdout payloads were inspected
+during this run but were not retained as separate raw files.
+
+## Batched GDN decode fast-path promotion — 2026-08-06
+
+After the batched MoE promotion, one more production decode omission remained:
+the exact GDN preprocess, prepared recurrent dispatch, and exact postprocess
+paths admitted only `batch_size == 1`. Widths two through six therefore used
+the generic MLX graph for every one of the 30 recurrent layers. The retained
+implementation now prepares fixed output/dispatch metadata for every admitted
+width and gives every batch row an independent Metal grid-z coordinate.
+
+The three extended operations are:
+
+- convolution-state shift, depthwise convolution, SiLU, Q/K RMS scaling, V,
+  beta sigmoid, and decay construction;
+- the existing batch-safe gated-delta recurrent update, now through a prepared
+  width-specific dispatch; and
+- per-head RMS normalization plus the precise SwiGLU output gate.
+
+This remains a one-token BF16 decode fast path for the admitted Qwen shape.
+Prefill, traces, unsupported dimensions, and widths above six keep the generic
+path. The scheduler and both MoE/GDN fixed-shape kernels now read the same
+crate-level maximum-width constant, preventing an admission/kernel-capacity
+drift.
+
+Fixed-shape Metal tests compared every width from one through six against the
+previous MLX operations. Preprocess, recurrent output/state, and postprocess
+all had maximum absolute difference `0.0`. The integrated unequal-history
+oracle then prefetched 72- and 81-token rows, appended one token, and generated
+32 tokens: both generated rows matched official MLX-LM and all 80 final
+KV/GDN tensors per row had maximum difference `0.0`. The width-six full-model
+oracle also matched embeddings, all 40 layer outputs, logits, eight generated
+steps, and final state exactly. The final release binary repeated that complete
+width-six oracle after lint cleanup.
+
+The greedy A/B ran the baseline before the candidate. Each context/width used
+one warmup, two measured 64-token rounds, and rotated width order. Values are
+aggregate decode tokens per second.
+
+| Width | 4K before | 4K GDN | Change | 16K before | 16K GDN | Change | 32K before | 32K GDN | Change |
+| ----: | --------: | -----: | -----: | ---------: | ------: | -----: | ---------: | ------: | -----: |
+|     1 |     84.60 |  84.62 | +0.02% |      71.56 |   71.83 | +0.38% |      60.48 |   60.11 | -0.62% |
+|     2 |    120.52 | 130.74 | +8.47% |      95.63 |  102.78 | +7.48% |      74.42 |   79.29 | +6.54% |
+|     3 |    140.26 | 151.51 | +8.02% |     108.46 |  113.81 | +4.93% |      82.50 |   86.06 | +4.31% |
+|     4 |    149.18 | 158.33 | +6.13% |     113.24 |  119.49 | +5.52% |      84.53 |   87.92 | +4.02% |
+|     5 |    155.73 | 164.58 | +5.68% |     115.68 |  118.59 | +2.51% |      88.86 |   91.71 | +3.20% |
+|     6 |    160.06 | 165.13 | +3.16% |     116.53 |  119.18 | +2.27% |      88.79 |   89.77 | +1.10% |
+
+All 15 affected width/context combinations improved. The three width-one
+controls stayed within 0.62%, while the gain narrowed at larger widths and
+contexts as total throughput approached the already-observed saturation
+region. One 32K width-three TTFT sample moved from 128.65 to 228.25 ms despite
+the positive median decode-rate result, so this A/B does not claim uniform
+TTFT improvement. Final greedy peak allocation was identical at
+25,248,938,772 bytes.
+
+The production-sampling A/B reversed execution order by running the candidate
+before the baseline. It used the admitted
+`0.7/0.8/top-20/presence-1.5` sampler at 4K, one warmup, and three measured
+64-token rounds per width.
+
+| Width | Before | Batched GDN | Change |
+| ----: | -----: | ----------: | -----: |
+|     1 |  79.14 |       79.01 | -0.16% |
+|     2 | 111.68 |      119.54 | +7.04% |
+|     3 | 126.37 |      134.81 | +6.68% |
+|     4 | 134.93 |      141.29 | +4.71% |
+|     5 | 140.63 |      144.68 | +2.88% |
+|     6 | 143.84 |      148.07 | +2.94% |
+
+Every affected width improved and the width-one control moved by only 0.16%.
+Production width-six median TTFT moved from 87.85 to 86.38 ms. Final production
+peak allocation was identical at 24,102,550,292 bytes.
+
+Both A/B candidates passed maximum-width co-tenant replacement and complete
+row reversal: generated outputs remained exact, every retained state had
+maximum difference `0.0`, and baseline rows were pairwise distinct. The
+greedy shrinking-membership diagnostic also visited widths 6, 5, 4, 3, 2,
+and 1 with exact state lengths and distinct live rows at every stage. Because
+the combined candidate improved every affected A/B condition, no component
+needed to be disabled or subjected to a longer individual ablation.
+
+The baseline release binary SHA-256 was
+`c02423fbc4396e7f401f993e87fcd6594977f9733b8f53169a82e0be0583398b`.
+The measured candidate was
+`1de76c603de6ced88b6ca7c5027abbd771fe788a1fa10bc8b3a5f37a9939a368`.
+The final verified binary was
+`2c60a11904424fdf5565e2e4c2420c86fad2ed157ca4a50a9c3fb65f3506f392`;
+the only post-measurement source change adopted Rust's inline `format!`
+syntax, producing the same runtime Metal kernel names and behavior. All were
+built from working trees based on
+`3dec88fb7309a08d916bd3a7e68de20c24395434` on
+`feat/native-inference-engine`. The four raw A/B JSON files remain only in
+the ignored local archive under
+`.artifacts/model-evaluation/native-inference/evidence/2026-08-06/`.
+
 ## Interpretation and remaining work
 
 The combined evidence supports the implemented hard maximum of six and

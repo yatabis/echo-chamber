@@ -31,8 +31,9 @@ cross-shape exactness decision with official batch semantics, unequal resident
 state, lifecycle, context-curve, production-sampling, and sampled tool-loop
 evidence. It also records the integrated protocol-v9 continuous scheduler,
 durable-main/ephemeral-auxiliary state-lane contract, real three-E.C.H.O. tool
-loop, cancellation retry, and six-lane 16K soak. Raw performance and
-diagnostic outputs remain local-only.
+loop, cancellation retry, six-lane 16K soak, and the 2026-08-06 promotion of
+exact batched MoE and GDN decode fast paths through width six. Raw performance
+and diagnostic outputs remain local-only.
 
 ## Local diagnostic archive
 
