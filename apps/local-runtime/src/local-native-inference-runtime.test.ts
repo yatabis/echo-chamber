@@ -72,6 +72,8 @@ class FakeTransport implements NativeInferenceTransport {
       eos_token_id: 248_046,
       chat_template_sha256: 'template',
       max_outstanding_requests: 8,
+      max_active_batch_size: 6,
+      max_late_join_batch_size: 4,
     });
   }
 }
@@ -115,6 +117,7 @@ describe('LocalNativeInferenceRuntime', () => {
     expect(runtime.state('rin')).toMatchObject({
       instanceId: 'rin',
       stateOpened: true,
+      persistence: 'durable',
       hasState: true,
       snapshotDirty: false,
     });
@@ -122,7 +125,22 @@ describe('LocalNativeInferenceRuntime', () => {
     expect(runtime.state('marie')).toMatchObject({
       instanceId: 'marie',
       stateOpened: true,
+      persistence: 'durable',
       hasState: false,
+    });
+    expect(runtime.state('rin', 'memory')).toMatchObject({
+      instanceId: 'rin.memory',
+      stateOpened: true,
+      persistence: 'ephemeral',
+      hasState: false,
+      snapshotDirty: false,
+    });
+    expect(runtime.state('rin', 'emotion')).toMatchObject({
+      instanceId: 'rin.emotion',
+      stateOpened: true,
+      persistence: 'ephemeral',
+      hasState: false,
+      snapshotDirty: false,
     });
 
     let retainedModel: unknown;
@@ -146,11 +164,26 @@ describe('LocalNativeInferenceRuntime', () => {
         .filter((command) => command.type === 'open_state')
         .map((command) => ({
           instanceId: command.instance_id,
-          snapshotRoot: command.snapshot_root,
+          persistence: command.persistence,
+          ...('snapshot_root' in command
+            ? { snapshotRoot: command.snapshot_root }
+            : {}),
         }))
     ).toEqual([
-      { instanceId: 'rin', snapshotRoot: join(snapshotDirectory, 'rin') },
-      { instanceId: 'marie', snapshotRoot: join(snapshotDirectory, 'marie') },
+      {
+        instanceId: 'rin',
+        persistence: 'durable',
+        snapshotRoot: join(snapshotDirectory, 'rin'),
+      },
+      { instanceId: 'rin.memory', persistence: 'ephemeral' },
+      { instanceId: 'rin.emotion', persistence: 'ephemeral' },
+      {
+        instanceId: 'marie',
+        persistence: 'durable',
+        snapshotRoot: join(snapshotDirectory, 'marie'),
+      },
+      { instanceId: 'marie.memory', persistence: 'ephemeral' },
+      { instanceId: 'marie.emotion', persistence: 'ephemeral' },
     ]);
     expect(
       transport.commands
@@ -188,6 +221,98 @@ describe('LocalNativeInferenceRuntime', () => {
       hasState: true,
       snapshotDirty: false,
     });
+    await runtime.shutdown();
+  });
+
+  it('runs memory and emotion as independent ephemeral lanes with exact tool-response deltas', async () => {
+    const snapshotDirectory = await createSnapshotDirectory();
+    const transport = new FakeTransport();
+    const client = new NativeInferenceClient(transport);
+    const pendingPair: NativeGenerateCommand[] = [];
+    transport.ready();
+    transport.onSend = (command, current): void => {
+      if (command.type === 'open_state') {
+        emitOpened(current, command, snapshotDirectory, false);
+        return;
+      }
+      if (command.type !== 'generate') return;
+      pendingPair.push(command);
+      if (pendingPair.length !== 2) return;
+      for (const pending of pendingPair.splice(0)) {
+        current.emit(
+          completed(pending, pending.state_transition === 'initial' ? 10 : 20, [
+            {
+              type: 'tool_call',
+              call_id:
+                pending.state_transition === 'initial'
+                  ? 'main-observation'
+                  : 'next-main-observation',
+              tool_name: MODULE_TOOL.name,
+              input: '{"summary":"updated"}',
+            },
+          ])
+        );
+      }
+    };
+    const runtime = await startWithClient(snapshotDirectory, client);
+
+    await runtime.runThinkingSession('rin', async (_main, modules) => {
+      const [memoryInitial, emotionInitial] = await Promise.all([
+        modules.memory.generate(moduleRequest('memory system prompt')),
+        modules.emotion.generate(moduleRequest('emotion system prompt')),
+      ]);
+      if (
+        memoryInitial.responseToken === undefined ||
+        emotionInitial.responseToken === undefined
+      ) {
+        throw new Error('auxiliary module returned no live continuation token');
+      }
+      await Promise.all([
+        modules.memory.generate(
+          moduleDelta(memoryInitial.responseToken, 'new main-thought delta')
+        ),
+        modules.emotion.generate(
+          moduleDelta(emotionInitial.responseToken, 'new main-thought delta')
+        ),
+      ]);
+    });
+
+    const generations = transport.commands.filter(
+      (command): command is NativeGenerateCommand => command.type === 'generate'
+    );
+    expect(
+      generations.map((command) => ({
+        instanceId: command.instance_id,
+        transition: command.state_transition,
+      }))
+    ).toEqual([
+      { instanceId: 'rin.memory', transition: 'initial' },
+      { instanceId: 'rin.emotion', transition: 'initial' },
+      { instanceId: 'rin.memory', transition: 'continuation' },
+      { instanceId: 'rin.emotion', transition: 'continuation' },
+    ]);
+    expect(runtime.state('rin')).toMatchObject({
+      persistence: 'durable',
+      hasState: false,
+    });
+    expect(runtime.state('rin', 'memory')).toMatchObject({
+      persistence: 'ephemeral',
+      hasState: true,
+      snapshotDirty: false,
+      stateSequenceLength: 20,
+    });
+    expect(runtime.state('rin', 'emotion')).toMatchObject({
+      persistence: 'ephemeral',
+      hasState: true,
+      snapshotDirty: false,
+      stateSequenceLength: 20,
+    });
+    expect(commandTypesAfterOpen(transport)).toEqual([
+      'generate',
+      'generate',
+      'generate',
+      'generate',
+    ]);
     await runtime.shutdown();
   });
 
@@ -356,7 +481,8 @@ function installOwnerLifecycle(
         current,
         command,
         snapshotDirectory,
-        command.instance_id === restoredInstance
+        command.persistence === 'durable' &&
+          command.instance_id === restoredInstance
       );
     } else if (command.type === 'generate') {
       const sequenceLength =
@@ -391,12 +517,17 @@ function emitOpened(
     event: 'state_opened',
     request_id: command.request_id,
     instance_id: command.instance_id,
-    restored,
-    current_path: join(
-      snapshotDirectory,
-      command.instance_id,
-      'current.safetensors'
-    ),
+    persistence: command.persistence,
+    restored: command.persistence === 'durable' && restored,
+    ...(command.persistence === 'durable'
+      ? {
+          current_path: join(
+            snapshotDirectory,
+            command.instance_id,
+            'current.safetensors'
+          ),
+        }
+      : {}),
   });
 }
 
@@ -421,9 +552,45 @@ function modelRequest(): ModelRequest {
   };
 }
 
+const MODULE_TOOL = {
+  name: 'publish_module_update',
+  description: 'Publish one module update.',
+  inputSchema: {
+    type: 'object',
+    properties: { summary: { type: 'string' } },
+  },
+};
+
+function moduleRequest(content: string): ModelRequest {
+  return {
+    input: [{ role: 'developer', content }],
+    tools: [MODULE_TOOL],
+  };
+}
+
+function moduleDelta(
+  previousResponseToken: string,
+  content: string
+): ModelRequest {
+  return {
+    input: [
+      {
+        type: 'tool_result',
+        callId: 'main-observation',
+        output: content,
+      },
+    ],
+    tools: [MODULE_TOOL],
+    previousResponseToken,
+  };
+}
+
 function completed(
   command: NativeGenerateCommand,
-  stateSequenceLength: number
+  stateSequenceLength: number,
+  output: NativeCompletedEvent['output'] = [
+    { type: 'message', role: 'assistant', content: 'ok' },
+  ]
 ): NativeCompletedEvent {
   return {
     event: 'completed',
@@ -440,6 +607,8 @@ function completed(
         cached_prefix_tokens: 0,
         input_tokens_processed: 9,
         generated_tokens: 1,
+        maximum_decode_batch_size: 1,
+        decode_batch_membership_changes: 0,
         model_step_count: 2,
         input_model_execution_count: 1,
         input_execution_nanos: 1,
@@ -462,7 +631,7 @@ function completed(
       },
     },
     text: 'ok',
-    output: [{ type: 'message', role: 'assistant', content: 'ok' }],
+    output,
   };
 }
 

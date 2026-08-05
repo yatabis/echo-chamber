@@ -7,7 +7,7 @@ import type { NativeInferenceClient } from '@echo-chamber/native-inference-adapt
 /**
  * Owns empty per-instance state directories for one live Native benchmark.
  *
- * State opening is performed before a timed generation, so protocol-v7
+ * State opening is performed before a timed generation, so lifecycle
  * lifecycle setup does not contaminate request latency. The directories are
  * intentionally ephemeral because performance gates do not test restart.
  */
@@ -29,6 +29,7 @@ export class EphemeralNativeStateRoots {
       type: 'open_state',
       request_id: `${safeInstanceId}:open-state`,
       instance_id: instanceId,
+      persistence: 'durable',
       snapshot_root: join(this.root, safeInstanceId),
     });
     if (event.restored || event.instance_id !== instanceId) {

@@ -14,6 +14,7 @@ The local source files for this report are:
 - `production-context-curve-independent-initial.json`;
 - `production-sustained-20m.json`;
 - `production-multi-instance-stateful.json`;
+- `parallel-generation-128x3-counterbalanced.json`;
 - `echo-prefill-{cache-clear,chunk8k-32k,chunk4k-32k,chunk2k-32k}.json`;
 - `echo-prefill-fastpath-16k.json`;
 - `echo-prefill-{16k-single,16k-chunk4k,16k-chunk2k}-20260804.json`;
@@ -306,6 +307,64 @@ against a 75.16 MB median logical payload (1.11 times). Active plus reusable
 allocator cache grew by 123.82 MB per instance; allocator cache is not treated
 as a permanent per-instance tax.
 
+## Two-instance parallel-generation probe
+
+A feature-gated Native diagnostic compared the current FIFO execution with two
+same-process candidates: two independent MLX GPU streams sharing one bound
+weight set, and one fixed batch of two. Production scheduling and the stdio
+protocol remained unchanged. The release binary was built from commit
+`1b6a1207b3061ce442298a266242e87b9eafc2d4` plus the uncommitted diagnostic
+changes; its SHA-256 was
+`0bcdea1149a0285bae696a3c90d7420a73f4aceafa20ff12f4a1363ce653aa7e`.
+
+Both instances began with empty state and distinct, equal-length 74-token
+prompts. Greedy generation was forced to 128 tokens. After one warmup per
+mode, three measured rounds rotated every mode through first, second, and
+third execution position. Aggregate decode rate is 256 generated tokens
+divided by the pair's decode interval. TTFT and completion are measured from
+the simultaneous arrival of both requests, so FIFO's second request includes
+its queue wait.
+
+| Mode                    | Aggregate decode | Pair total |        TTFT A / B |  Completion A / B | Peak above start | Exact output + state |
+| ----------------------- | ---------------: | ---------: | ----------------: | ----------------: | ---------------: | -------------------: |
+| FIFO serial             |      88.70 tok/s |    3.340 s | 238 ms / 1,911 ms | 1.671 s / 3.340 s |       309.08 MiB |                  3/3 |
+| Independent MLX streams |      91.87 tok/s |    3.238 s |   475 ms / 478 ms | 3.238 s / 3.238 s |       344.15 MiB |                  3/3 |
+| Fixed batch of two      |     115.01 tok/s |    2.542 s |   336 ms / 336 ms | 2.542 s / 2.542 s |       524.09 MiB |                  0/3 |
+
+Independent streams raised median aggregate decode by 3.57%, reduced the time
+until both requests completed by 3.07%, and used 35.06 MiB more peak Metal
+allocation than FIFO. Both requests progressed together at about 45.93 tok/s
+each. Every generated token and every compacted KV/GDN tensor matched its own
+FIFO reference exactly in all three attempts, while the two instance states
+remained distinct. The cost is scheduling semantics: the first request's TTFT
+and completion time nearly doubled, while the second request's TTFT fell by
+74.98%.
+
+Fixed batch raised aggregate decode by 29.65%, but both 128-token outputs and
+their states diverged deterministically from the batch-one references. At
+eight generated tokens its outputs still matched while state already differed,
+so the later divergence is not a timing artifact. The present comparison does
+not prove that batch rows mixed; once the output paths diverge, closeness to a
+batch-one terminal state is no longer a valid isolation test. It does prove
+that the existing generic batch-two path fails the current exactness admission
+gate and cannot be promoted as-is.
+
+The retained decision is therefore to keep FIFO as the production default and
+admit independent streams only as the candidate for an explicit two-active-
+request path. The probe establishes feasibility, small aggregate benefit, and
+exact state separation; it does not yet establish production behavior for
+unequal arrivals or lengths, cancellation and rollback, production sampling,
+committed continuation state, or representative 16K residency.
+
+> **Superseded on 2026-08-05:** this was the correct bounded conclusion from
+> the first probe, but batch-one versus batch-two bit identity is not a valid
+> production admission rule. Official MLX-LM shows the same batch-shape
+> dependence. The follow-up in [`../2026-08-05/README.md`](../2026-08-05/README.md)
+> instead tested oracle parity within shape, row invariance, unequal resident
+> state, lifecycle transitions, long contexts, production sampling, and tool
+> continuations. It retains fixed batch of two—not independent streams—as the
+> continuous-batching candidate while FIFO remains the current implementation.
+
 ## Production workflow integration and cross-session state finding
 
 The Native adapter was connected to the existing stateful E.C.H.O. workflow
@@ -459,7 +518,7 @@ boundary semantics or boundary-aware training is investigated; it is not a
 quality-safe production invariant.
 
 It does not establish interactive cold-prefill latency at 32K, broad semantic
-quality equivalence across arbitrary chunk sizes, simultaneous parallel
-generation, complete local-application and OS-signal composition, varied
+quality equivalence across arbitrary chunk sizes, production simultaneous
+parallel generation, complete local-application and OS-signal composition, varied
 structured-tool reliability, Vision, multi-hour/idle power behavior, or the
 planned larger Qwen3.5-122B-A10B tier.

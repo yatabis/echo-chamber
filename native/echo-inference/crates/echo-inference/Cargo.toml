@@ -8,6 +8,7 @@ version.workspace = true
 [features]
 default = []
 moe-performance-diagnostics = []
+parallel-generation-diagnostics = []
 
 [dependencies]
 echo-inference-state.workspace = true

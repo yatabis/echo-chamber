@@ -5,7 +5,7 @@ import type {
 } from '@echo-chamber/core/ports/model';
 
 /** Exact native wire contract required by this adapter. */
-export const NATIVE_INFERENCE_PROTOCOL_VERSION = 7;
+export const NATIVE_INFERENCE_PROTOCOL_VERSION = 9;
 
 /** Sampling controls admitted by the specialized native engine. */
 export interface NativeSamplingConfig {
@@ -20,6 +20,9 @@ export interface NativeSamplingConfig {
 
 /** Relation between one request and the instance's single current state. */
 export type NativeStateTransition = 'initial' | 'continuation' | 'new_session';
+
+/** Whether one Native state lane is checkpointed or process-local. */
+export type NativeStatePersistence = 'durable' | 'ephemeral';
 
 interface NativeWireTextPart {
   type: 'text';
@@ -73,13 +76,22 @@ export interface NativeGenerateCommand {
   sampling: NativeSamplingConfig;
 }
 
-/** Acquires an instance-lifetime owner lock and restores current state if any. */
-export interface NativeOpenStateCommand {
-  type: 'open_state';
-  request_id: string;
-  instance_id: string;
-  snapshot_root: string;
-}
+/** Registers one independently mutable Native state lane. */
+export type NativeOpenStateCommand =
+  | {
+      type: 'open_state';
+      request_id: string;
+      instance_id: string;
+      persistence: 'durable';
+      snapshot_root: string;
+    }
+  | {
+      type: 'open_state';
+      request_id: string;
+      instance_id: string;
+      persistence: 'ephemeral';
+      snapshot_root?: never;
+    };
 
 /** Atomically replaces the opened instance's current state payload. */
 export interface NativeSnapshotCommand {
@@ -102,6 +114,8 @@ export interface NativeRuntimeMetrics {
   cached_prefix_tokens: number;
   input_tokens_processed: number;
   generated_tokens: number;
+  maximum_decode_batch_size: number;
+  decode_batch_membership_changes: number;
   model_step_count: number;
   input_model_execution_count: number;
   input_execution_nanos: number;
@@ -165,8 +179,9 @@ export interface NativeStateOpenedEvent {
   event: 'state_opened';
   request_id: string;
   instance_id: string;
+  persistence: NativeStatePersistence;
   restored: boolean;
-  current_path: string;
+  current_path?: string;
 }
 
 /** Successful atomic replacement of current.safetensors. */
@@ -187,6 +202,8 @@ export type NativeWireEvent =
       eos_token_id: number;
       chat_template_sha256: string;
       max_outstanding_requests: number;
+      max_active_batch_size: number;
+      max_late_join_batch_size: number;
     }
   | {
       event: 'queued';
@@ -324,7 +341,11 @@ export function toModelOutputItem(item: NativeWireOutputItem): ModelOutputItem {
 function validateEventEnvelope(
   event: { event: NativeWireEvent['event'] } & Record<string, unknown>
 ): void {
-  if (event.event === 'ready' || event.event === 'shutdown') {
+  if (event.event === 'ready') {
+    validateReadyEvent(event);
+    return;
+  }
+  if (event.event === 'shutdown') {
     return;
   }
   if (event.event === 'failed') {
@@ -345,25 +366,80 @@ function validateEventEnvelope(
   }
 }
 
+function validateReadyEvent(event: Record<string, unknown>): void {
+  requireNonnegativeSafeInteger(event, 'protocol_version');
+  requireNonnegativeSafeInteger(event, 'eos_token_id');
+  requireString(event, 'chat_template_sha256');
+  if (!isRecord(event.engine)) {
+    throw new Error('native ready event field engine must be an object');
+  }
+  const maxOutstandingRequests = requirePositiveSafeInteger(
+    event,
+    'max_outstanding_requests'
+  );
+  const maxActiveBatchSize = requirePositiveSafeInteger(
+    event,
+    'max_active_batch_size'
+  );
+  const maxLateJoinBatchSize = requirePositiveSafeInteger(
+    event,
+    'max_late_join_batch_size'
+  );
+  if (maxActiveBatchSize > maxOutstandingRequests) {
+    throw new Error(
+      'native ready event max_active_batch_size exceeds max_outstanding_requests'
+    );
+  }
+  if (maxLateJoinBatchSize > maxActiveBatchSize) {
+    throw new Error(
+      'native ready event max_late_join_batch_size exceeds max_active_batch_size'
+    );
+  }
+}
+
 function validateFailedEvent(event: Record<string, unknown>): void {
   requireString(event, 'phase');
   requireString(event, 'error');
 }
 
 function validateCompletedEvent(event: Record<string, unknown>): void {
-  if (!isRecord(event.response) || !Array.isArray(event.output)) {
+  if (
+    !isRecord(event.response) ||
+    !isRecord(event.response.metrics) ||
+    !Array.isArray(event.output)
+  ) {
     throw new Error('native completed event is missing response/output');
   }
   requireString(event.response, 'instance_id');
   requireNonnegativeSafeInteger(event.response, 'state_sequence_length');
+  requirePositiveSafeInteger(
+    event.response.metrics,
+    'maximum_decode_batch_size'
+  );
+  requireNonnegativeSafeInteger(
+    event.response.metrics,
+    'decode_batch_membership_changes'
+  );
 }
 
 function validateStateOpenedEvent(event: Record<string, unknown>): void {
   requireString(event, 'instance_id');
+  const persistence = requireString(event, 'persistence');
+  if (persistence !== 'durable' && persistence !== 'ephemeral') {
+    throw new Error(
+      'native state_opened event field persistence must be durable or ephemeral'
+    );
+  }
   if (typeof event.restored !== 'boolean') {
     throw new Error('native state_opened event field restored must be boolean');
   }
-  requireString(event, 'current_path');
+  if (persistence === 'durable') {
+    requireString(event, 'current_path');
+  } else if (event.restored || event.current_path !== undefined) {
+    throw new Error(
+      'native ephemeral state_opened event cannot restore or publish current_path'
+    );
+  }
 }
 
 function validateSnapshotPublishedEvent(event: Record<string, unknown>): void {
@@ -388,6 +464,19 @@ function requireNonnegativeSafeInteger(
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
     throw new Error(
       `native inference event field ${key} must be a nonnegative safe integer`
+    );
+  }
+  return value;
+}
+
+function requirePositiveSafeInteger(
+  record: Record<string, unknown>,
+  key: string
+): number {
+  const value = requireNonnegativeSafeInteger(record, key);
+  if (value === 0) {
+    throw new Error(
+      `native inference event field ${key} must be a positive safe integer`
     );
   }
   return value;

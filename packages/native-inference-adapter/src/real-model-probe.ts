@@ -81,7 +81,10 @@ const model = new NativeInferenceModel({
 const stateRoot = await mkdtemp(join(tmpdir(), 'echo-native-real-probe-'));
 
 try {
-  await model.openState(stateRoot);
+  await model.openState({
+    persistence: 'durable',
+    snapshotRoot: stateRoot,
+  });
   const firstStarted = performance.now();
   const first = await model.generate({
     input: [

@@ -16,6 +16,16 @@ type InstanceModelOptions = Omit<
   'client' | 'instanceId'
 >;
 
+/** The three independently committed model-state lanes owned by one Echo. */
+export type NativeInferenceModule = 'main' | 'memory' | 'emotion';
+
+/** Stable Native model objects for one Echo thinking session. */
+export interface NativeInferenceModules {
+  main: NativeInferenceModel;
+  memory: NativeInferenceModel;
+  emotion: NativeInferenceModel;
+}
+
 /** Configuration for one local process-wide Native inference lifecycle. */
 export interface LocalNativeInferenceRuntimeOptions {
   /** Executable that provides the Native protocol over stdio. */
@@ -35,6 +45,13 @@ export interface LocalNativeInferenceRuntimeOptions {
   environment?: NodeJS.ProcessEnv;
   /** Optional adapter controls and event sinks for each instance. */
   modelOptions?: Partial<Record<EchoInstanceId, InstanceModelOptions>>;
+  /** Optional per-module overrides for the three Native state lanes. */
+  moduleOptions?: Partial<
+    Record<
+      EchoInstanceId,
+      Partial<Record<NativeInferenceModule, InstanceModelOptions>>
+    >
+  >;
 }
 
 /**
@@ -49,7 +66,8 @@ export interface LocalNativeInferenceRuntimeDependencies {
 
 /** Work performed while one E.C.H.O. instance exclusively owns its model. */
 export type NativeThinkingSession<T> = (
-  model: NativeInferenceModel
+  main: NativeInferenceModel,
+  modules: NativeInferenceModules
 ) => Promise<T>;
 
 /**
@@ -62,7 +80,7 @@ export type NativeThinkingSession<T> = (
  * currently active thinking session.
  */
 export class LocalNativeInferenceRuntime {
-  private readonly models = new Map<EchoInstanceId, NativeInferenceModel>();
+  private readonly modules = new Map<EchoInstanceId, NativeInferenceModules>();
   private readonly activeSessions = new Map<
     EchoInstanceId,
     Deferred<undefined>
@@ -74,17 +92,29 @@ export class LocalNativeInferenceRuntime {
   private constructor(
     private readonly client: NativeInferenceClient,
     private readonly snapshotDirectory: string,
-    modelOptions: LocalNativeInferenceRuntimeOptions['modelOptions']
+    modelOptions: LocalNativeInferenceRuntimeOptions['modelOptions'],
+    moduleOptions: LocalNativeInferenceRuntimeOptions['moduleOptions']
   ) {
     for (const instanceId of ECHO_INSTANCE_IDS) {
-      this.models.set(
-        instanceId,
-        new NativeInferenceModel({
+      const perModule = moduleOptions?.[instanceId];
+      this.modules.set(instanceId, {
+        main: new NativeInferenceModel({
           ...modelOptions?.[instanceId],
+          ...perModule?.main,
           client,
           instanceId,
-        })
-      );
+        }),
+        memory: new NativeInferenceModel({
+          ...perModule?.memory,
+          client,
+          instanceId: moduleStateId(instanceId, 'memory'),
+        }),
+        emotion: new NativeInferenceModel({
+          ...perModule?.emotion,
+          client,
+          instanceId: moduleStateId(instanceId, 'emotion'),
+        }),
+      });
     }
   }
 
@@ -117,7 +147,8 @@ export class LocalNativeInferenceRuntime {
       const runtime = new LocalNativeInferenceRuntime(
         client,
         snapshotDirectory,
-        options.modelOptions
+        options.modelOptions,
+        options.moduleOptions
       );
       await client.ready();
       await runtime.openStateOwners();
@@ -138,8 +169,11 @@ export class LocalNativeInferenceRuntime {
   }
 
   /** Returns the adapter-owned lifecycle state for one existence. */
-  state(instanceId: EchoInstanceId): NativeInferenceModelState {
-    return this.requireModel(instanceId).state();
+  state(
+    instanceId: EchoInstanceId,
+    module: NativeInferenceModule = 'main'
+  ): NativeInferenceModelState {
+    return this.requireModules(instanceId)[module].state();
   }
 
   /**
@@ -162,10 +196,10 @@ export class LocalNativeInferenceRuntime {
     const completion = deferred<undefined>();
     this.activeSessions.set(instanceId, completion);
     this.executingSessions.add(instanceId);
-    const model = this.requireModel(instanceId);
+    const modules = this.requireModules(instanceId);
     let outcome: OperationOutcome<T>;
     try {
-      outcome = { ok: true, value: await operation(model) };
+      outcome = { ok: true, value: await operation(modules.main, modules) };
     } catch (error) {
       outcome = { ok: false, error };
     }
@@ -216,15 +250,26 @@ export class LocalNativeInferenceRuntime {
       const snapshotRoot = this.snapshotRoot(instanceId);
       // Opening is deliberately sequential so one failed authority check can
       // close the owner without racing another in-flight lifecycle request.
-      const model = this.requireModel(instanceId);
+      const modules = this.requireModules(instanceId);
       // See the serialization reason above.
       // eslint-disable-next-line no-await-in-loop
-      await model.openState(snapshotRoot);
+      await modules.main.openState({
+        persistence: 'durable',
+        snapshotRoot,
+      });
+      // Auxiliary states deliberately have no durable authority: they may
+      // retain their own KV/GDN prefix and retry independently, but cannot
+      // replace the Echo's main current.safetensors.
+      // eslint-disable-next-line no-await-in-loop
+      await modules.memory.openState({ persistence: 'ephemeral' });
+      // See the serialization reason above.
+      // eslint-disable-next-line no-await-in-loop
+      await modules.emotion.openState({ persistence: 'ephemeral' });
     }
   }
 
   private async checkpointIfDirty(instanceId: EchoInstanceId): Promise<void> {
-    const model = this.requireModel(instanceId);
+    const model = this.requireModules(instanceId).main;
     if (!model.needsSnapshot()) {
       return;
     }
@@ -238,13 +283,15 @@ export class LocalNativeInferenceRuntime {
       this.executingSessions.has(instanceId)
     );
     await Promise.all(
-      cancellableInstanceIds.map(async (instanceId) => {
-        try {
-          await this.requireModel(instanceId).cancelActive();
-        } catch (error) {
-          failures.push(toError(error));
-        }
-      })
+      cancellableInstanceIds.flatMap((instanceId) =>
+        moduleModels(this.requireModules(instanceId)).map(async (model) => {
+          try {
+            await model.cancelActive();
+          } catch (error) {
+            failures.push(toError(error));
+          }
+        })
+      )
     );
     await Promise.all(
       activeInstanceIds.map(async (instanceId) => {
@@ -287,12 +334,12 @@ export class LocalNativeInferenceRuntime {
     }
   }
 
-  private requireModel(instanceId: EchoInstanceId): NativeInferenceModel {
-    const model = this.models.get(instanceId);
-    if (model === undefined) {
-      throw new Error(`native model is missing for instance ${instanceId}`);
+  private requireModules(instanceId: EchoInstanceId): NativeInferenceModules {
+    const modules = this.modules.get(instanceId);
+    if (modules === undefined) {
+      throw new Error(`native modules are missing for instance ${instanceId}`);
     }
-    return model;
+    return modules;
   }
 
   private snapshotRoot(instanceId: EchoInstanceId): string {
@@ -336,4 +383,17 @@ function requireNonEmpty(value: string, label: string): string {
 
 function toError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
+}
+
+function moduleModels(
+  modules: NativeInferenceModules
+): readonly NativeInferenceModel[] {
+  return [modules.main, modules.memory, modules.emotion];
+}
+
+function moduleStateId(
+  instanceId: EchoInstanceId,
+  module: Exclude<NativeInferenceModule, 'main'>
+): string {
+  return `${instanceId}.${module}`;
 }

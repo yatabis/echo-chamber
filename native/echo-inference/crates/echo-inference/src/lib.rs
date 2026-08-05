@@ -1,6 +1,10 @@
 //! Qwen3.5-specific engine bootstrap and checkpoint validation.
 
 mod attention;
+#[cfg(feature = "parallel-generation-diagnostics")]
+mod batch_quality;
+#[cfg(feature = "parallel-generation-diagnostics")]
+mod batch_scaling;
 mod chat;
 mod decoder;
 mod full_model;
@@ -11,6 +15,8 @@ mod local_server;
 mod model_state;
 #[cfg(feature = "moe-performance-diagnostics")]
 mod moe_performance;
+#[cfg(feature = "parallel-generation-diagnostics")]
+mod parallel_generation;
 mod runtime;
 mod sampling;
 mod snapshot;
@@ -30,6 +36,20 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 pub use attention::{AttentionLayerParity, run_attention_layer_parity};
+#[cfg(feature = "parallel-generation-diagnostics")]
+pub use batch_quality::{
+    ProductionBatchLengthBoundaryObservation, ProductionBatchMode,
+    ProductionBatchPerformanceAttempt, ProductionBatchPerformanceSummary,
+    ProductionBatchQualityDiagnostic, ProductionBatchWorkflowCase, ProductionBatchWorkflowTurn,
+    ProductionSamplingIsolationObservation, run_production_batch_quality_diagnostic,
+};
+#[cfg(feature = "parallel-generation-diagnostics")]
+pub use batch_scaling::{
+    BatchWidthMemoryObservation, BatchWidthScalingAttempt, BatchWidthScalingDiagnostic,
+    BatchWidthScalingSummary, BatchWidthShrinkObservation, BatchWidthShrinkStep,
+    MaximumBatchIsolationObservation, ProductionBatchWidthScalingDiagnostic,
+    run_batch_width_scaling_diagnostic, run_production_batch_width_scaling_diagnostic,
+};
 pub use chat::{
     ChatError, ChatTemplateCaseParity, ChatTemplateParity, EchoChatPrompt, EchoContentPart,
     EchoInputItem, EchoMessage, EchoMessageContent, EchoMessageRole, EchoToolCall,
@@ -53,11 +73,17 @@ pub use local_server::{LocalServerConfig, LocalServerError, serve_local_stdio};
 pub use model_state::{MlxInferenceState, NewSessionGdnPolicy};
 #[cfg(feature = "moe-performance-diagnostics")]
 pub use moe_performance::{MoePerformanceDiagnostic, run_moe_performance_diagnostic};
+#[cfg(feature = "parallel-generation-diagnostics")]
+pub use parallel_generation::{
+    ParallelGenerationDiagnostic, ResidentBatchContextDiagnostic, ResidentBatchOracleParity,
+    run_parallel_generation_diagnostic, run_resident_batch_context_diagnostic,
+    run_resident_batch_oracle_parity,
+};
 pub use runtime::{
     GenerationDirective, GenerationFinishReason, GenerationObserver, InferenceRequest,
     InferenceResponse, OpenedState, RequestState, ResidentEngine, ResidentEngineConfig,
     ResidentEngineInfo, RuntimeError, RuntimeMetrics, ScheduleTicket, ScheduledInferenceOutcome,
-    SchedulerError, SingleGenerationScheduler,
+    SchedulerError, SingleGenerationScheduler, StatePersistence,
 };
 pub use sampling::{SamplingConfig, SamplingParity, SamplingParityCase, run_sampling_parity};
 pub use snapshot::{

@@ -12,6 +12,12 @@ use echo_inference::{
     run_full_model_parity, run_gdn_layer_parity, run_hybrid_block_parity, run_live_state_parity,
     run_new_session_parity, run_resident_runtime_parity, run_sampling_parity, serve_local_stdio,
 };
+#[cfg(feature = "parallel-generation-diagnostics")]
+use echo_inference::{
+    run_batch_width_scaling_diagnostic, run_parallel_generation_diagnostic,
+    run_production_batch_quality_diagnostic, run_production_batch_width_scaling_diagnostic,
+    run_resident_batch_context_diagnostic, run_resident_batch_oracle_parity,
+};
 use echo_mlx::SafeTensors;
 
 fn main() -> ExitCode {
@@ -24,6 +30,7 @@ fn main() -> ExitCode {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn run() -> Result<(), Box<dyn Error>> {
     let mut arguments = env::args().skip(1);
     let command = arguments.next().ok_or("missing command")?;
@@ -114,15 +121,283 @@ fn run() -> Result<(), Box<dyn Error>> {
         }
         #[cfg(feature = "moe-performance-diagnostics")]
         "run-moe-performance-diagnostic" => run_moe_performance_command(&mut arguments)?,
-        "serve-stdio" => {
-            serve_stdio_command(&mut arguments)?;
+        #[cfg(feature = "parallel-generation-diagnostics")]
+        "run-parallel-generation-diagnostic" => run_parallel_generation_command(&mut arguments)?,
+        #[cfg(feature = "parallel-generation-diagnostics")]
+        "run-resident-batch-oracle-parity" => {
+            run_resident_batch_oracle_command(&mut arguments)?;
         }
+        #[cfg(feature = "parallel-generation-diagnostics")]
+        "run-resident-batch-context-diagnostic" => {
+            run_resident_batch_context_command(&mut arguments)?;
+        }
+        #[cfg(feature = "parallel-generation-diagnostics")]
+        "run-production-batch-quality-diagnostic" => {
+            run_production_batch_quality_command(&mut arguments)?;
+        }
+        #[cfg(feature = "parallel-generation-diagnostics")]
+        "run-batch-width-scaling-diagnostic" => {
+            run_batch_width_scaling_command(&mut arguments)?;
+        }
+        #[cfg(feature = "parallel-generation-diagnostics")]
+        "run-production-batch-width-scaling-diagnostic" => {
+            run_production_batch_width_scaling_command(&mut arguments)?;
+        }
+        "serve-stdio" => serve_stdio_command(&mut arguments)?,
         "run-resident-runtime-parity" => run_resident_runtime_command(&mut arguments)?,
         "run-new-session-parity" => run_new_session_command(&mut arguments)?,
         "run-durable-state-parity"
         | "produce-durable-state-parity"
         | "restore-durable-state-parity" => run_durable_command(&command, &mut arguments)?,
         _ => return Err(format!("unknown command: {command}").into()),
+    }
+    Ok(())
+}
+
+#[cfg(feature = "parallel-generation-diagnostics")]
+fn run_production_batch_width_scaling_command(
+    arguments: &mut impl Iterator<Item = String>,
+) -> Result<(), Box<dyn Error>> {
+    let model_directory = arguments.next().ok_or("missing model directory")?;
+    let max_batch_size = arguments
+        .next()
+        .map(|value| value.parse::<usize>())
+        .transpose()?
+        .unwrap_or(6);
+    let warmup_rounds = arguments
+        .next()
+        .map(|value| value.parse::<usize>())
+        .transpose()?
+        .unwrap_or(1);
+    let measured_rounds = arguments
+        .next()
+        .map(|value| value.parse::<usize>())
+        .transpose()?
+        .unwrap_or(2);
+    let generated_tokens = arguments
+        .next()
+        .map(|value| value.parse::<usize>())
+        .transpose()?
+        .unwrap_or(64);
+    let output_path = arguments.next();
+    reject_extra_arguments(arguments)?;
+    let result = run_production_batch_width_scaling_diagnostic(
+        Path::new(&model_directory),
+        max_batch_size,
+        warmup_rounds,
+        measured_rounds,
+        generated_tokens,
+    )?;
+    let serialized = serde_json::to_string_pretty(&result)?;
+    if let Some(output_path) = output_path {
+        std::fs::write(&output_path, serialized.as_bytes())?;
+        println!("wrote {output_path}");
+    } else {
+        println!("{serialized}");
+    }
+    if !result.all_state_checks_passed {
+        return Err("production batch width state or isolation checks failed".into());
+    }
+    Ok(())
+}
+
+#[cfg(feature = "parallel-generation-diagnostics")]
+fn run_batch_width_scaling_command(
+    arguments: &mut impl Iterator<Item = String>,
+) -> Result<(), Box<dyn Error>> {
+    let model_directory = arguments.next().ok_or("missing model directory")?;
+    let max_batch_size = arguments
+        .next()
+        .map(|value| value.parse::<usize>())
+        .transpose()?
+        .unwrap_or(6);
+    let warmup_rounds = arguments
+        .next()
+        .map(|value| value.parse::<usize>())
+        .transpose()?
+        .unwrap_or(1);
+    let measured_rounds = arguments
+        .next()
+        .map(|value| value.parse::<usize>())
+        .transpose()?
+        .unwrap_or(2);
+    let generated_tokens = arguments
+        .next()
+        .map(|value| value.parse::<usize>())
+        .transpose()?
+        .unwrap_or(64);
+    let output_path = arguments.next();
+    reject_extra_arguments(arguments)?;
+    let result = run_batch_width_scaling_diagnostic(
+        Path::new(&model_directory),
+        max_batch_size,
+        warmup_rounds,
+        measured_rounds,
+        generated_tokens,
+    )?;
+    let serialized = serde_json::to_string_pretty(&result)?;
+    if let Some(output_path) = output_path {
+        std::fs::write(&output_path, serialized.as_bytes())?;
+        println!("wrote {output_path}");
+    } else {
+        println!("{serialized}");
+    }
+    if !result.all_state_checks_passed {
+        return Err("batch width diagnostic state or isolation checks failed".into());
+    }
+    Ok(())
+}
+
+#[cfg(feature = "parallel-generation-diagnostics")]
+fn run_production_batch_quality_command(
+    arguments: &mut impl Iterator<Item = String>,
+) -> Result<(), Box<dyn Error>> {
+    let model_directory = arguments.next().ok_or("missing model directory")?;
+    let warmup_rounds = arguments
+        .next()
+        .map(|value| value.parse::<usize>())
+        .transpose()?
+        .unwrap_or(1);
+    let measured_rounds = arguments
+        .next()
+        .map(|value| value.parse::<usize>())
+        .transpose()?
+        .unwrap_or(2);
+    let generated_tokens = arguments
+        .next()
+        .map(|value| value.parse::<usize>())
+        .transpose()?
+        .unwrap_or(64);
+    let context_tokens = arguments
+        .next()
+        .map(|value| value.parse::<usize>())
+        .transpose()?
+        .unwrap_or(4_096);
+    let workflow_cases = arguments
+        .next()
+        .map(|value| value.parse::<usize>())
+        .transpose()?
+        .unwrap_or(3);
+    let output_path = arguments.next();
+    reject_extra_arguments(arguments)?;
+    let result = run_production_batch_quality_diagnostic(
+        Path::new(&model_directory),
+        warmup_rounds,
+        measured_rounds,
+        generated_tokens,
+        context_tokens,
+        workflow_cases,
+    )?;
+    let serialized = serde_json::to_string_pretty(&result)?;
+    if let Some(output_path) = output_path {
+        std::fs::write(&output_path, serialized.as_bytes())?;
+        println!("wrote {output_path}");
+    } else {
+        println!("{serialized}");
+    }
+    if !result.adoption_gate_passed {
+        return Err("production batch quality diagnostic did not pass every adoption gate".into());
+    }
+    Ok(())
+}
+
+#[cfg(feature = "parallel-generation-diagnostics")]
+fn run_resident_batch_context_command(
+    arguments: &mut impl Iterator<Item = String>,
+) -> Result<(), Box<dyn Error>> {
+    let model_directory = arguments.next().ok_or("missing model directory")?;
+    let warmup_rounds = arguments
+        .next()
+        .map(|value| value.parse::<usize>())
+        .transpose()?
+        .unwrap_or(1);
+    let measured_rounds = arguments
+        .next()
+        .map(|value| value.parse::<usize>())
+        .transpose()?
+        .unwrap_or(2);
+    let generated_tokens = arguments
+        .next()
+        .map(|value| value.parse::<usize>())
+        .transpose()?
+        .unwrap_or(64);
+    let output_path = arguments.next();
+    reject_extra_arguments(arguments)?;
+    let result = run_resident_batch_context_diagnostic(
+        Path::new(&model_directory),
+        warmup_rounds,
+        measured_rounds,
+        generated_tokens,
+    )?;
+    let serialized = serde_json::to_string_pretty(&result)?;
+    if let Some(output_path) = output_path {
+        std::fs::write(&output_path, serialized.as_bytes())?;
+        println!("wrote {output_path}");
+    } else {
+        println!("{serialized}");
+    }
+    if result
+        .attempts
+        .iter()
+        .any(|attempt| !attempt.state_lengths_exact)
+    {
+        return Err("resident context diagnostic state accounting failed".into());
+    }
+    Ok(())
+}
+
+#[cfg(feature = "parallel-generation-diagnostics")]
+fn run_resident_batch_oracle_command(
+    arguments: &mut impl Iterator<Item = String>,
+) -> Result<(), Box<dyn Error>> {
+    let model_directory = arguments.next().ok_or("missing model directory")?;
+    let oracle_directory = arguments.next().ok_or("missing oracle directory")?;
+    reject_extra_arguments(arguments)?;
+    let result = run_resident_batch_oracle_parity(
+        Path::new(&model_directory),
+        Path::new(&oracle_directory),
+    )?;
+    println!("{}", serde_json::to_string_pretty(&result)?);
+    if !result.exact {
+        return Err("Native resident batching differs from the official MLX-LM oracle".into());
+    }
+    Ok(())
+}
+
+#[cfg(feature = "parallel-generation-diagnostics")]
+fn run_parallel_generation_command(
+    arguments: &mut impl Iterator<Item = String>,
+) -> Result<(), Box<dyn Error>> {
+    let model_directory = arguments.next().ok_or("missing model directory")?;
+    let warmup_rounds = arguments
+        .next()
+        .map(|value| value.parse::<usize>())
+        .transpose()?
+        .unwrap_or(1);
+    let measured_rounds = arguments
+        .next()
+        .map(|value| value.parse::<usize>())
+        .transpose()?
+        .unwrap_or(3);
+    let max_new_tokens = arguments
+        .next()
+        .map(|value| value.parse::<usize>())
+        .transpose()?
+        .unwrap_or(128);
+    let output_path = arguments.next();
+    reject_extra_arguments(arguments)?;
+    let result = run_parallel_generation_diagnostic(
+        Path::new(&model_directory),
+        warmup_rounds,
+        measured_rounds,
+        max_new_tokens,
+    )?;
+    let serialized = serde_json::to_string_pretty(&result)?;
+    if let Some(output_path) = output_path {
+        std::fs::write(&output_path, serialized.as_bytes())?;
+        println!("wrote {output_path}");
+    } else {
+        println!("{serialized}");
     }
     Ok(())
 }
@@ -192,10 +467,17 @@ fn serve_stdio_command(arguments: &mut impl Iterator<Item = String>) -> Result<(
     let prefill_chunk_at_or_above_tokens =
         chunk_at_or_above_override.unwrap_or(engine_defaults.prefill_chunk_at_or_above_tokens);
     let new_session_gdn_policy = new_session_gdn_policy_environment()?;
+    let max_active_batch_size = optional_positive_environment("ECHO_NATIVE_MAX_ACTIVE_BATCH_SIZE")?
+        .unwrap_or(LocalServerConfig::default().max_active_batch_size);
+    let max_late_join_batch_size =
+        optional_positive_environment("ECHO_NATIVE_MAX_LATE_JOIN_BATCH_SIZE")?
+            .unwrap_or(LocalServerConfig::default().max_late_join_batch_size);
     serve_local_stdio(
         Path::new(&model_directory),
         LocalServerConfig {
             max_outstanding_requests,
+            max_active_batch_size,
+            max_late_join_batch_size,
             engine: ResidentEngineConfig {
                 prefill_chunk_size_tokens,
                 prefill_chunk_at_or_above_tokens,

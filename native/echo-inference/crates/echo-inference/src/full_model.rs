@@ -130,6 +130,7 @@ enum RuntimeLayerState {
 
 pub(crate) struct RuntimeInferenceState {
     layers: Vec<RuntimeLayerState>,
+    left_padding: Option<Vec<usize>>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -181,6 +182,7 @@ pub struct FullModelParity {
     pub generation_state_max_absolute_difference: f32,
     pub generated_tokens_max_absolute_difference: f32,
     pub generated_tokens: Vec<u32>,
+    pub generated_token_rows: Vec<Vec<u32>>,
     pub differences: BTreeMap<String, f32>,
     pub exact: bool,
 }
@@ -1088,8 +1090,8 @@ pub fn run_full_model_parity(
     let mut differences = BTreeMap::new();
 
     let prefix_ids = require_tensor(&fixture, "prefix.input_ids")?;
-    validate_token_input(prefix_ids, manifest.prefix_length, "prefix.input_ids")?;
-    let batch_size = prefix_ids.shape()[0];
+    let batch_size =
+        validate_batched_token_input(prefix_ids, manifest.prefix_length, "prefix.input_ids")?;
     let empty_state = MlxInferenceState::empty(&gpu, batch_size, &plan)?;
     let prefix = execute_full_model(&gpu, prefix_ids, &empty_state, &weights, &plan)?;
     evaluate_execution(&gpu, &prefix)?;
@@ -1097,11 +1099,16 @@ pub fn run_full_model_parity(
         compare_phase(&gpu, &fixture, "prefix", &prefix, &plan, &mut differences)?;
 
     let continuation_ids = require_tensor(&fixture, "continuation.input_ids")?;
-    validate_token_input(
+    let continuation_batch_size = validate_batched_token_input(
         continuation_ids,
         manifest.continuation_length,
         "continuation.input_ids",
     )?;
+    if continuation_batch_size != batch_size {
+        return Err(EngineError::Unsupported(format!(
+            "full-model continuation batch size differs from prefix: {continuation_batch_size} != {batch_size}"
+        )));
+    }
     validate_array(
         continuation_ids,
         &[batch_size, manifest.continuation_length],
@@ -1122,12 +1129,14 @@ pub fn run_full_model_parity(
     let mut current_logits = continuation.logits;
     let mut current_state = continuation.state;
     let mut generated_arrays = Vec::with_capacity(manifest.generation_steps);
-    let mut generated_tokens = Vec::with_capacity(manifest.generation_steps);
+    let mut generated_token_rows = vec![Vec::with_capacity(manifest.generation_steps); batch_size];
     let mut generation_logits_max_absolute_difference = 0.0_f32;
     for step in 0..manifest.generation_steps {
         let token = greedy_token(&gpu, &current_logits, batch_size, &plan)?;
-        let scalar = gpu.reshape(&token, &[]).map_err(EngineError::Mlx)?;
-        generated_tokens.push(scalar.item_u32().map_err(EngineError::Mlx)?);
+        let values = batched_token_values(&gpu, &token, batch_size)?;
+        for (row, value) in generated_token_rows.iter_mut().zip(values) {
+            row.push(value);
+        }
         generated_arrays.push(token.try_clone().map_err(EngineError::Mlx)?);
 
         let execution = execute_full_model(&gpu, &token, &current_state, &weights, &plan)?;
@@ -1168,6 +1177,9 @@ pub fn run_full_model_parity(
         &mut differences,
     )?;
 
+    let generated_tokens = generated_token_rows.first().cloned().ok_or_else(|| {
+        EngineError::Unsupported("full-model generation produced no batch rows".into())
+    })?;
     let exact = differences.values().all(|difference| *difference == 0.0)
         && generated_tokens == manifest.expected_generated_tokens;
     Ok(FullModelParity {
@@ -1194,6 +1206,7 @@ pub fn run_full_model_parity(
         generation_state_max_absolute_difference,
         generated_tokens_max_absolute_difference,
         generated_tokens,
+        generated_token_rows,
         differences,
         exact,
     })
@@ -1906,14 +1919,24 @@ pub(crate) fn execute_runtime_model(
         )));
     }
 
+    let RuntimeInferenceState {
+        layers: initial_layers,
+        left_padding,
+    } = initial_state;
+    let (rope_offsets, attention_mask) = if let Some(padding) = left_padding.as_deref() {
+        let offset = runtime_attention_offset(&initial_layers, plan)?;
+        let metadata =
+            prepare_left_padded_attention_metadata(batch_size, sequence_length, offset, padding)?;
+        (Some(metadata.0), Some(metadata.1))
+    } else {
+        (None, None)
+    };
+
     let embedding = execute_bound_quantized_embedding(gpu, input_ids, &weights.embedding, plan)?;
     let mut hidden = embedding.try_clone().map_err(EngineError::Mlx)?;
     let mut states = Vec::with_capacity(plan.layer_count);
-    for (layer_index, (initial_layer_state, layer_weights)) in initial_state
-        .layers
-        .into_iter()
-        .zip(&weights.layers)
-        .enumerate()
+    for (layer_index, (initial_layer_state, layer_weights)) in
+        initial_layers.into_iter().zip(&weights.layers).enumerate()
     {
         let full_attention = (layer_index + 1).is_multiple_of(plan.full_attention_interval);
         match (full_attention, initial_layer_state) {
@@ -1934,6 +1957,8 @@ pub(crate) fn execute_runtime_model(
                     plan,
                     offset,
                     sequence_length > 1,
+                    rope_offsets.as_ref(),
+                    attention_mask.as_ref(),
                     moe_kernel,
                 )?;
                 hidden = execution.output;
@@ -1994,7 +2019,10 @@ pub(crate) fn execute_runtime_model(
 
     Ok(RuntimeModelExecution {
         logits,
-        state: RuntimeInferenceState { layers: states },
+        state: RuntimeInferenceState {
+            layers: states,
+            left_padding,
+        },
     })
 }
 
@@ -2084,7 +2112,267 @@ pub(crate) fn prepare_runtime_state(
             }
         }
     }
-    Ok(RuntimeInferenceState { layers })
+    Ok(RuntimeInferenceState {
+        layers,
+        left_padding: None,
+    })
+}
+
+/// Merges independently owned single-instance caches into one runtime batch.
+///
+/// Full-attention KV rows are left-padded so their newest retained positions
+/// line up at one physical append offset. GDN states are concatenated without
+/// padding because they do not retain an absolute token axis.
+#[allow(clippy::too_many_lines)]
+pub(crate) fn prepare_merged_runtime_state(
+    gpu: &Gpu,
+    states: &[&MlxInferenceState],
+    additional_tokens: usize,
+    plan: &ModelPlan,
+) -> Result<RuntimeInferenceState, EngineError> {
+    if states.is_empty() {
+        return Err(EngineError::Unsupported(
+            "runtime state merge requires at least one instance".into(),
+        ));
+    }
+    for state in states {
+        state.validate(plan, 1)?;
+    }
+    let lengths = states
+        .iter()
+        .map(|state| state.sequence_length())
+        .collect::<Result<Vec<_>, _>>()?;
+    let maximum_length = lengths.iter().copied().max().ok_or_else(|| {
+        EngineError::Unsupported("runtime state merge observed no sequence lengths".into())
+    })?;
+    let left_padding = lengths
+        .iter()
+        .map(|length| maximum_length - length)
+        .collect::<Vec<_>>();
+    let required = maximum_length
+        .checked_add(additional_tokens)
+        .ok_or_else(|| EngineError::Unsupported("merged runtime KV capacity overflow".into()))?;
+    let capacity = round_kv_capacity(required)?;
+    let mut layers = Vec::with_capacity(plan.layer_count);
+
+    for layer_index in 0..plan.layer_count {
+        let full_attention = (layer_index + 1).is_multiple_of(plan.full_attention_interval);
+        if full_attention {
+            let mut key_rows = Vec::with_capacity(states.len());
+            let mut value_rows = Vec::with_capacity(states.len());
+            for ((state, length), padding) in states.iter().zip(&lengths).zip(&left_padding) {
+                let LayerState::Attention { keys, values } = &state.layers()[layer_index] else {
+                    return Err(EngineError::Unsupported(format!(
+                        "layer {layer_index} requires attention state while merging"
+                    )));
+                };
+                let shape = [
+                    1,
+                    plan.key_value_head_count,
+                    capacity,
+                    plan.attention_head_dimension,
+                ];
+                let empty_keys = gpu
+                    .zeros(&shape, DType::BFloat16)
+                    .map_err(EngineError::Mlx)?;
+                let empty_values = gpu
+                    .zeros(&shape, DType::BFloat16)
+                    .map_err(EngineError::Mlx)?;
+                if *length == 0 {
+                    key_rows.push(empty_keys);
+                    value_rows.push(empty_values);
+                    continue;
+                }
+                let start = [
+                    0,
+                    0,
+                    dimension_i32(*padding, "merged runtime KV left padding")?,
+                    0,
+                ];
+                let stop = [
+                    1,
+                    dimension_i32(plan.key_value_head_count, "merged runtime KV heads")?,
+                    dimension_i32(
+                        padding.checked_add(*length).ok_or_else(|| {
+                            EngineError::Unsupported(
+                                "merged runtime padded KV length overflow".into(),
+                            )
+                        })?,
+                        "merged runtime KV row stop",
+                    )?,
+                    dimension_i32(
+                        plan.attention_head_dimension,
+                        "merged runtime KV head dimension",
+                    )?,
+                ];
+                key_rows.push(
+                    gpu.slice_update(&empty_keys, keys, &start, &stop, &[1, 1, 1, 1])
+                        .map_err(EngineError::Mlx)?,
+                );
+                value_rows.push(
+                    gpu.slice_update(&empty_values, values, &start, &stop, &[1, 1, 1, 1])
+                        .map_err(EngineError::Mlx)?,
+                );
+            }
+            let key_references = key_rows.iter().collect::<Vec<_>>();
+            let value_references = value_rows.iter().collect::<Vec<_>>();
+            layers.push(RuntimeLayerState::Attention {
+                key_buffer: gpu
+                    .concatenate(&key_references, 0)
+                    .map_err(EngineError::Mlx)?,
+                value_buffer: gpu
+                    .concatenate(&value_references, 0)
+                    .map_err(EngineError::Mlx)?,
+                offset: maximum_length,
+            });
+        } else {
+            let mut convolutions = Vec::with_capacity(states.len());
+            let mut recurrents = Vec::with_capacity(states.len());
+            for state in states {
+                let LayerState::Gdn {
+                    convolution,
+                    recurrent,
+                } = &state.layers()[layer_index]
+                else {
+                    return Err(EngineError::Unsupported(format!(
+                        "layer {layer_index} requires GDN state while merging"
+                    )));
+                };
+                convolutions.push(convolution);
+                recurrents.push(recurrent);
+            }
+            layers.push(RuntimeLayerState::Gdn {
+                convolution: gpu
+                    .concatenate(&convolutions, 0)
+                    .map_err(EngineError::Mlx)?,
+                recurrent: gpu.concatenate(&recurrents, 0).map_err(EngineError::Mlx)?,
+            });
+        }
+    }
+
+    Ok(RuntimeInferenceState {
+        layers,
+        left_padding: left_padding
+            .iter()
+            .any(|padding| *padding != 0)
+            .then_some(left_padding),
+    })
+}
+
+/// Splits a runtime batch back into independently owned compact model states.
+#[allow(clippy::too_many_lines)]
+pub(crate) fn split_runtime_state(
+    gpu: &Gpu,
+    state: RuntimeInferenceState,
+    plan: &ModelPlan,
+) -> Result<Vec<MlxInferenceState>, EngineError> {
+    if state.layers.len() != plan.layer_count {
+        return Err(EngineError::Unsupported(format!(
+            "runtime split state count mismatch: expected {}, observed {}",
+            plan.layer_count,
+            state.layers.len()
+        )));
+    }
+    let batch_size = runtime_batch_size(&state.layers)?;
+    let offset = runtime_attention_offset(&state.layers, plan)?;
+    let left_padding = state.left_padding.unwrap_or_else(|| vec![0; batch_size]);
+    if left_padding.len() != batch_size || left_padding.iter().any(|padding| *padding > offset) {
+        return Err(EngineError::Unsupported(format!(
+            "runtime split padding {left_padding:?} is invalid for batch {batch_size} and offset {offset}"
+        )));
+    }
+    let mut rows = (0..batch_size)
+        .map(|_| Vec::with_capacity(plan.layer_count))
+        .collect::<Vec<_>>();
+
+    for (layer_index, layer) in state.layers.into_iter().enumerate() {
+        let full_attention = (layer_index + 1).is_multiple_of(plan.full_attention_interval);
+        match (full_attention, layer) {
+            (
+                false,
+                RuntimeLayerState::Gdn {
+                    convolution,
+                    recurrent,
+                },
+            ) => {
+                for (row, destination) in rows.iter_mut().enumerate() {
+                    destination.push(LayerState::Gdn {
+                        convolution: slice_runtime_batch_row(gpu, &convolution, row, batch_size)?,
+                        recurrent: slice_runtime_batch_row(gpu, &recurrent, row, batch_size)?,
+                    });
+                }
+            }
+            (
+                true,
+                RuntimeLayerState::Attention {
+                    key_buffer,
+                    value_buffer,
+                    offset: layer_offset,
+                },
+            ) => {
+                let shape = key_buffer.shape();
+                let [observed_batch, heads, capacity, head_dimension] =
+                    <[usize; 4]>::try_from(shape.clone()).map_err(|shape| {
+                        EngineError::Unsupported(format!(
+                            "layer {layer_index} runtime key buffer must be rank 4: {shape:?}"
+                        ))
+                    })?;
+                if observed_batch != batch_size
+                    || heads != plan.key_value_head_count
+                    || capacity < offset
+                    || head_dimension != plan.attention_head_dimension
+                    || layer_offset != offset
+                    || value_buffer.shape() != shape
+                {
+                    return Err(EngineError::Unsupported(format!(
+                        "layer {layer_index} runtime KV layout drifted before split"
+                    )));
+                }
+                for (row, destination) in rows.iter_mut().enumerate() {
+                    let start = [
+                        dimension_i32(row, "runtime split batch row")?,
+                        0,
+                        dimension_i32(left_padding[row], "runtime split left padding")?,
+                        0,
+                    ];
+                    let stop = [
+                        dimension_i32(row + 1, "runtime split batch row stop")?,
+                        dimension_i32(heads, "runtime split KV heads")?,
+                        dimension_i32(offset, "runtime split KV offset")?,
+                        dimension_i32(head_dimension, "runtime split KV head dimension")?,
+                    ];
+                    destination.push(LayerState::Attention {
+                        keys: gpu
+                            .slice(&key_buffer, &start, &stop, &[1, 1, 1, 1])
+                            .and_then(|array| gpu.contiguous(&array))
+                            .map_err(EngineError::Mlx)?,
+                        values: gpu
+                            .slice(&value_buffer, &start, &stop, &[1, 1, 1, 1])
+                            .and_then(|array| gpu.contiguous(&array))
+                            .map_err(EngineError::Mlx)?,
+                    });
+                }
+            }
+            (true, RuntimeLayerState::Gdn { .. }) => {
+                return Err(EngineError::Unsupported(format!(
+                    "layer {layer_index} requires attention state while splitting"
+                )));
+            }
+            (false, RuntimeLayerState::Attention { .. }) => {
+                return Err(EngineError::Unsupported(format!(
+                    "layer {layer_index} requires GDN state while splitting"
+                )));
+            }
+        }
+    }
+
+    rows.into_iter()
+        .map(|layers| {
+            let state = MlxInferenceState::new(layers);
+            state.validate(plan, 1)?;
+            Ok(state)
+        })
+        .collect()
 }
 
 pub(crate) fn compact_runtime_state(
@@ -2098,6 +2386,12 @@ pub(crate) fn compact_runtime_state(
             plan.layer_count,
             state.layers.len()
         )));
+    }
+    if state.left_padding.is_some() {
+        return Err(EngineError::Unsupported(
+            "left-padded runtime state must be split into instance-owned states before compaction"
+                .into(),
+        ));
     }
     let mut layers = Vec::with_capacity(plan.layer_count);
     for (layer_index, layer) in state.layers.into_iter().enumerate() {
@@ -2158,6 +2452,146 @@ fn round_kv_capacity(required: usize) -> Result<usize, EngineError> {
         .checked_add(KV_CACHE_ALLOCATION_STEP - 1)
         .map(|value| value / KV_CACHE_ALLOCATION_STEP * KV_CACHE_ALLOCATION_STEP)
         .ok_or_else(|| EngineError::Unsupported("runtime KV capacity overflow".into()))
+}
+
+fn runtime_batch_size(layers: &[RuntimeLayerState]) -> Result<usize, EngineError> {
+    let shape = match layers.first() {
+        Some(RuntimeLayerState::Gdn { convolution, .. }) => convolution.shape(),
+        Some(RuntimeLayerState::Attention { key_buffer, .. }) => key_buffer.shape(),
+        None => {
+            return Err(EngineError::Unsupported(
+                "runtime state contains no layers".into(),
+            ));
+        }
+    };
+    shape
+        .first()
+        .copied()
+        .filter(|batch| *batch != 0)
+        .ok_or_else(|| {
+            EngineError::Unsupported(format!(
+                "runtime state has no positive batch dimension: {shape:?}"
+            ))
+        })
+}
+
+fn runtime_attention_offset(
+    layers: &[RuntimeLayerState],
+    plan: &ModelPlan,
+) -> Result<usize, EngineError> {
+    let mut observed = None;
+    for (layer_index, layer) in layers.iter().enumerate() {
+        let full_attention = (layer_index + 1).is_multiple_of(plan.full_attention_interval);
+        match (full_attention, layer) {
+            (
+                true,
+                RuntimeLayerState::Attention {
+                    key_buffer,
+                    value_buffer,
+                    offset,
+                },
+            ) => {
+                let shape = key_buffer.shape();
+                let capacity = shape.get(2).copied().ok_or_else(|| {
+                    EngineError::Unsupported(format!(
+                        "layer {layer_index} runtime key buffer must be rank 4: {shape:?}"
+                    ))
+                })?;
+                if shape.len() != 4 || value_buffer.shape() != shape || *offset > capacity {
+                    return Err(EngineError::Unsupported(format!(
+                        "layer {layer_index} runtime KV buffer layout is invalid"
+                    )));
+                }
+                if observed.is_some_and(|prior| prior != *offset) {
+                    return Err(EngineError::Unsupported(format!(
+                        "runtime attention offsets disagree: {observed:?} and {offset}"
+                    )));
+                }
+                observed = Some(*offset);
+            }
+            (false, RuntimeLayerState::Gdn { .. }) => {}
+            (true, RuntimeLayerState::Gdn { .. }) => {
+                return Err(EngineError::Unsupported(format!(
+                    "layer {layer_index} requires attention state"
+                )));
+            }
+            (false, RuntimeLayerState::Attention { .. }) => {
+                return Err(EngineError::Unsupported(format!(
+                    "layer {layer_index} requires GDN state"
+                )));
+            }
+        }
+    }
+    observed.ok_or_else(|| {
+        EngineError::Unsupported("runtime state contains no full-attention layer".into())
+    })
+}
+
+fn prepare_left_padded_attention_metadata(
+    batch_size: usize,
+    sequence_length: usize,
+    offset: usize,
+    left_padding: &[usize],
+) -> Result<(Array, Array), EngineError> {
+    if left_padding.len() != batch_size || left_padding.iter().any(|padding| *padding > offset) {
+        return Err(EngineError::Unsupported(format!(
+            "left-padded attention metadata {left_padding:?} is invalid for batch {batch_size} and offset {offset}"
+        )));
+    }
+    let logical_length = offset
+        .checked_add(sequence_length)
+        .ok_or_else(|| EngineError::Unsupported("attention mask length overflow".into()))?;
+    let rope_offset_values = left_padding
+        .iter()
+        .map(|padding| dimension_i32(offset - padding, "per-row RoPE offset"))
+        .collect::<Result<Vec<_>, _>>()?;
+    let rope_offsets =
+        Array::from_i32_slice(&rope_offset_values, &[batch_size]).map_err(EngineError::Mlx)?;
+    let mask_element_count = batch_size
+        .checked_mul(sequence_length)
+        .and_then(|count| count.checked_mul(logical_length))
+        .ok_or_else(|| EngineError::Unsupported("attention mask size overflow".into()))?;
+    let mut mask_values = Vec::with_capacity(mask_element_count);
+    for padding in left_padding {
+        for query in 0..sequence_length {
+            let query_position = offset.checked_add(query).ok_or_else(|| {
+                EngineError::Unsupported("attention query position overflow".into())
+            })?;
+            for key in 0..logical_length {
+                mask_values.push(key >= *padding && key <= query_position);
+            }
+        }
+    }
+    let mask = Array::from_bool_slice(
+        &mask_values,
+        &[batch_size, 1, sequence_length, logical_length],
+    )
+    .map_err(EngineError::Mlx)?;
+    Ok((rope_offsets, mask))
+}
+
+fn slice_runtime_batch_row(
+    gpu: &Gpu,
+    array: &Array,
+    row: usize,
+    batch_size: usize,
+) -> Result<Array, EngineError> {
+    let shape = array.shape();
+    if shape.first().copied() != Some(batch_size) {
+        return Err(EngineError::Unsupported(format!(
+            "runtime state batch dimension mismatch: expected {batch_size}, observed {shape:?}"
+        )));
+    }
+    let mut start = vec![0_i32; shape.len()];
+    let mut stop = shape
+        .iter()
+        .map(|dimension| dimension_i32(*dimension, "runtime state dimension"))
+        .collect::<Result<Vec<_>, _>>()?;
+    start[0] = dimension_i32(row, "runtime state batch row")?;
+    stop[0] = dimension_i32(row + 1, "runtime state batch row stop")?;
+    gpu.slice(array, &start, &stop, &vec![1; shape.len()])
+        .and_then(|value| gpu.contiguous(&value))
+        .map_err(EngineError::Mlx)
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -2324,7 +2758,7 @@ pub(crate) fn schedule_runtime_execution(
         .map_err(EngineError::Mlx)
 }
 
-fn runtime_execution_arrays(execution: &RuntimeModelExecution) -> Vec<&Array> {
+pub(crate) fn runtime_execution_arrays(execution: &RuntimeModelExecution) -> Vec<&Array> {
     let mut outputs = Vec::with_capacity(1 + execution.state.layers.len() * 2);
     outputs.push(&execution.logits);
     for state in &execution.state.layers {
@@ -2843,6 +3277,49 @@ fn validate_token_input(
         )));
     }
     Ok(())
+}
+
+fn validate_batched_token_input(
+    input: &Array,
+    sequence_length: usize,
+    name: &str,
+) -> Result<usize, EngineError> {
+    let shape = input.shape();
+    let [batch_size, observed_length] = <[usize; 2]>::try_from(shape.clone()).map_err(|shape| {
+        EngineError::Unsupported(format!("{name} must be rank 2, observed {shape:?}"))
+    })?;
+    if batch_size == 0 || observed_length != sequence_length || input.dtype() != DType::Int32 {
+        return Err(EngineError::Unsupported(format!(
+            "{name} must be int32 [batch > 0, {sequence_length}], observed {} {shape:?}",
+            input.dtype_name()
+        )));
+    }
+    Ok(batch_size)
+}
+
+fn batched_token_values(
+    gpu: &Gpu,
+    tokens: &Array,
+    batch_size: usize,
+) -> Result<Vec<u32>, EngineError> {
+    if tokens.shape() != [batch_size, 1] {
+        return Err(EngineError::Unsupported(format!(
+            "sampled tokens must have shape [{batch_size}, 1], observed {:?}",
+            tokens.shape()
+        )));
+    }
+    (0..batch_size)
+        .map(|row| {
+            let row = i32::try_from(row).map_err(|error| {
+                EngineError::Unsupported(format!("batch row does not fit MLX int ABI: {error}"))
+            })?;
+            let scalar = gpu
+                .slice(tokens, &[row, 0], &[row + 1, 1], &[1, 1])
+                .and_then(|value| gpu.reshape(&value, &[]))
+                .map_err(EngineError::Mlx)?;
+            scalar.item_u32().map_err(EngineError::Mlx)
+        })
+        .collect()
 }
 
 fn compare_fixture_token_ids(

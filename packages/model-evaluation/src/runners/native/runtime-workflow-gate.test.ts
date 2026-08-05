@@ -350,6 +350,8 @@ function requireNativeMetrics(value: unknown): NativeRuntimeMetrics {
     'cached_prefix_tokens',
     'input_tokens_processed',
     'generated_tokens',
+    'maximum_decode_batch_size',
+    'decode_batch_membership_changes',
     'model_step_count',
     'input_model_execution_count',
     'input_execution_nanos',
@@ -642,7 +644,10 @@ async function createWorkflowModelOwners(input: {
       seedSource,
       events,
     });
-    await model.openState(join(input.stateRoot, instanceId));
+    await model.openState({
+      persistence: 'durable',
+      snapshotRoot: join(input.stateRoot, instanceId),
+    });
     owners.push({ instanceId, model, events });
   }
   return owners;

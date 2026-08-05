@@ -202,6 +202,8 @@ pub(crate) fn execute_buffered_attention_decoder_layer_with_bound_weights(
     plan: &ModelPlan,
     offset: usize,
     causal: bool,
+    rope_offsets: Option<&Array>,
+    attention_mask: Option<&Array>,
     moe_kernel: &MoeKernel,
 ) -> Result<LayerExecution, EngineError> {
     let BoundMixerWeights::Attention(attention_weights) = &weights.mixer else {
@@ -221,6 +223,8 @@ pub(crate) fn execute_buffered_attention_decoder_layer_with_bound_weights(
         plan,
         offset,
         causal,
+        rope_offsets,
+        attention_mask,
     )?;
     let first_state = attention
         .require("keys")?

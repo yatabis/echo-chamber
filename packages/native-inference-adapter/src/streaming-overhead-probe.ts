@@ -188,6 +188,7 @@ async function runAttempt(
     type: 'open_state',
     request_id: `${identity}:open`,
     instance_id: identity,
+    persistence: 'durable',
     snapshot_root: join(stateRoot, identity),
   });
   const command: NativeGenerateCommand = {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  NATIVE_INFERENCE_PROTOCOL_VERSION,
   parseNativeWireEvent,
   toModelOutputItem,
   toNativeWireInput,
@@ -8,6 +9,40 @@ import {
 } from './protocol';
 
 describe('native inference protocol mapping', () => {
+  it('admits the bounded continuous-batch ready contract', () => {
+    expect(
+      parseNativeWireEvent(
+        JSON.stringify({
+          event: 'ready',
+          protocol_version: NATIVE_INFERENCE_PROTOCOL_VERSION,
+          engine: { engine_id: 1 },
+          eos_token_id: 248_046,
+          chat_template_sha256: 'template',
+          max_outstanding_requests: 8,
+          max_active_batch_size: 6,
+          max_late_join_batch_size: 4,
+        })
+      )
+    ).toMatchObject({
+      event: 'ready',
+      max_active_batch_size: 6,
+      max_late_join_batch_size: 4,
+    });
+  });
+
+  it('distinguishes durable and process-local state owners', () => {
+    expect(
+      parseNativeWireEvent(
+        '{"event":"state_opened","request_id":"rin:open","instance_id":"rin","persistence":"durable","restored":true,"current_path":"/state/rin/current.safetensors"}'
+      )
+    ).toMatchObject({ persistence: 'durable', restored: true });
+    expect(
+      parseNativeWireEvent(
+        '{"event":"state_opened","request_id":"rin:memory:open","instance_id":"rin.memory","persistence":"ephemeral","restored":false}'
+      )
+    ).toMatchObject({ persistence: 'ephemeral', restored: false });
+  });
+
   it('maps core camel-case request types to the Rust wire', () => {
     expect(
       toNativeWireInput({
@@ -63,13 +98,23 @@ describe('native inference protocol mapping', () => {
     ).toThrow('missing response/output');
     expect(() =>
       parseNativeWireEvent(
-        '{"event":"state_opened","request_id":"rin:open","instance_id":"rin","restored":"yes","current_path":"/state/rin/current.safetensors"}'
+        '{"event":"state_opened","request_id":"rin:open","instance_id":"rin","persistence":"durable","restored":"yes","current_path":"/state/rin/current.safetensors"}'
       )
     ).toThrow('restored must be boolean');
+    expect(() =>
+      parseNativeWireEvent(
+        '{"event":"state_opened","request_id":"rin:memory:open","instance_id":"rin.memory","persistence":"ephemeral","restored":false,"current_path":"/state/rin.memory/current.safetensors"}'
+      )
+    ).toThrow('ephemeral state_opened event cannot restore');
     expect(() =>
       parseNativeWireEvent(
         '{"event":"snapshot_published","request_id":"rin:snapshot","instance_id":"rin","path":"/state/rin/current.safetensors","physical_nbytes":-1}'
       )
     ).toThrow('physical_nbytes must be a nonnegative safe integer');
+    expect(() =>
+      parseNativeWireEvent(
+        '{"event":"ready","protocol_version":9,"engine":{},"eos_token_id":248046,"chat_template_sha256":"template","max_outstanding_requests":8,"max_active_batch_size":6,"max_late_join_batch_size":7}'
+      )
+    ).toThrow('max_late_join_batch_size exceeds max_active_batch_size');
   });
 });

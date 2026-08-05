@@ -77,6 +77,8 @@ class FakeTransport implements NativeInferenceTransport {
       eos_token_id: 248_046,
       chat_template_sha256: 'template',
       max_outstanding_requests: 8,
+      max_active_batch_size: 6,
+      max_late_join_batch_size: 4,
     });
   }
 }
@@ -101,6 +103,7 @@ describe('NativeInferenceModel', () => {
           event: 'state_opened',
           request_id: wire.request_id,
           instance_id: wire.instance_id,
+          persistence: 'durable',
           restored: false,
           current_path: '/state/rin/current.safetensors',
         });
@@ -124,8 +127,14 @@ describe('NativeInferenceModel', () => {
       }
     };
 
-    expect(await model.openState('/state/rin')).toMatchObject({
+    expect(
+      await model.openState({
+        persistence: 'durable',
+        snapshotRoot: '/state/rin',
+      })
+    ).toMatchObject({
       stateOpened: true,
+      persistence: 'durable',
       hasState: false,
       snapshotDirty: false,
     });
@@ -149,6 +158,7 @@ describe('NativeInferenceModel', () => {
           event: 'state_opened',
           request_id: wire.request_id,
           instance_id: wire.instance_id,
+          persistence: 'durable',
           restored: false,
           current_path: '/state/rin/current.safetensors',
         });
@@ -158,7 +168,10 @@ describe('NativeInferenceModel', () => {
       }
     };
 
-    await model.openState('/state/rin');
+    await model.openState({
+      persistence: 'durable',
+      snapshotRoot: '/state/rin',
+    });
     await model.generate(request('hello'));
   });
 
@@ -170,6 +183,7 @@ describe('NativeInferenceModel', () => {
           event: 'state_opened',
           request_id: wire.request_id,
           instance_id: wire.instance_id,
+          persistence: 'durable',
           restored: true,
           current_path: '/state/rin/current.safetensors',
         });
@@ -179,7 +193,10 @@ describe('NativeInferenceModel', () => {
       }
     };
 
-    const restored = await model.openState('/state/rin');
+    const restored = await model.openState({
+      persistence: 'durable',
+      snapshotRoot: '/state/rin',
+    });
     expect(restored).toMatchObject({ hasState: true, snapshotDirty: false });
     expect(restored).not.toHaveProperty('responseToken');
     await model.generate(request('fresh'));
@@ -194,6 +211,7 @@ describe('NativeInferenceModel', () => {
           event: 'state_opened',
           request_id: wire.request_id,
           instance_id: wire.instance_id,
+          persistence: 'durable',
           restored: false,
           current_path: '/state/rin/current.safetensors',
         });
@@ -203,7 +221,12 @@ describe('NativeInferenceModel', () => {
       generation += 1;
       if (generation === 1) {
         expect(wire.state_transition).toBe('initial');
-        current.emit(completed(wire, { stateSequenceLength: 10 }));
+        current.emit(
+          completed(wire, {
+            stateSequenceLength: 10,
+            output: [toolCall('call-1')],
+          })
+        );
         return;
       }
       expect(wire.state_transition).toBe('continuation');
@@ -217,13 +240,178 @@ describe('NativeInferenceModel', () => {
       );
     };
 
-    await model.openState('/state/rin');
+    await model.openState({
+      persistence: 'durable',
+      snapshotRoot: '/state/rin',
+    });
     await model.generate(request('hello'));
     await model.generate({
       previousResponseToken: 'the-value-is-deliberately-not-compared',
       input: [{ type: 'tool_result', callId: 'call-1', output: 'done' }],
       tools: [TOOL],
     });
+  });
+
+  it('rejects continuation when the preceding completion has no pending tool call', async () => {
+    const { model, transport } = setupModel();
+    transport.onSend = autoResponder();
+    await model.openState({
+      persistence: 'durable',
+      snapshotRoot: '/state/rin',
+    });
+    const initial = await model.generate(request('plain completion'));
+
+    await expect(
+      model.generate({
+        previousResponseToken: initial.responseToken,
+        input: [{ type: 'tool_result', callId: 'call-1', output: 'done' }],
+        tools: [TOOL],
+      })
+    ).rejects.toThrow('requires a pending tool call');
+    expect(
+      transport.commands.filter((command) => command.type === 'generate')
+    ).toHaveLength(1);
+  });
+
+  it('rejects continuation results that do not match the pending call IDs', async () => {
+    const { model, transport } = setupModel();
+    let generation = 0;
+    transport.onSend = (wire, current): void => {
+      if (wire.type === 'open_state') {
+        current.emit({
+          event: 'state_opened',
+          request_id: wire.request_id,
+          instance_id: wire.instance_id,
+          persistence: 'durable',
+          restored: false,
+          current_path: '/state/rin/current.safetensors',
+        });
+      } else if (wire.type === 'generate') {
+        generation += 1;
+        current.emit(
+          completed(wire, {
+            output: [toolCall('expected-call')],
+          })
+        );
+      }
+    };
+    await model.openState({
+      persistence: 'durable',
+      snapshotRoot: '/state/rin',
+    });
+    const initial = await model.generate(request('tool completion'));
+
+    await expect(
+      model.generate({
+        previousResponseToken: initial.responseToken,
+        input: [{ type: 'tool_result', callId: 'wrong-call', output: 'done' }],
+        tools: [TOOL],
+      })
+    ).rejects.toThrow('do not match pending calls');
+    await expect(
+      model.generate({
+        previousResponseToken: initial.responseToken,
+        input: [{ role: 'user', content: 'not a tool result' }],
+        tools: [TOOL],
+      })
+    ).rejects.toThrow('accepts only results for the pending tool calls');
+    expect(generation).toBe(1);
+  });
+
+  it('keeps an ephemeral module state in memory and retries a tool-response delta from its prior commit', async () => {
+    const { model, transport } = setupModel();
+    let generation = 0;
+    transport.onSend = (wire, current): void => {
+      if (wire.type === 'open_state') {
+        expect(wire).toEqual({
+          type: 'open_state',
+          request_id: 'rin:1',
+          instance_id: 'rin',
+          persistence: 'ephemeral',
+        });
+        current.emit({
+          event: 'state_opened',
+          request_id: wire.request_id,
+          instance_id: wire.instance_id,
+          persistence: 'ephemeral',
+          restored: false,
+        });
+        return;
+      }
+      if (wire.type !== 'generate') return;
+      generation += 1;
+      if (generation === 1) {
+        expect(wire.state_transition).toBe('initial');
+        current.emit(
+          completed(wire, {
+            stateSequenceLength: 10,
+            output: [toolCall('main-observation-1')],
+          })
+        );
+        return;
+      }
+      expect(wire.state_transition).toBe('continuation');
+      expect(wire.input).toEqual([
+        {
+          type: 'tool_result',
+          call_id: 'main-observation-1',
+          output: 'new main-thought delta',
+        },
+      ]);
+      expect(wire.tools).toEqual([]);
+      if (generation === 2) {
+        current.emit({
+          event: 'failed',
+          request_id: wire.request_id,
+          phase: 'inference',
+          error: 'synthetic auxiliary failure',
+        });
+      } else {
+        current.emit(
+          completed(wire, {
+            stateSequenceLength: 14,
+            cachedPrefixTokens: 10,
+          })
+        );
+      }
+    };
+
+    await model.openState({ persistence: 'ephemeral' });
+    const initial = await model.generate({
+      input: [{ role: 'developer', content: 'memory system prompt' }],
+      tools: [TOOL],
+    });
+    if (initial.responseToken === undefined) {
+      throw new Error('ephemeral initial response has no live token');
+    }
+    const committed = model.state();
+    expect(committed).toMatchObject({
+      persistence: 'ephemeral',
+      hasState: true,
+      snapshotDirty: false,
+      stateSequenceLength: 10,
+    });
+    const deltaRequest: ModelRequest = {
+      input: [
+        {
+          type: 'tool_result',
+          callId: 'main-observation-1',
+          output: 'new main-thought delta',
+        },
+      ],
+      tools: [TOOL],
+      previousResponseToken: initial.responseToken,
+    };
+    await expect(model.generate(deltaRequest)).rejects.toThrow(
+      'synthetic auxiliary failure'
+    );
+    expect(model.state()).toEqual(committed);
+    await expect(model.generate(deltaRequest)).resolves.toMatchObject({
+      output: [{ type: 'message', role: 'assistant', content: 'ok' }],
+    });
+    await expect(model.snapshot()).rejects.toThrow(
+      'ephemeral state cannot be snapshotted'
+    );
   });
 
   it('records the actual state transition on every native exchange event', async () => {
@@ -235,12 +423,36 @@ describe('NativeInferenceModel', () => {
       },
     };
     const { model, transport } = setupModel(undefined, eventPort);
-    transport.onSend = autoResponder();
+    let generation = 0;
+    transport.onSend = (wire, current): void => {
+      if (wire.type === 'open_state') {
+        current.emit({
+          event: 'state_opened',
+          request_id: wire.request_id,
+          instance_id: wire.instance_id,
+          persistence: 'durable',
+          restored: false,
+          current_path: '/state/rin/current.safetensors',
+        });
+      } else if (wire.type === 'generate') {
+        generation += 1;
+        current.emit(
+          completed(
+            wire,
+            generation === 1 ? { output: [toolCall('call-1')] } : {}
+          )
+        );
+      }
+    };
 
-    await model.openState('/state/rin');
+    await model.openState({
+      persistence: 'durable',
+      snapshotRoot: '/state/rin',
+    });
     const initial = await model.generate(request('initial'));
     await model.generate({
-      ...request('continuation'),
+      input: [{ type: 'tool_result', callId: 'call-1', output: 'done' }],
+      tools: [TOOL],
       previousResponseToken: initial.responseToken,
     });
     await model.generate(request('new session'));
@@ -260,12 +472,16 @@ describe('NativeInferenceModel', () => {
           event: 'state_opened',
           request_id: wire.request_id,
           instance_id: wire.instance_id,
+          persistence: 'durable',
           restored: true,
           current_path: '/state/rin/current.safetensors',
         });
       }
     };
-    await model.openState('/state/rin');
+    await model.openState({
+      persistence: 'durable',
+      snapshotRoot: '/state/rin',
+    });
 
     await expect(
       model.generate({
@@ -282,7 +498,10 @@ describe('NativeInferenceModel', () => {
       finishReason: 'length',
       stateSequenceLength: 129,
     });
-    await model.openState('/state/rin');
+    await model.openState({
+      persistence: 'durable',
+      snapshotRoot: '/state/rin',
+    });
 
     const generation = model.generate(request('long'));
     await expect(generation).rejects.toBeInstanceOf(
@@ -303,12 +522,16 @@ describe('NativeInferenceModel', () => {
           event: 'state_opened',
           request_id: wire.request_id,
           instance_id: wire.instance_id,
+          persistence: 'durable',
           restored: false,
           current_path: '/state/rin/current.safetensors',
         });
       }
     };
-    await model.openState('/state/rin');
+    await model.openState({
+      persistence: 'durable',
+      snapshotRoot: '/state/rin',
+    });
     const before = model.state();
     const generation = model.generate(request('long'));
     await expect
@@ -340,6 +563,7 @@ describe('NativeInferenceModel', () => {
           event: 'state_opened',
           request_id: wire.request_id,
           instance_id: wire.instance_id,
+          persistence: 'durable',
           restored: false,
           current_path: '/state/rin/current.safetensors',
         });
@@ -358,7 +582,10 @@ describe('NativeInferenceModel', () => {
         }
       }
     };
-    await model.openState('/state/rin');
+    await model.openState({
+      persistence: 'durable',
+      snapshotRoot: '/state/rin',
+    });
     await model.generate(request('first'));
     const committed = model.state();
 
@@ -397,6 +624,15 @@ function request(content: string): ModelRequest {
   };
 }
 
+function toolCall(callId: string): NativeCompletedEvent['output'][number] {
+  return {
+    type: 'tool_call',
+    call_id: callId,
+    tool_name: TOOL.name,
+    input: '{"session_record":{}}',
+  };
+}
+
 function autoResponder(options: CompletedOptions = {}) {
   return (wire: NativeWireCommand, transport: FakeTransport): void => {
     if (wire.type === 'open_state') {
@@ -404,6 +640,7 @@ function autoResponder(options: CompletedOptions = {}) {
         event: 'state_opened',
         request_id: wire.request_id,
         instance_id: wire.instance_id,
+        persistence: 'durable',
         restored: false,
         current_path: '/state/rin/current.safetensors',
       });
@@ -446,6 +683,8 @@ function completed(
           stateSequenceLength - generated.length - cachedPrefixTokens
         ),
         generated_tokens: generated.length,
+        maximum_decode_batch_size: 1,
+        decode_batch_membership_changes: 0,
         model_step_count: generated.length + 1,
         input_model_execution_count: 1,
         input_execution_nanos: 1,

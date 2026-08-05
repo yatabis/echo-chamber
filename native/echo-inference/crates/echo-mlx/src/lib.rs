@@ -169,6 +169,18 @@ pub fn metal_memory_stats() -> Result<MetalMemoryStats, MlxError> {
     })
 }
 
+/// Resets MLX's process-wide peak allocator counter before a bounded probe.
+///
+/// # Errors
+///
+/// Returns [`MlxError`] when MLX cannot reset the counter.
+pub fn reset_peak_memory() -> Result<(), MlxError> {
+    check(
+        unsafe { sys::mlx_reset_peak_memory() },
+        "mlx_reset_peak_memory",
+    )
+}
+
 /// MLX element type admitted by the native engine.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DType {
@@ -293,11 +305,62 @@ pub struct RopeConfig<'a> {
     pub frequencies: Option<&'a Array>,
 }
 
+/// Parameters for MLX's fused rotary position encoding with per-batch offsets.
+#[derive(Clone, Copy, Debug)]
+pub struct DynamicRopeConfig<'a> {
+    pub dimensions: i32,
+    pub traditional: bool,
+    pub base: Option<f32>,
+    pub scale: f32,
+    pub offsets: &'a Array,
+    pub frequencies: Option<&'a Array>,
+}
+
 struct GpuStream(sys::mlx_stream);
 
 impl GpuStream {
     fn new() -> Self {
         Self(unsafe { sys::mlx_default_gpu_stream_new() })
+    }
+
+    fn new_independent() -> Result<Self, MlxError> {
+        let default_stream = Self::new();
+        let mut device = Device::new();
+        check(
+            unsafe { sys::mlx_stream_get_device(&raw mut device.0, default_stream.0) },
+            "mlx_stream_get_device",
+        )?;
+        let stream = unsafe { sys::mlx_stream_new_device(device.0) };
+        if stream.ctx.is_null() {
+            return Err(MlxError::detail(
+                "mlx_stream_new_device",
+                "returned an empty stream",
+            ));
+        }
+        Ok(Self(stream))
+    }
+
+    fn index(&self) -> Result<i32, MlxError> {
+        let mut index = 0;
+        check(
+            unsafe { sys::mlx_stream_get_index(&raw mut index, self.0) },
+            "mlx_stream_get_index",
+        )?;
+        Ok(index)
+    }
+}
+
+struct Device(sys::mlx_device);
+
+impl Device {
+    fn new() -> Self {
+        Self(unsafe { sys::mlx_device_new() })
+    }
+}
+
+impl Drop for Device {
+    fn drop(&mut self) {
+        let _ = unsafe { sys::mlx_device_free(self.0) };
     }
 }
 
@@ -342,6 +405,35 @@ impl Gpu {
             precise_swiglu_function: OnceCell::new(),
             compute_g_function: OnceCell::new(),
         }
+    }
+
+    /// Creates a GPU execution context backed by a new MLX stream.
+    ///
+    /// The context remains thread-confined like the default [`Gpu`] handle.
+    /// Its purpose is overlapping independent lazy graphs without duplicating
+    /// immutable model weights.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MlxError`] when MLX cannot create a new stream on the active
+    /// GPU device.
+    pub fn new_independent() -> Result<Self, MlxError> {
+        Ok(Self {
+            stream: GpuStream::new_independent()?,
+            silu_function: OnceCell::new(),
+            swiglu_function: OnceCell::new(),
+            precise_swiglu_function: OnceCell::new(),
+            compute_g_function: OnceCell::new(),
+        })
+    }
+
+    /// Returns the MLX stream index used by this execution context.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MlxError`] when MLX cannot inspect the stream.
+    pub fn stream_index(&self) -> Result<i32, MlxError> {
+        self.stream.index()
     }
 
     /// Reports trace counts for the compiled graphs initialized on this GPU.
@@ -819,6 +911,41 @@ impl Gpu {
         Ok(result)
     }
 
+    /// Applies fused rotary position encoding with one offset per batch row.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MlxError`] if MLX rejects the input, offset tensor, rotary
+    /// dimensions, or optional frequency tensor.
+    pub fn rope_dynamic(
+        &self,
+        input: &Array,
+        config: DynamicRopeConfig<'_>,
+    ) -> Result<Array, MlxError> {
+        let base = sys::mlx_optional_float_ {
+            value: config.base.unwrap_or_default(),
+            has_value: config.base.is_some(),
+        };
+        let mut result = Array::empty();
+        check(
+            unsafe {
+                sys::mlx_fast_rope_dynamic(
+                    &raw mut result.0,
+                    input.0,
+                    config.dimensions,
+                    config.traditional,
+                    base,
+                    config.scale,
+                    config.offsets.0,
+                    optional_array(config.frequencies),
+                    self.stream.0,
+                )
+            },
+            "mlx_fast_rope_dynamic",
+        )?;
+        Ok(result)
+    }
+
     /// Applies fused grouped-query scaled dot-product attention.
     ///
     /// # Errors
@@ -846,6 +973,42 @@ impl Gpu {
                     scale,
                     mask_mode.as_ptr(),
                     optional_array(None),
+                    optional_array(None),
+                    self.stream.0,
+                )
+            },
+            "mlx_fast_scaled_dot_product_attention",
+        )?;
+        Ok(result)
+    }
+
+    /// Applies fused grouped-query scaled dot-product attention with an
+    /// explicit boolean or additive mask.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MlxError`] if MLX rejects the query/key/value shapes or mask.
+    pub fn scaled_dot_product_attention_with_mask(
+        &self,
+        queries: &Array,
+        keys: &Array,
+        values: &Array,
+        scale: f32,
+        mask: &Array,
+    ) -> Result<Array, MlxError> {
+        let mask_mode = CString::new("")
+            .map_err(|error| MlxError::detail("attention mask mode", error.to_string()))?;
+        let mut result = Array::empty();
+        check(
+            unsafe {
+                sys::mlx_fast_scaled_dot_product_attention(
+                    &raw mut result.0,
+                    queries.0,
+                    keys.0,
+                    values.0,
+                    scale,
+                    mask_mode.as_ptr(),
+                    optional_array(Some(mask)),
                     optional_array(None),
                     self.stream.0,
                 )
@@ -1560,6 +1723,49 @@ impl Array {
                     .try_into()
                     .map_err(|error| MlxError::detail("mlx_array_new_data", format!("{error}")))?,
                 DType::Int32.raw(),
+            )
+        };
+        if raw.ctx.is_null() {
+            return Err(MlxError::detail(
+                "mlx_array_new_data",
+                "MLX returned an empty array handle",
+            ));
+        }
+        Ok(Self(raw))
+    }
+
+    /// Creates an eager boolean array by copying one host slice.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MlxError`] when the shape does not describe exactly the
+    /// supplied number of elements, a dimension exceeds MLX's C ABI, or MLX
+    /// cannot create the array.
+    pub fn from_bool_slice(values: &[bool], shape: &[usize]) -> Result<Self, MlxError> {
+        let shape_i32 = checked_shape(shape, "mlx_array_new_data")?;
+        let element_count = shape.iter().try_fold(1usize, |count, dimension| {
+            count.checked_mul(*dimension).ok_or_else(|| {
+                MlxError::detail("mlx_array_new_data", "shape element count overflow")
+            })
+        })?;
+        if element_count != values.len() {
+            return Err(MlxError::detail(
+                "mlx_array_new_data",
+                format!(
+                    "shape {shape:?} describes {element_count} elements, supplied {}",
+                    values.len()
+                ),
+            ));
+        }
+        let raw = unsafe {
+            sys::mlx_array_new_data(
+                values.as_ptr().cast(),
+                shape_i32.as_ptr(),
+                shape_i32
+                    .len()
+                    .try_into()
+                    .map_err(|error| MlxError::detail("mlx_array_new_data", format!("{error}")))?,
+                DType::Bool.raw(),
             )
         };
         if raw.ctx.is_null() {
@@ -2709,6 +2915,17 @@ mod tests {
     fn reports_metal_allocator_counters() {
         let stats = metal_memory_stats().expect("Metal allocator counters");
         assert!(stats.peak_nbytes >= stats.active_nbytes);
+    }
+
+    #[test]
+    fn creates_distinct_independent_gpu_streams() {
+        let first = Gpu::new_independent().expect("first independent GPU stream");
+        let second = Gpu::new_independent().expect("second independent GPU stream");
+
+        assert_ne!(
+            first.stream_index().expect("first stream index"),
+            second.stream_index().expect("second stream index")
+        );
     }
 
     #[test]

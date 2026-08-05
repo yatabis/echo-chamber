@@ -1,12 +1,13 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::fmt;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Instant;
 
 use echo_inference_state::InstanceId;
 use serde::{Deserialize, Serialize};
@@ -16,19 +17,24 @@ use super::chat::{
     Qwen35ChatTokenizer, Qwen35DecodeStream,
 };
 use super::runtime::{
-    GenerationDirective, GenerationObserver, InferenceRequest, InferenceResponse, RequestState,
-    ResidentEngine, ResidentEngineConfig, ResidentEngineInfo, RuntimeError,
+    BatchAdmission, BatchGenerationObserver, GenerationDirective, GenerationObserver,
+    InferenceRequest, InferenceResponse, RequestState, ResidentEngine, ResidentEngineConfig,
+    ResidentEngineInfo, RuntimeError, StatePersistence,
 };
 use super::sampling::SamplingConfig;
 use super::tool_output::{EchoOutputItem, parse_qwen_output};
 
-const PROTOCOL_VERSION: u32 = 7;
+const PROTOCOL_VERSION: u32 = 9;
 
 /// Admission and backpressure limits for the dedicated local stdio server.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LocalServerConfig {
     /// Active plus waiting generate requests admitted at once.
     pub max_outstanding_requests: usize,
+    /// Maximum independently owned rows executed as one model batch.
+    pub max_active_batch_size: usize,
+    /// Maximum active width after admitting a request that arrived mid-decode.
+    pub max_late_join_batch_size: usize,
     /// Number of serialized events buffered before generation backpressures.
     pub event_buffer_capacity: usize,
     /// Resident-engine generation limits.
@@ -39,6 +45,8 @@ impl Default for LocalServerConfig {
     fn default() -> Self {
         Self {
             max_outstanding_requests: 8,
+            max_active_batch_size: 6,
+            max_late_join_batch_size: 4,
             event_buffer_capacity: 128,
             engine: ResidentEngineConfig::default(),
         }
@@ -66,7 +74,9 @@ enum WireCommand {
     OpenState {
         request_id: String,
         instance_id: InstanceId,
-        snapshot_root: PathBuf,
+        persistence: StatePersistence,
+        #[serde(default)]
+        snapshot_root: Option<PathBuf>,
     },
     Snapshot {
         request_id: String,
@@ -75,21 +85,25 @@ enum WireCommand {
     Shutdown,
 }
 
+struct AcceptedGenerate {
+    request_id: String,
+    instance_id: InstanceId,
+    state_transition: RequestState,
+    stream_tokens: bool,
+    prompt: EchoChatPrompt,
+    max_new_tokens: usize,
+    sampling: SamplingConfig,
+    cancellation: Arc<AtomicBool>,
+    enqueued_at: Instant,
+}
+
 enum AcceptedCommand {
-    Generate {
-        request_id: String,
-        instance_id: InstanceId,
-        state_transition: RequestState,
-        stream_tokens: bool,
-        prompt: EchoChatPrompt,
-        max_new_tokens: usize,
-        sampling: SamplingConfig,
-        cancellation: Arc<AtomicBool>,
-    },
+    Generate(AcceptedGenerate),
     OpenState {
         request_id: String,
         instance_id: InstanceId,
-        snapshot_root: PathBuf,
+        persistence: StatePersistence,
+        snapshot_root: Option<PathBuf>,
     },
     Snapshot {
         request_id: String,
@@ -107,6 +121,8 @@ enum WireEvent {
         eos_token_id: u32,
         chat_template_sha256: String,
         max_outstanding_requests: usize,
+        max_active_batch_size: usize,
+        max_late_join_batch_size: usize,
     },
     Queued {
         request_id: String,
@@ -142,8 +158,10 @@ enum WireEvent {
     StateOpened {
         request_id: String,
         instance_id: InstanceId,
+        persistence: StatePersistence,
         restored: bool,
-        current_path: PathBuf,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        current_path: Option<PathBuf>,
     },
     SnapshotPublished {
         request_id: String,
@@ -202,6 +220,8 @@ pub fn serve_local_stdio(
             eos_token_id: tokenizer.eos_token_id(),
             chat_template_sha256: tokenizer.chat_template_sha256().into(),
             max_outstanding_requests: config.max_outstanding_requests,
+            max_active_batch_size: config.max_active_batch_size,
+            max_late_join_batch_size: config.max_late_join_batch_size,
         },
     )?;
 
@@ -225,6 +245,8 @@ pub fn serve_local_stdio(
         &command_receiver,
         &event_sender,
         &registry,
+        config.max_active_batch_size,
+        config.max_late_join_batch_size,
     )?;
     send_event(&event_sender, WireEvent::Shutdown)?;
     drop(event_sender);
@@ -239,6 +261,19 @@ fn validate_config(config: LocalServerConfig) -> Result<(), LocalServerError> {
         return Err(LocalServerError::InvalidConfiguration(
             "max_outstanding_requests must be greater than zero".into(),
         ));
+    }
+    if !(1..=6).contains(&config.max_active_batch_size) {
+        return Err(LocalServerError::InvalidConfiguration(
+            "max_active_batch_size must be within 1..=6".into(),
+        ));
+    }
+    if config.max_late_join_batch_size == 0
+        || config.max_late_join_batch_size > config.max_active_batch_size
+    {
+        return Err(LocalServerError::InvalidConfiguration(format!(
+            "max_late_join_batch_size must be within 1..={}, observed {}",
+            config.max_active_batch_size, config.max_late_join_batch_size
+        )));
     }
     if config.event_buffer_capacity == 0 {
         return Err(LocalServerError::InvalidConfiguration(
@@ -322,7 +357,7 @@ fn dispatch_wire_command(
             else {
                 return Ok(false);
             };
-            let accepted = AcceptedCommand::Generate {
+            let accepted = AcceptedCommand::Generate(AcceptedGenerate {
                 request_id: request_id.clone(),
                 instance_id,
                 state_transition,
@@ -331,7 +366,8 @@ fn dispatch_wire_command(
                 max_new_tokens,
                 sampling,
                 cancellation,
-            };
+                enqueued_at: Instant::now(),
+            });
             if command_sender.send(accepted).is_err() {
                 remove_registration(registry, &request_id);
                 return Err(LocalServerError::ChannelClosed("command receiver"));
@@ -350,6 +386,7 @@ fn dispatch_wire_command(
         WireCommand::OpenState {
             request_id,
             instance_id,
+            persistence,
             snapshot_root,
         } => {
             if !admit_request_id(&request_id, event_sender)? {
@@ -359,6 +396,7 @@ fn dispatch_wire_command(
                 .send(AcceptedCommand::OpenState {
                     request_id,
                     instance_id,
+                    persistence,
                     snapshot_root,
                 })
                 .map_err(|_| LocalServerError::ChannelClosed("command receiver"))?;
@@ -457,40 +495,55 @@ fn run_command_loop(
     commands: &Receiver<AcceptedCommand>,
     events: &SyncSender<WireEvent>,
     registry: &RequestRegistry,
+    max_active_batch_size: usize,
+    max_late_join_batch_size: usize,
 ) -> Result<(), LocalServerError> {
-    while let Ok(command) = commands.recv() {
+    let mut deferred = VecDeque::new();
+    loop {
+        let command = if let Some(command) = deferred.pop_front() {
+            command
+        } else {
+            let Ok(command) = commands.recv() else {
+                return Ok(());
+            };
+            command
+        };
         match command {
-            AcceptedCommand::Generate {
-                request_id,
-                instance_id,
-                state_transition,
-                stream_tokens,
-                prompt,
-                max_new_tokens,
-                sampling,
-                cancellation,
-            } => {
-                run_generate(
+            AcceptedCommand::Generate(first) => {
+                let mut cohort = Vec::with_capacity(max_active_batch_size);
+                cohort.push(first);
+                while cohort.len() < max_active_batch_size {
+                    let Some(generate) = try_take_ready_generate(commands, &mut deferred) else {
+                        break;
+                    };
+                    cohort.push(generate);
+                }
+                run_generate_cohort(
                     engine,
                     tokenizer,
+                    commands,
                     events,
-                    &request_id,
-                    instance_id,
-                    state_transition,
-                    stream_tokens,
-                    &prompt,
-                    max_new_tokens,
-                    sampling,
-                    cancellation,
+                    cohort,
                     registry,
+                    &mut deferred,
+                    max_active_batch_size,
+                    max_late_join_batch_size,
                 )?;
             }
             AcceptedCommand::OpenState {
                 request_id,
                 instance_id,
+                persistence,
                 snapshot_root,
             } => {
-                run_open_state(engine, events, request_id, instance_id, &snapshot_root)?;
+                run_open_state(
+                    engine,
+                    events,
+                    request_id,
+                    instance_id,
+                    persistence,
+                    snapshot_root.as_deref(),
+                )?;
             }
             AcceptedCommand::Snapshot {
                 request_id,
@@ -501,71 +554,66 @@ fn run_command_loop(
             AcceptedCommand::Shutdown => return Ok(()),
         }
     }
-    Ok(())
+}
+
+fn try_take_ready_generate(
+    commands: &Receiver<AcceptedCommand>,
+    deferred: &mut VecDeque<AcceptedCommand>,
+) -> Option<AcceptedGenerate> {
+    if !deferred.is_empty() {
+        return None;
+    }
+    match commands.try_recv() {
+        Ok(AcceptedCommand::Generate(generate)) => Some(generate),
+        Ok(barrier) => {
+            deferred.push_back(barrier);
+            None
+        }
+        Err(TryRecvError::Empty | TryRecvError::Disconnected) => None,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_generate(
+fn run_generate_cohort(
     engine: &mut ResidentEngine,
     tokenizer: &Qwen35ChatTokenizer,
+    commands: &Receiver<AcceptedCommand>,
     events: &SyncSender<WireEvent>,
-    request_id: &str,
-    instance_id: InstanceId,
-    state_transition: RequestState,
-    stream_tokens: bool,
-    prompt: &EchoChatPrompt,
-    max_new_tokens: usize,
-    sampling: SamplingConfig,
-    cancellation: Arc<AtomicBool>,
+    cohort: Vec<AcceptedGenerate>,
     registry: &RequestRegistry,
+    deferred: &mut VecDeque<AcceptedCommand>,
+    max_active_batch_size: usize,
+    max_late_join_batch_size: usize,
 ) -> Result<(), LocalServerError> {
-    if !engine.has_state_owner(&instance_id) {
-        remove_registration(registry, request_id);
-        return send_request_failure(
-            events,
-            request_id,
-            "state",
-            &format_args!(
-                "instance {} must be opened before generation",
-                instance_id.as_str()
-            ),
-        );
-    }
-    let encoded =
-        match encode_generate_input(engine, tokenizer, &instance_id, state_transition, prompt) {
-            Ok(encoded) => encoded,
-            Err(error) => {
-                remove_registration(registry, request_id);
-                return send_request_failure(events, request_id, "chat", &error);
-            }
-        };
-    send_event(
+    let mut coordinator = StdioBatchGenerationCoordinator {
+        tokenizer,
+        commands,
         events,
-        WireEvent::Started {
-            request_id: request_id.into(),
-            prompt_tokens: encoded.token_ids.len(),
-        },
-    )?;
-    let request = InferenceRequest {
-        instance_id,
-        state_transition,
-        input_tokens: encoded.token_ids,
-        max_new_tokens,
-        length_eos_token: Some(tokenizer.eos_token_id()),
-        sampling,
+        registry,
+        deferred,
+        rows: Vec::with_capacity(max_active_batch_size),
     };
-    let mut observer = StdioGenerationObserver::new(
-        request_id,
-        cancellation,
-        tokenizer.eos_token_id(),
-        stream_tokens.then(|| tokenizer.decode_stream()),
-        events,
-    );
-    let result = engine.execute_observed(request, &mut observer);
-    drop(observer);
-    remove_registration(registry, request_id);
+    let initial = coordinator.prepare_cohort(cohort)?;
+    if initial.is_empty() {
+        return Ok(());
+    }
+    engine
+        .execute_continuous_batch_observed(
+            initial,
+            max_active_batch_size,
+            max_late_join_batch_size,
+            &mut coordinator,
+        )
+        .map_err(Into::into)
+}
 
-    match result {
+fn send_generation_outcome(
+    events: &SyncSender<WireEvent>,
+    tokenizer: &Qwen35ChatTokenizer,
+    request_id: &str,
+    outcome: &Result<InferenceResponse, RuntimeError>,
+) -> Result<(), LocalServerError> {
+    match outcome {
         Ok(response) => {
             let text_token_count = response
                 .generated_tokens
@@ -578,30 +626,25 @@ fn run_generate(
                 events,
                 WireEvent::Completed {
                     request_id: request_id.into(),
-                    response: Box::new(response),
+                    response: Box::new(response.clone()),
                     text,
                     output: parsed.output,
                     tool_parse_warning: parsed.warning,
                 },
-            )?;
+            )
         }
-        Err(RuntimeError::Cancelled { .. }) => {
-            send_event(
-                events,
-                WireEvent::Cancelled {
-                    request_id: request_id.into(),
-                },
-            )?;
-        }
-        Err(error) => return send_request_failure(events, request_id, "inference", &error),
+        Err(RuntimeError::Cancelled { .. }) => send_event(
+            events,
+            WireEvent::Cancelled {
+                request_id: request_id.into(),
+            },
+        ),
+        Err(error) => send_request_failure(events, request_id, "inference", &error),
     }
-    Ok(())
 }
 
 fn encode_generate_input(
-    engine: &ResidentEngine,
     tokenizer: &Qwen35ChatTokenizer,
-    instance_id: &InstanceId,
     state_transition: RequestState,
     prompt: &EchoChatPrompt,
 ) -> Result<EncodedChatPrompt, LocalServerError> {
@@ -609,17 +652,7 @@ fn encode_generate_input(
         RequestState::Initial | RequestState::NewSession => {
             tokenizer.encode_prompt(prompt).map_err(Into::into)
         }
-        RequestState::Continuation => {
-            engine
-                .current_state(instance_id)
-                .ok_or_else(|| RuntimeError::InvalidRequest {
-                    detail: format!(
-                        "instance {} has no resident state for continuation",
-                        instance_id.as_str()
-                    ),
-                })?;
-            tokenizer.encode_continuation(prompt).map_err(Into::into)
-        }
+        RequestState::Continuation => tokenizer.encode_continuation(prompt).map_err(Into::into),
     }
 }
 
@@ -628,14 +661,28 @@ fn run_open_state(
     events: &SyncSender<WireEvent>,
     request_id: String,
     instance_id: InstanceId,
-    snapshot_root: &Path,
+    persistence: StatePersistence,
+    snapshot_root: Option<&Path>,
 ) -> Result<(), LocalServerError> {
-    match engine.open_state(instance_id, snapshot_root) {
+    let opened = match (persistence, snapshot_root) {
+        (StatePersistence::Durable, Some(snapshot_root)) => {
+            engine.open_state(instance_id, snapshot_root)
+        }
+        (StatePersistence::Ephemeral, None) => engine.open_ephemeral_state(instance_id),
+        (StatePersistence::Durable, None) => Err(RuntimeError::InvalidRequest {
+            detail: "durable state requires snapshot_root".into(),
+        }),
+        (StatePersistence::Ephemeral, Some(_)) => Err(RuntimeError::InvalidRequest {
+            detail: "ephemeral state must not specify snapshot_root".into(),
+        }),
+    };
+    match opened {
         Ok(opened) => send_event(
             events,
             WireEvent::StateOpened {
                 request_id,
                 instance_id: opened.instance_id,
+                persistence: opened.persistence,
                 restored: opened.restored,
                 current_path: opened.current_path,
             },
@@ -665,17 +712,18 @@ fn run_snapshot(
 }
 
 struct StdioGenerationObserver<'a> {
-    request_id: &'a str,
+    request_id: String,
     cancellation: Arc<AtomicBool>,
     eos_token_id: u32,
     decoder: Option<Qwen35DecodeStream<'a>>,
     events: &'a SyncSender<WireEvent>,
     token_index: usize,
+    finished: bool,
 }
 
 impl<'a> StdioGenerationObserver<'a> {
     fn new(
-        request_id: &'a str,
+        request_id: String,
         cancellation: Arc<AtomicBool>,
         eos_token_id: u32,
         decoder: Option<Qwen35DecodeStream<'a>>,
@@ -688,6 +736,7 @@ impl<'a> StdioGenerationObserver<'a> {
             decoder,
             events,
             token_index: 0,
+            finished: false,
         }
     }
 }
@@ -708,7 +757,7 @@ impl GenerationObserver for StdioGenerationObserver<'_> {
             send_event(
                 self.events,
                 WireEvent::Token {
-                    request_id: self.request_id.into(),
+                    request_id: self.request_id.clone(),
                     index: self.token_index,
                     token_id: token,
                     text,
@@ -723,6 +772,147 @@ impl GenerationObserver for StdioGenerationObserver<'_> {
         } else {
             Ok(GenerationDirective::Continue)
         }
+    }
+}
+
+struct StdioBatchGenerationCoordinator<'a> {
+    tokenizer: &'a Qwen35ChatTokenizer,
+    commands: &'a Receiver<AcceptedCommand>,
+    events: &'a SyncSender<WireEvent>,
+    registry: &'a RequestRegistry,
+    deferred: &'a mut VecDeque<AcceptedCommand>,
+    rows: Vec<StdioGenerationObserver<'a>>,
+}
+
+impl StdioBatchGenerationCoordinator<'_> {
+    fn prepare_cohort(
+        &mut self,
+        cohort: Vec<AcceptedGenerate>,
+    ) -> Result<Vec<BatchAdmission>, LocalServerError> {
+        let mut admissions = Vec::with_capacity(cohort.len());
+        for generate in cohort {
+            if let Some(admission) = self.prepare_generate(generate)? {
+                admissions.push(admission);
+            }
+        }
+        Ok(admissions)
+    }
+
+    fn prepare_generate(
+        &mut self,
+        generate: AcceptedGenerate,
+    ) -> Result<Option<BatchAdmission>, LocalServerError> {
+        let AcceptedGenerate {
+            request_id,
+            instance_id,
+            state_transition,
+            stream_tokens,
+            prompt,
+            max_new_tokens,
+            sampling,
+            cancellation,
+            enqueued_at,
+        } = generate;
+        let encoded = match encode_generate_input(self.tokenizer, state_transition, &prompt) {
+            Ok(encoded) => encoded,
+            Err(error) => {
+                remove_registration(self.registry, &request_id);
+                send_request_failure(self.events, &request_id, "chat", &error)?;
+                return Ok(None);
+            }
+        };
+        send_event(
+            self.events,
+            WireEvent::Started {
+                request_id: request_id.clone(),
+                prompt_tokens: encoded.token_ids.len(),
+            },
+        )?;
+        self.rows.push(StdioGenerationObserver::new(
+            request_id,
+            cancellation,
+            self.tokenizer.eos_token_id(),
+            stream_tokens.then(|| self.tokenizer.decode_stream()),
+            self.events,
+        ));
+        Ok(Some(BatchAdmission {
+            request: InferenceRequest {
+                instance_id,
+                state_transition,
+                input_tokens: encoded.token_ids,
+                max_new_tokens,
+                length_eos_token: Some(self.tokenizer.eos_token_id()),
+                sampling,
+            },
+            queue_wait: enqueued_at.elapsed(),
+        }))
+    }
+}
+
+impl BatchGenerationObserver for StdioBatchGenerationCoordinator<'_> {
+    fn is_cancelled(&self, request_index: usize) -> bool {
+        self.rows
+            .get(request_index)
+            .is_none_or(GenerationObserver::is_cancelled)
+    }
+
+    fn on_token(
+        &mut self,
+        request_index: usize,
+        token: u32,
+    ) -> Result<GenerationDirective, String> {
+        self.rows
+            .get_mut(request_index)
+            .ok_or_else(|| format!("missing stdio observer for batch row {request_index}"))?
+            .on_token(token)
+    }
+
+    fn take_ready(
+        &mut self,
+        first_request_index: usize,
+        capacity: usize,
+    ) -> Result<Vec<BatchAdmission>, String> {
+        if self.rows.len() != first_request_index {
+            return Err(format!(
+                "stdio/runtime request index drift: observers={}, next={first_request_index}",
+                self.rows.len()
+            ));
+        }
+        let mut admissions = Vec::with_capacity(capacity);
+        while admissions.len() < capacity {
+            let Some(generate) = try_take_ready_generate(self.commands, self.deferred) else {
+                break;
+            };
+            if let Some(admission) = self
+                .prepare_generate(generate)
+                .map_err(|error| error.to_string())?
+            {
+                admissions.push(admission);
+            }
+        }
+        Ok(admissions)
+    }
+
+    fn on_outcome(
+        &mut self,
+        request_index: usize,
+        outcome: &Result<InferenceResponse, RuntimeError>,
+    ) -> Result<(), String> {
+        let row = self
+            .rows
+            .get_mut(request_index)
+            .ok_or_else(|| format!("missing stdio observer for outcome row {request_index}"))?;
+        if row.finished {
+            return Err(format!(
+                "stdio outcome for request {} was delivered more than once",
+                row.request_id
+            ));
+        }
+        let request_id = row.request_id.clone();
+        row.finished = true;
+        remove_registration(self.registry, &request_id);
+        send_generation_outcome(self.events, self.tokenizer, &request_id, outcome)
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -872,6 +1062,26 @@ impl From<RuntimeError> for LocalServerError {
 mod tests {
     use super::*;
 
+    fn accepted_generate(request_id: &str) -> AcceptedCommand {
+        AcceptedCommand::Generate(AcceptedGenerate {
+            request_id: request_id.into(),
+            instance_id: InstanceId::new(format!("instance-{request_id}")).expect("valid instance"),
+            state_transition: RequestState::Initial,
+            stream_tokens: false,
+            prompt: EchoChatPrompt {
+                input: vec![EchoInputItem::Message(super::super::chat::EchoMessage {
+                    role: super::super::chat::EchoMessageRole::Developer,
+                    content: super::super::chat::EchoMessageContent::Text("test".into()),
+                })],
+                tools: Vec::new(),
+            },
+            max_new_tokens: 1,
+            sampling: SamplingConfig::default(),
+            cancellation: Arc::new(AtomicBool::new(false)),
+            enqueued_at: Instant::now(),
+        })
+    }
+
     #[test]
     fn request_ids_are_bounded_and_protocol_safe() {
         for valid in ["rin:1", "request_2", "abc.def-3"] {
@@ -897,6 +1107,48 @@ mod tests {
         assert!(cancel_request(&registry, "rin:1"));
         assert!(!cancel_request(&registry, "rin:1"));
         assert!(!cancel_request(&registry, "missing"));
+    }
+
+    #[test]
+    fn lifecycle_barrier_prevents_later_generation_from_overtaking() {
+        let (sender, receiver) = mpsc::channel();
+        sender
+            .send(accepted_generate("before"))
+            .expect("queue before");
+        sender
+            .send(AcceptedCommand::Snapshot {
+                request_id: "snapshot".into(),
+                instance_id: InstanceId::new("instance-before").expect("valid instance"),
+            })
+            .expect("queue barrier");
+        sender
+            .send(accepted_generate("after"))
+            .expect("queue after");
+        let mut deferred = VecDeque::new();
+
+        let before = try_take_ready_generate(&receiver, &mut deferred).expect("before barrier");
+        assert_eq!(before.request_id, "before");
+        assert!(try_take_ready_generate(&receiver, &mut deferred).is_none());
+        assert!(matches!(
+            deferred.front(),
+            Some(AcceptedCommand::Snapshot { request_id, .. }) if request_id == "snapshot"
+        ));
+        assert!(try_take_ready_generate(&receiver, &mut deferred).is_none());
+
+        deferred.pop_front();
+        let after = try_take_ready_generate(&receiver, &mut deferred).expect("after barrier");
+        assert_eq!(after.request_id, "after");
+    }
+
+    #[test]
+    fn late_join_limit_cannot_exceed_active_batch_limit() {
+        let error = validate_config(LocalServerConfig {
+            max_active_batch_size: 3,
+            max_late_join_batch_size: 4,
+            ..LocalServerConfig::default()
+        })
+        .expect_err("late join wider than active batch must fail");
+        assert!(error.to_string().contains("within 1..=3"));
     }
 
     #[test]
@@ -960,7 +1212,7 @@ mod tests {
               "max_new_tokens": 2
             }"#,
         )
-        .expect_err("protocol v7 requires an explicit token stream policy");
+        .expect_err("protocol requires an explicit token stream policy");
         assert!(error.to_string().contains("stream_tokens"));
     }
 
@@ -979,7 +1231,7 @@ mod tests {
               "max_new_tokens": 2
             }"#,
         )
-        .expect_err("protocol v7 must reject caller-owned prefix tokens");
+        .expect_err("protocol must reject caller-owned prefix tokens");
         assert!(error.to_string().contains("prefix_lineage_tokens"));
     }
 
@@ -1014,6 +1266,7 @@ mod tests {
               "type": "open_state",
               "request_id": "rin:startup",
               "instance_id": "rin",
+              "persistence": "durable",
               "snapshot_root": "/state/rin"
             }"#,
         )
@@ -1023,10 +1276,32 @@ mod tests {
             WireCommand::OpenState {
                 request_id,
                 instance_id,
+                persistence: StatePersistence::Durable,
                 snapshot_root,
             } if request_id == "rin:startup"
                 && instance_id.as_str() == "rin"
-                && snapshot_root == Path::new("/state/rin")
+                && snapshot_root.as_deref() == Some(Path::new("/state/rin"))
+        ));
+    }
+
+    #[test]
+    fn wire_ephemeral_state_has_no_snapshot_root() {
+        let command: WireCommand = serde_json::from_str(
+            r#"{
+              "type": "open_state",
+              "request_id": "rin:memory:startup",
+              "instance_id": "rin.memory",
+              "persistence": "ephemeral"
+            }"#,
+        )
+        .expect("valid ephemeral state command");
+        assert!(matches!(
+            command,
+            WireCommand::OpenState {
+                persistence: StatePersistence::Ephemeral,
+                snapshot_root: None,
+                ..
+            }
         ));
     }
 
@@ -1037,7 +1312,7 @@ mod tests {
             r#", "input": [], "tools": []"#,
         ] {
             let command = format!(
-                r#"{{"type":"open_state","request_id":"rin:restore","instance_id":"rin","snapshot_root":"/state/rin"{extra}}}"#
+                r#"{{"type":"open_state","request_id":"rin:restore","instance_id":"rin","persistence":"durable","snapshot_root":"/state/rin"{extra}}}"#
             );
             assert!(serde_json::from_str::<WireCommand>(&command).is_err());
         }

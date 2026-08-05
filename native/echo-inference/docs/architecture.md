@@ -5,8 +5,8 @@
 This is the current implementation boundary for E.C.H.O. Chamber's local
 Qwen3.5-family MoE inference path. The primary admitted artifact is
 Qwen3.6-35B-A3B-MLX-4bit. The numerical model, resident execution, composite
-KV/GDN state, atomic durable publication, protocol-v7 adapter, and local
-thinking-session lifecycle are implemented.
+KV/GDN state, variable-width continuous batching, atomic durable publication,
+protocol-v9 adapter, and local multi-module lifecycle are implemented.
 
 Dated reports under `../evidence/` record the exact numerical and performance
 conditions tested at each milestone. Some reports predate this state design
@@ -29,12 +29,13 @@ harness evolve together, but Cargo remains independent from pnpm.
   executes the model, owns composite KV/GDN state, renders the admitted chat
   template, parses Qwen tool output, persists current state, and serves the
   local NDJSON protocol.
-- `@echo-chamber/native-inference-adapter` maps protocol version 7 to the
+- `@echo-chamber/native-inference-adapter` maps protocol version 9 to the
   provider-neutral `ModelPort`. It owns only process-local continuation
   capability and lifecycle metadata, never model tensors.
 - `@echo-chamber/local-runtime` owns one native child process, one stable
-  adapter object per E.C.H.O. existence, per-instance session exclusion, and
-  snapshotting at thinking-session boundaries.
+  main adapter plus optional memory and emotion adapters per E.C.H.O.
+  existence, per-state-lane exclusion, and main-state snapshotting at
+  thinking-session boundaries.
 
 There is deliberately no generic backend registry, interchangeable model
 plugin layer, OpenAI-compatible local server, or JavaScript model runtime in
@@ -45,36 +46,61 @@ this path.
 ```text
 ThinkingEngine session
   -> LocalNativeInferenceRuntime
-     -> stable NativeInferenceModel for one existence
-        -> protocol-v7 command over NDJSON
+     -> stable NativeInferenceModel for one state lane
+        -> protocol-v9 command over NDJSON
            -> one resident Rust model owner
               -> exclusive state transaction
-                 -> MLX/Metal execution
+                 -> variable-width MLX/Metal execution
                  -> commit or rollback
         -> completed provider-neutral output
-  -> session-boundary snapshot when state is dirty
+  -> session-boundary snapshot when the durable main state is dirty
      -> atomic current.safetensors replacement
 ```
 
 The resident engine loads the model plan, GPU owner, tokenizer, bound weights,
 and custom kernels once. Requests for different existences share those static
-resources but never share mutable inference state. Execution requires mutable
-access to the resident owner, so generations are serialized. The bounded
-request queue controls memory and backpressure; it is not a parallel batching
-scheduler.
+resources but never share mutable inference state. The production scheduler
+starts a lone request immediately, admits up to six already-ready state lanes
+before the first decode step, and permits late membership changes up to width
+four at sampled-token/state-advance boundaries. Requests beyond those bounds
+remain in the bounded queue. There is no wait-to-fill delay. One state lane
+still holds one exclusive transaction lease, so two requests cannot race a
+commit into the same lane.
 
-Parallel generation across different existences is planned but deliberately
-deferred. The current process can keep multiple isolated states resident and
-accept multiple outstanding requests, yet one mutable engine executes them in
-FIFO order. A future implementation must compare continuous batching with
-multiple execution contexts and preserve per-instance exclusion, cancellation,
-fair scheduling, bounded memory, and exact KV/GDN state isolation before this
-contract can claim parallel generation.
+The batch runtime left-pads unequal full-attention KV rows to one append
+offset, supplies per-row RoPE offsets and an explicit padding/causal mask,
+concatenates GDN state without a token-axis pad, and splits every row back into
+one compact independently owned state. Sampling slices model logits per row
+and applies the existing production sampler with that request's own seed and
+generated-output presence history. Official MLX-LM equal- and unequal-cache
+oracles, co-tenant replacement, row permutation, split/remerge continuation,
+join/leave/cancel transactions, EOS and length completion, and sampled tool
+continuations all passed the bounded gates.
+
+Different batch widths are not bit-exact because floating-point model execution
+depends on shape; the official MLX-LM path behaves the same way. Cross-shape
+identity is therefore not an admission invariant. Within a fixed shape, moving
+or replacing another row must leave the request's tokens and complete KV/GDN
+state exactly unchanged. Width six passed the official full-model oracle,
+production-sampler isolation, and a 6-to-1 shrink gate. The integrated stdio
+path additionally passed six-row admission, late joining, independent EOS and
+length departure, cancellation rollback with survivor commit, retry from the
+preceding commit, and exact per-lane prefix/state accounting. Context-length
+bucketing and the final admission choice between widths three through six
+remain workload policy rather than model-state architecture.
+
+Six admitted rows mean six independently owned state lanes. Each E.C.H.O.
+existence currently reserves a durable `main` lane and process-local `memory`
+and `emotion` lanes. The two auxiliary lanes may run together after a main
+boundary, but they cannot snapshot or mutate the main lane. Their results are
+integrated by the main thought path; memory and emotion do not consume each
+other's same-turn output.
 
 ## Composite state invariant
 
-For each E.C.H.O. existence, the process-local store contains either no state
-or one current `CommittedState<MlxInferenceState>`. A committed state binds:
+For each independently named state lane, the process-local store contains
+either no state or one current `CommittedState<MlxInferenceState>`. A
+committed state binds:
 
 - the stable E.C.H.O. instance ID;
 - the complete model identity: architecture plus config, weight, tokenizer,
@@ -87,13 +113,16 @@ attention layer must report the same length, and every state is validated
 against the admitted hybrid layer schedule, shape, dtype, and batch size.
 
 The store does not keep generations, revisions, text history, decoded
-assistant output, or a full token-ID history. State replacement is safe
-without a stale-write cursor because:
+assistant output, or a full token-ID history. A lane is registered as either
+`durable` or `ephemeral`. Only durable lanes have a filesystem owner and may
+publish `current.safetensors`; ephemeral lanes live until process shutdown.
+State replacement is safe without a stale-write cursor because:
 
 1. the local runtime excludes overlapping thinking sessions for one instance;
 2. the adapter excludes overlapping requests for its stable model object;
 3. the Rust store permits only one active lease per instance;
-4. the native process serializes model execution;
+4. the scheduler admits at most one request for a lane while batching distinct
+   lanes;
 5. the durable directory is held by one process-lifetime advisory owner lock.
 
 A pending transaction is never visible through `current()`. Successful commit
@@ -122,6 +151,19 @@ Production completions always advance a Qwen end-of-message token into state.
 Consequently a tool-result continuation can encode only the new Qwen tool
 envelope; it does not need the preceding text or a separately persisted full
 token sequence.
+
+This restriction makes the auxiliary-module boundary explicit. A memory or
+emotion invocation must finish with one valid module-update tool call. The
+runtime commits that closed tool-call state and retains its call ID in the
+TypeScript control flow. The next observation arrives as the result of that
+exact pending call, followed by the instruction for the next update call.
+Thus the auxiliary module is a one-call-per-observation lightweight tool loop,
+not a sequence of unrelated plain assistant messages. Appending a fabricated
+tool result after a normal text response is not an admitted continuation even
+though it is mechanically encodable. The adapter retains the ordered pending
+call IDs alongside its process-local response capability and rejects missing,
+reordered, mismatched, or non-tool-result continuation input before sending a
+native command.
 
 ### `new_session`
 
@@ -179,7 +221,9 @@ implemented; a cancelled or failed request rolls back in full.
 
 ## Durable publication and restart
 
-Each instance owns one directory:
+Each durable state lane owns one directory. In the current E.C.H.O. module
+layout this is the `main` lane; `memory` and `emotion` are intentionally
+process-local and have no directory:
 
 ```text
 <snapshot-directory>/<instance-id>/
@@ -226,27 +270,31 @@ earlier model request committed, that earlier current state is still
 snapshotted. A process crash can lose commits made since the last successful
 snapshot; resuming in the middle of that thinking session is unsupported.
 
-## Protocol version 7
+## Protocol version 9
 
 The local child-process protocol accepts only:
 
-- `open_state { request_id, instance_id, snapshot_root }`;
+- `open_state { request_id, instance_id, persistence: "durable",
+snapshot_root }`;
+- `open_state { request_id, instance_id, persistence: "ephemeral" }`;
 - `generate { request_id, instance_id, state_transition, stream_tokens, input,
 tools, max_new_tokens, sampling }`;
 - `cancel { request_id }`;
 - `snapshot { request_id, instance_id }`;
 - `shutdown`.
 
-State roots must be opened before generation or snapshot. A root is bound to
-one instance and one resident owner; later snapshot commands cannot redirect
-publication to a caller-selected path.
+State lanes must be opened before generation. A durable root is bound to one
+instance and one resident owner; later snapshot commands cannot redirect
+publication to a caller-selected path. An ephemeral lane must not provide a
+root and rejects snapshot commands.
 
-The main thread owns MLX and mutable inference. A reader thread remains able to
-mark cancellation while MLX executes, and a bounded writer channel provides
-backpressure for enabled diagnostic streams. `stream_tokens: false` is the
-production path and omits incremental decoding plus provisional token events.
-Active plus queued generation requests are bounded and duplicate request IDs
-fail admission.
+The main thread owns MLX and the continuous scheduler. A reader thread remains
+able to enqueue work or mark cancellation while MLX executes, and a bounded
+writer channel provides backpressure for enabled diagnostic streams.
+`stream_tokens: false` is the production path and omits incremental decoding
+plus provisional token events. Active plus queued generation requests are
+bounded and duplicate request IDs fail admission. The `ready` event advertises
+the outstanding-request, active-batch, and late-join limits.
 
 Terminal events have strict meanings:
 
@@ -296,8 +344,10 @@ Unit tests cover state ownership, rollback, transition mapping, protocol
 validation, fixed-path publication metadata, owner locking, staging cleanup,
 adapter cancellation, length completion handling, and local lifecycle
 coordination. MLX-linked Rust tests cover the existing operator and numerical
-fixtures. Real-model probes cover the full adapter flow and process restart;
-they must be rerun whenever the durable format or finish semantics change.
+fixtures. Real-model probes cover the full adapter flow, process restart,
+continuous membership, the three-module state-lane contract, and six resident
+16K states; they must be rerun whenever the durable format, finish semantics,
+chat continuation, or batch scheduler changes.
 
 Still outside the admitted production boundary:
 
@@ -306,5 +356,8 @@ Still outside the admitted production boundary:
 - multiple simultaneous native owners for one instance directory;
 - arbitrary Qwen chat-template changes or vision input;
 - Qwen3.5-122B-A10B and REAP-pruned model admission;
+- E.C.H.O. application orchestration for memory/emotion prompts, tools, and
+  domain persistence;
+- workload-derived admission and context-length bucketing policy;
 - proof that every broader prompt, context length, and thermal state retains
   the earlier performance envelope.

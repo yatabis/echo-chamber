@@ -295,6 +295,67 @@ pub(crate) fn sample_token(
         .map_err(EngineError::Mlx)
 }
 
+/// Samples one token per active batch row without sharing request-owned
+/// history or random-key state between rows.
+///
+/// The model logits may be evaluated as one batch, but each row is sliced back
+/// to the admitted single-request sampler. This preserves the production
+/// operation order and makes the request seed and presence-penalty history
+/// travel with the logical request rather than with its current batch slot.
+pub(crate) fn sample_token_rows(
+    gpu: &Gpu,
+    logits: &Array,
+    history_rows: &[Vec<u32>],
+    configs: &[SamplingConfig],
+    vocabulary_size: usize,
+) -> Result<Array, EngineError> {
+    let shape = logits.shape();
+    let [batch_size, sequence_length, observed_vocabulary_size] =
+        <[usize; 3]>::try_from(shape.clone()).map_err(|shape| {
+            EngineError::Unsupported(format!(
+                "batched generation logits must be rank 3, observed {shape:?}"
+            ))
+        })?;
+    if batch_size == 0
+        || sequence_length == 0
+        || observed_vocabulary_size != vocabulary_size
+        || history_rows.len() != batch_size
+        || configs.len() != batch_size
+    {
+        return Err(EngineError::Unsupported(format!(
+            "batched sampling shape or request rows drifted: logits={shape:?}, histories={}, configs={}, vocabulary={vocabulary_size}",
+            history_rows.len(),
+            configs.len()
+        )));
+    }
+
+    let mut tokens = Vec::with_capacity(batch_size);
+    for row in 0..batch_size {
+        let row_logits = gpu
+            .slice(
+                logits,
+                &[dimension(row, "sampling batch row")?, 0, 0],
+                &[
+                    dimension(row + 1, "sampling batch row stop")?,
+                    dimension(sequence_length, "sampling sequence length")?,
+                    dimension(vocabulary_size, "sampling vocabulary size")?,
+                ],
+                &[1, 1, 1],
+            )
+            .map_err(EngineError::Mlx)?;
+        tokens.push(sample_token(
+            gpu,
+            &row_logits,
+            &history_rows[row],
+            history_rows[row].len(),
+            configs[row],
+            vocabulary_size,
+        )?);
+    }
+    let references = tokens.iter().collect::<Vec<_>>();
+    gpu.concatenate(&references, 0).map_err(EngineError::Mlx)
+}
+
 fn last_logits(
     gpu: &Gpu,
     logits: &Array,
@@ -490,5 +551,34 @@ mod tests {
             .validate(100)
             .is_err()
         );
+    }
+
+    #[test]
+    fn batched_sampling_keeps_each_request_row_separate() {
+        let gpu = Gpu::new();
+        let logits = Array::from_f32_slice(&[0.0, 3.0, 1.0, -1.0, 4.0, 0.0], &[2, 1, 3])
+            .expect("two-row logits");
+        let tokens = sample_token_rows(
+            &gpu,
+            &logits,
+            &[Vec::new(), Vec::new()],
+            &[SamplingConfig::default(), SamplingConfig::default()],
+            3,
+        )
+        .expect("sample rows");
+        gpu.eval(&[&tokens]).expect("evaluate sampled rows");
+
+        assert_eq!(tokens.shape(), vec![2, 1]);
+        let first = gpu
+            .slice(&tokens, &[0, 0], &[1, 1], &[1, 1])
+            .and_then(|value| gpu.reshape(&value, &[]))
+            .and_then(|value| value.item_u32())
+            .expect("first sampled row");
+        let second = gpu
+            .slice(&tokens, &[1, 0], &[2, 1], &[1, 1])
+            .and_then(|value| gpu.reshape(&value, &[]))
+            .and_then(|value| value.item_u32())
+            .expect("second sampled row");
+        assert_eq!([first, second], [1, 1]);
     }
 }

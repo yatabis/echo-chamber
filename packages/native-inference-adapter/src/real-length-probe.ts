@@ -29,6 +29,7 @@ try {
     type: 'open_state',
     request_id: 'length-probe:open',
     instance_id: 'echo-native-length-probe',
+    persistence: 'durable',
     snapshot_root: stateRoot,
   });
   if (opened.restored) {

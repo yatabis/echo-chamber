@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use echo_mlx::{Array, DType, Gpu, RopeConfig, SafeTensors};
+use echo_mlx::{Array, DType, DynamicRopeConfig, Gpu, RopeConfig, SafeTensors};
 use serde::{Deserialize, Serialize};
 
 use super::decoder::{MoeKernel, execute_sparse_moe};
@@ -432,6 +432,8 @@ pub(crate) fn execute_attention(
         offset,
         causal,
         None,
+        None,
+        None,
         true,
     )
 }
@@ -458,6 +460,8 @@ pub(crate) fn execute_attention_runtime(
         offset,
         causal,
         None,
+        None,
+        None,
         false,
     )
 }
@@ -472,6 +476,8 @@ pub(crate) fn execute_attention_runtime_buffered_with_bound_weights(
     plan: &ModelPlan,
     offset: usize,
     causal: bool,
+    rope_offsets: Option<&Array>,
+    attention_mask: Option<&Array>,
 ) -> Result<AttentionExecution, EngineError> {
     let capacity =
         key_buffer.shape().get(2).copied().ok_or_else(|| {
@@ -486,6 +492,8 @@ pub(crate) fn execute_attention_runtime_buffered_with_bound_weights(
         plan,
         offset,
         causal,
+        rope_offsets,
+        attention_mask,
         Some(capacity),
         false,
     )
@@ -501,6 +509,8 @@ fn execute_attention_impl(
     plan: &ModelPlan,
     offset: usize,
     causal: bool,
+    rope_offsets: Option<&Array>,
+    attention_mask: Option<&Array>,
     cache_capacity: Option<usize>,
     capture_trace: bool,
 ) -> Result<AttentionExecution, EngineError> {
@@ -642,16 +652,41 @@ fn execute_attention_impl(
         input.dtype(),
         "initial attention values",
     )?;
-    let rope = RopeConfig {
-        dimensions: dimension_i32(plan.rotary_dimension, "rotary dimension")?,
-        traditional: false,
-        base: Some(plan.rope_base),
-        scale: 1.0,
-        offset: dimension_i32(offset, "attention offset")?,
-        frequencies: None,
+    let rotary_dimension = dimension_i32(plan.rotary_dimension, "rotary dimension")?;
+    let (rotated_queries, rotated_new_keys) = if let Some(rope_offsets) = rope_offsets {
+        validate_array(
+            rope_offsets,
+            &[batch_size],
+            DType::Int32,
+            "attention per-row RoPE offsets",
+        )?;
+        let rope = DynamicRopeConfig {
+            dimensions: rotary_dimension,
+            traditional: false,
+            base: Some(plan.rope_base),
+            scale: 1.0,
+            offsets: rope_offsets,
+            frequencies: None,
+        };
+        (
+            gpu.rope_dynamic(&queries, rope).map_err(EngineError::Mlx)?,
+            gpu.rope_dynamic(&new_keys, rope)
+                .map_err(EngineError::Mlx)?,
+        )
+    } else {
+        let rope = RopeConfig {
+            dimensions: rotary_dimension,
+            traditional: false,
+            base: Some(plan.rope_base),
+            scale: 1.0,
+            offset: dimension_i32(offset, "attention offset")?,
+            frequencies: None,
+        };
+        (
+            gpu.rope(&queries, rope).map_err(EngineError::Mlx)?,
+            gpu.rope(&new_keys, rope).map_err(EngineError::Mlx)?,
+        )
     };
-    let rotated_queries = gpu.rope(&queries, rope).map_err(EngineError::Mlx)?;
-    let rotated_new_keys = gpu.rope(&new_keys, rope).map_err(EngineError::Mlx)?;
     let (keys, values) = if cache_capacity.is_some() {
         let start = [0, 0, dimension_i32(offset, "attention cache offset")?, 0];
         let stop = [
@@ -707,15 +742,32 @@ fn execute_attention_impl(
     };
 
     let head_dimension = dimension_f32(plan.attention_head_dimension, "attention head dimension")?;
-    let attention_heads = gpu
-        .scaled_dot_product_attention(
+    let attention_scale = 1.0 / head_dimension.sqrt();
+    let attention_heads = if let Some(attention_mask) = attention_mask {
+        validate_array(
+            attention_mask,
+            &[batch_size, 1, sequence_length, logical_length],
+            DType::Bool,
+            "attention per-row mask",
+        )?;
+        gpu.scaled_dot_product_attention_with_mask(
             &rotated_queries,
             &attention_keys,
             &attention_values,
-            1.0 / head_dimension.sqrt(),
+            attention_scale,
+            attention_mask,
+        )
+        .map_err(EngineError::Mlx)?
+    } else {
+        gpu.scaled_dot_product_attention(
+            &rotated_queries,
+            &attention_keys,
+            &attention_values,
+            attention_scale,
             causal,
         )
-        .map_err(EngineError::Mlx)?;
+        .map_err(EngineError::Mlx)?
+    };
     let attention_flat = gpu
         .transpose(&attention_heads, &[0, 2, 1, 3])
         .and_then(|value| {

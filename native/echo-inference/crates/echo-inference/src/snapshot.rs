@@ -266,7 +266,7 @@ fn named_state_tensors(state: &MlxInferenceState) -> Vec<(String, &Array)> {
     tensors
 }
 
-fn restore_named_state(
+pub(crate) fn restore_named_state(
     tensors: &SafeTensors,
     plan: &ModelPlan,
 ) -> Result<MlxInferenceState, EngineError> {

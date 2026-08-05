@@ -80,7 +80,10 @@ async function produceCurrentState(): Promise<{
   try {
     const ready = await client.ready();
     const model = createModel(client, 42);
-    await model.openState(snapshotRoot);
+    await model.openState({
+      persistence: 'durable',
+      snapshotRoot,
+    });
     await model.generate({
       input: [
         {
@@ -120,7 +123,10 @@ async function restoreIntoNewSession(): Promise<{
   try {
     const ready = await client.ready();
     const model = createModel(client, 43);
-    const restoredState = await model.openState(snapshotRoot);
+    const restoredState = await model.openState({
+      persistence: 'durable',
+      snapshotRoot,
+    });
     const newSession = await model.generate({
       input: [
         {

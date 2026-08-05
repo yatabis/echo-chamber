@@ -22,6 +22,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--continuation-length", type=int, default=2)
     parser.add_argument("--generation-steps", type=int, default=2)
+    parser.add_argument("--second-prompt")
+    parser.add_argument("--batch-size", type=int)
     return parser.parse_args()
 
 
@@ -133,11 +135,17 @@ def run(
     output_directory: Path,
     continuation_length: int,
     generation_steps: int,
+    second_prompt: str | None,
+    batch_size: int | None,
 ) -> dict[str, Any]:
     if continuation_length <= 1:
         raise ValueError("continuation length must exceed one")
     if generation_steps <= 1:
         raise ValueError("generation steps must exceed one")
+    if batch_size is not None and batch_size <= 0:
+        raise ValueError("batch size must be positive")
+    if batch_size is not None and second_prompt is not None:
+        raise ValueError("batch size and second prompt are mutually exclusive")
 
     output_directory.mkdir(parents=True, exist_ok=True)
     fixture_path = output_directory / "full-model.safetensors"
@@ -147,19 +155,32 @@ def run(
     text_config = config["text_config"]
 
     model, tokenizer = load(str(model_path))
-    prompt_token_ids = tokenizer.apply_chat_template(
-        [{"role": "user", "content": PROMPT}],
-        tokenize=True,
-        add_generation_prompt=True,
+    prompts = (
+        [PROMPT] * batch_size
+        if batch_size is not None
+        else [PROMPT] + ([second_prompt] if second_prompt is not None else [])
     )
-    if len(prompt_token_ids) <= continuation_length:
+    prompt_token_rows = [
+        tokenizer.apply_chat_template(
+            [{"role": "user", "content": prompt}],
+            tokenize=True,
+            add_generation_prompt=True,
+        )
+        for prompt in prompts
+    ]
+    prompt_lengths = {len(tokens) for tokens in prompt_token_rows}
+    if len(prompt_lengths) != 1:
+        raise RuntimeError(
+            f"batch prompts must have equal token lengths, observed {sorted(prompt_lengths)}"
+        )
+    if len(prompt_token_rows[0]) <= continuation_length:
         raise RuntimeError("chat-template prompt is too short for the requested split")
     prefix_ids = mx.array(
-        [prompt_token_ids[:-continuation_length]],
+        [tokens[:-continuation_length] for tokens in prompt_token_rows],
         dtype=mx.int32,
     )
     continuation_ids = mx.array(
-        [prompt_token_ids[-continuation_length:]],
+        [tokens[-continuation_length:] for tokens in prompt_token_rows],
         dtype=mx.int32,
     )
 
@@ -305,16 +326,26 @@ def run(
     generated_token_values = [
         int(token) for token in expected_generated_tokens[0].tolist()
     ]
+    generated_token_rows = [
+        [int(token) for token in row]
+        for row in expected_generated_tokens.tolist()
+    ]
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "model_type": config["model_type"],
         "config_sha256": sha256_file(config_path),
         "prompt": PROMPT,
-        "prompt_token_ids": [int(token) for token in prompt_token_ids],
+        "prompt_token_ids": [int(token) for token in prompt_token_rows[0]],
+        "batch_prompts": prompts,
+        "batch_prompt_token_ids": [
+            [int(token) for token in row] for row in prompt_token_rows
+        ],
+        "batch_size": len(prompt_token_rows),
         "prefix_length": int(prefix_ids.shape[1]),
         "continuation_length": int(continuation_ids.shape[1]),
         "generation_steps": generation_steps,
         "expected_generated_tokens": generated_token_values,
+        "expected_generated_token_rows": generated_token_rows,
         "input_dtype": str(prefix_ids.dtype),
         "hidden_dtype": str(prefix_trace["embedding"].dtype),
         "logits_dtype": str(prefix_trace["logits"].dtype),
@@ -391,6 +422,8 @@ def main() -> None:
         arguments.output_dir.resolve(),
         arguments.continuation_length,
         arguments.generation_steps,
+        arguments.second_prompt,
+        arguments.batch_size,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
 

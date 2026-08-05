@@ -25,6 +25,10 @@ use super::snapshot::{CurrentStateOwner, PublishedMlxCheckpoint, RestoredMlxChec
 use super::weights::{BoundModelWeights, ShardedWeights};
 use super::{EngineError, ModelPlan, identify_model};
 
+mod continuous_batch;
+
+pub(crate) use continuous_batch::{BatchAdmission, BatchGenerationObserver};
+
 static NEXT_ENGINE_ID: AtomicU64 = AtomicU64::new(1);
 const DEFAULT_PREFILL_CHUNK_SIZE_TOKENS: usize = 2_048;
 const DEFAULT_PREFILL_CHUNK_AT_OR_ABOVE_TOKENS: usize = 8_192;
@@ -159,6 +163,11 @@ pub struct RuntimeMetrics {
     pub input_tokens_processed: usize,
     /// Number of tokens generated and advanced into state.
     pub generated_tokens: usize,
+    /// Largest decode batch width in which this request advanced a token.
+    pub maximum_decode_batch_size: usize,
+    /// Number of times this request's decode batch width changed after its
+    /// first state-advance step.
+    pub decode_batch_membership_changes: usize,
     /// Input executions plus one state-advancing execution per generated token.
     pub model_step_count: usize,
     /// Number of model executions used to process this request's input tokens.
@@ -249,15 +258,32 @@ pub trait GenerationObserver {
     fn on_token(&mut self, token: u32) -> Result<GenerationDirective, String>;
 }
 
-/// Result of binding one durable state root to the resident process.
+/// Storage lifetime selected when one independently mutable state lane opens.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StatePersistence {
+    /// State may be restored from and published to `current.safetensors`.
+    Durable,
+    /// State exists only inside the current resident process.
+    Ephemeral,
+}
+
+/// Result of registering one independently mutable state lane.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct OpenedState {
-    /// E.C.H.O. existence that now owns the directory lock.
+    /// Native identity of the registered state lane.
     pub instance_id: InstanceId,
+    /// Whether this lane has a durable authority or process-local lifetime.
+    pub persistence: StatePersistence,
     /// Whether `current.safetensors` was present and restored.
     pub restored: bool,
     /// Fixed path at which subsequent snapshots are atomically published.
-    pub current_path: std::path::PathBuf,
+    pub current_path: Option<std::path::PathBuf>,
+}
+
+enum StateOwner {
+    Durable(CurrentStateOwner),
+    Ephemeral,
 }
 
 /// A resident, single-model Qwen3.5-family execution owner.
@@ -274,7 +300,7 @@ pub struct ResidentEngine {
     moe_kernel: MoeKernel,
     weights: BoundModelWeights,
     states: StateStore<MlxInferenceState>,
-    state_owners: HashMap<InstanceId, CurrentStateOwner>,
+    state_owners: HashMap<InstanceId, StateOwner>,
 }
 
 struct ModelRun {
@@ -421,11 +447,47 @@ impl ResidentEngine {
         if let Some(restored) = restored {
             self.restore_authenticated_snapshot(restored)?;
         }
-        self.state_owners.insert(instance_id.clone(), owner);
+        self.state_owners
+            .insert(instance_id.clone(), StateOwner::Durable(owner));
         Ok(OpenedState {
             instance_id,
+            persistence: StatePersistence::Durable,
             restored: was_restored,
-            current_path,
+            current_path: Some(current_path),
+        })
+    }
+
+    /// Registers one process-local state lane without a filesystem authority.
+    ///
+    /// This is used for the memory and emotion modules: their committed state
+    /// remains available for delta-prefill and retry during the resident
+    /// process lifetime, but can never replace the main Echo checkpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError`] when this identity is already registered or
+    /// already has process-local state.
+    pub fn open_ephemeral_state(
+        &mut self,
+        instance_id: InstanceId,
+    ) -> Result<OpenedState, RuntimeError> {
+        if self.state_owners.contains_key(&instance_id)
+            || self.current_state(&instance_id).is_some()
+        {
+            return Err(RuntimeError::InvalidRequest {
+                detail: format!(
+                    "instance {} state is already open in this engine",
+                    instance_id.as_str()
+                ),
+            });
+        }
+        self.state_owners
+            .insert(instance_id.clone(), StateOwner::Ephemeral);
+        Ok(OpenedState {
+            instance_id,
+            persistence: StatePersistence::Ephemeral,
+            restored: false,
+            current_path: None,
         })
     }
 
@@ -456,15 +518,25 @@ impl ResidentEngine {
         &self,
         instance_id: &InstanceId,
     ) -> Result<PublishedMlxCheckpoint, RuntimeError> {
-        let owner =
-            self.state_owners
-                .get(instance_id)
-                .ok_or_else(|| RuntimeError::InvalidRequest {
+        let owner = match self.state_owners.get(instance_id) {
+            Some(StateOwner::Durable(owner)) => owner,
+            Some(StateOwner::Ephemeral) => {
+                return Err(RuntimeError::InvalidRequest {
+                    detail: format!(
+                        "instance {} is process-local and cannot publish a snapshot",
+                        instance_id.as_str()
+                    ),
+                });
+            }
+            None => {
+                return Err(RuntimeError::InvalidRequest {
                     detail: format!(
                         "instance {} has no open durable state owner",
                         instance_id.as_str()
                     ),
-                })?;
+                });
+            }
+        };
         let committed =
             self.current_state(instance_id)
                 .ok_or_else(|| RuntimeError::InvalidRequest {
@@ -513,6 +585,26 @@ impl ResidentEngine {
 
     pub(crate) const fn gpu(&self) -> &Gpu {
         &self.gpu
+    }
+
+    #[cfg(feature = "parallel-generation-diagnostics")]
+    pub(crate) const fn diagnostic_plan(&self) -> &ModelPlan {
+        &self.plan
+    }
+
+    #[cfg(feature = "parallel-generation-diagnostics")]
+    pub(crate) const fn diagnostic_weights(&self) -> &BoundModelWeights {
+        &self.weights
+    }
+
+    #[cfg(feature = "parallel-generation-diagnostics")]
+    pub(crate) const fn diagnostic_gdn_kernel(&self) -> &GdnKernel {
+        &self.gdn_kernel
+    }
+
+    #[cfg(feature = "parallel-generation-diagnostics")]
+    pub(crate) const fn diagnostic_moe_kernel(&self) -> &MoeKernel {
+        &self.moe_kernel
     }
 
     fn execute_with_queue_wait(
@@ -587,6 +679,8 @@ impl ResidentEngine {
                 cached_prefix_tokens,
                 input_tokens_processed,
                 generated_tokens: generated_token_count,
+                maximum_decode_batch_size: 1,
+                decode_batch_membership_changes: 0,
                 model_step_count: model_run
                     .state_advance_steps
                     .saturating_add(model_run.input_model_execution_count),

@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { emitEchoEvent } from '@echo-chamber/core/ports/echo-event';
 import type { EchoEventPort } from '@echo-chamber/core/ports/echo-event';
 import type {
+  ModelInputItem,
   ModelOutputItem,
   ModelPort,
   ModelRequest,
@@ -24,8 +25,10 @@ import type {
 import type {
   NativeCompletedEvent,
   NativeGenerateCommand,
+  NativeOpenStateCommand,
   NativeSamplingConfig,
   NativeSnapshotPublishedEvent,
+  NativeStatePersistence,
   NativeStateTransition,
 } from './protocol';
 
@@ -61,13 +64,20 @@ export interface NativeInferenceModelOptions {
 export interface NativeInferenceModelState {
   instanceId: string;
   stateOpened: boolean;
+  persistence?: NativeStatePersistence;
   hasState: boolean;
   snapshotDirty: boolean;
   currentPath?: string;
   responseToken?: string;
+  pendingToolCallIds?: string[];
   stateSequenceLength?: number;
   activeRequestId?: string;
 }
+
+/** Explicit storage authority used when one Native state lane opens. */
+export type NativeStateOpenOptions =
+  | { persistence: 'durable'; snapshotRoot: string }
+  | { persistence: 'ephemeral' };
 
 /**
  * Error returned after a length-limited generation was closed with EOS and
@@ -96,7 +106,8 @@ export class NativeInferenceIncompleteGenerationError extends Error {
  * only whether a live response token was issued in this process: token
  * presence requests continuation, while absence selects initial or
  * new-session from whether current state exists. Token contents are opaque and
- * intentionally neither decoded nor compared.
+ * intentionally neither decoded nor compared. Continuation input must still
+ * answer the exact pending tool calls emitted by the preceding completion.
  */
 export class NativeInferenceModel implements ModelPort {
   private readonly maxTokens: number;
@@ -107,11 +118,13 @@ export class NativeInferenceModel implements ModelPort {
   private readonly client: NativeInferenceClient;
   private readonly instanceId: string;
   private stateOpened = false;
+  private persistence: NativeStatePersistence | undefined;
   private hasState = false;
   private snapshotDirty = false;
   private currentPath: string | undefined;
   private stateSequenceLength: number | undefined;
   private responseToken: string | undefined;
+  private pendingToolCallIds: string[] = [];
   private toolFingerprint: string | undefined;
   private engineId: number | undefined;
   private activeRequestId: string | undefined;
@@ -135,33 +148,55 @@ export class NativeInferenceModel implements ModelPort {
   }
 
   /**
-   * Acquires this instance's durable owner lock and restores
-   * current.safetensors when present.
+   * Registers this state lane and optionally restores durable
+   * current.safetensors.
    */
-  async openState(snapshotRoot: string): Promise<NativeInferenceModelState> {
+  async openState(
+    options: NativeStateOpenOptions
+  ): Promise<NativeInferenceModelState> {
     if (this.stateOpened) {
       throw new Error('native instance state is already open');
     }
     const requestId = this.beginLifecycleRequest();
     try {
-      const event = await this.client.openState({
-        type: 'open_state',
-        request_id: requestId,
-        instance_id: this.instanceId,
-        snapshot_root: requireNonEmpty(snapshotRoot, 'snapshotRoot'),
-      });
+      const command: NativeOpenStateCommand =
+        options.persistence === 'durable'
+          ? {
+              type: 'open_state',
+              request_id: requestId,
+              instance_id: this.instanceId,
+              persistence: 'durable',
+              snapshot_root: requireNonEmpty(
+                options.snapshotRoot,
+                'snapshotRoot'
+              ),
+            }
+          : {
+              type: 'open_state',
+              request_id: requestId,
+              instance_id: this.instanceId,
+              persistence: 'ephemeral',
+            };
+      const event = await this.client.openState(command);
       if (event.instance_id !== this.instanceId) {
         throw new Error(
           `native opened instance ${event.instance_id} does not match ${this.instanceId}`
         );
       }
+      if (event.persistence !== options.persistence) {
+        throw new Error(
+          `native opened ${event.persistence} state, expected ${options.persistence}`
+        );
+      }
       this.stateOpened = true;
+      this.persistence = event.persistence;
       this.hasState = event.restored;
       this.snapshotDirty = false;
       this.currentPath = event.current_path;
       // A restored state intentionally does not recreate a live continuation
       // capability. The next request therefore starts a new thinking session.
       this.responseToken = undefined;
+      this.pendingToolCallIds = [];
       this.toolFingerprint = undefined;
       this.stateSequenceLength = undefined;
     } finally {
@@ -181,6 +216,21 @@ export class NativeInferenceModel implements ModelPort {
       );
     }
     const flow = this.classifyRequestFlow(request.previousResponseToken);
+    return await this.executeRequest(request, flow);
+  }
+
+  private async executeRequest(
+    request: ModelRequest,
+    flow: NativeRequestFlow
+  ): Promise<ModelResponse> {
+    if (!this.stateOpened) {
+      throw new Error('native instance state must be opened before generation');
+    }
+    if (this.activeRequestId !== undefined) {
+      throw new Error(
+        `native instance ${this.instanceId} already has an active generation`
+      );
+    }
     const requestId = this.nextRequestId();
     this.activeRequestId = requestId;
     try {
@@ -210,6 +260,9 @@ export class NativeInferenceModel implements ModelPort {
   async snapshot(): Promise<NativeSnapshotPublishedEvent> {
     if (!this.stateOpened || !this.hasState) {
       throw new Error('native instance has no current state to snapshot');
+    }
+    if (this.persistence !== 'durable') {
+      throw new Error('native ephemeral state cannot be snapshotted');
     }
     const requestId = this.beginLifecycleRequest();
     try {
@@ -244,6 +297,9 @@ export class NativeInferenceModel implements ModelPort {
     return {
       instanceId: this.instanceId,
       stateOpened: this.stateOpened,
+      ...(this.persistence === undefined
+        ? {}
+        : { persistence: this.persistence }),
       hasState: this.hasState,
       snapshotDirty: this.snapshotDirty,
       ...(this.currentPath === undefined
@@ -252,6 +308,9 @@ export class NativeInferenceModel implements ModelPort {
       ...(this.responseToken === undefined
         ? {}
         : { responseToken: this.responseToken }),
+      ...(this.pendingToolCallIds.length === 0
+        ? {}
+        : { pendingToolCallIds: [...this.pendingToolCallIds] }),
       ...(this.stateSequenceLength === undefined
         ? {}
         : { stateSequenceLength: this.stateSequenceLength }),
@@ -266,6 +325,9 @@ export class NativeInferenceModel implements ModelPort {
     requestId: string,
     flow: NativeRequestFlow
   ): { command: NativeGenerateCommand; toolFingerprint: string } {
+    if (flow === 'continuation') {
+      validateContinuationInput(request.input, this.pendingToolCallIds);
+    }
     const wireTools = request.tools.map(toNativeWireTool);
     const toolFingerprint = fingerprintTools(request.tools, wireTools);
     if (
@@ -309,9 +371,12 @@ export class NativeInferenceModel implements ModelPort {
     const responseToken = createResponseToken(event);
 
     this.hasState = true;
-    this.snapshotDirty = true;
+    this.snapshotDirty = this.persistence === 'durable';
     this.stateSequenceLength = event.response.state_sequence_length;
     this.responseToken = responseToken;
+    this.pendingToolCallIds = output
+      .filter((item) => item.type === 'tool_call')
+      .map((item) => item.callId);
     this.toolFingerprint = toolFingerprint;
     this.engineId = event.response.engine_id;
 
@@ -442,6 +507,33 @@ export class NativeInferenceModel implements ModelPort {
         content,
       },
     });
+  }
+}
+
+function validateContinuationInput(
+  input: readonly ModelInputItem[],
+  pendingToolCallIds: readonly string[]
+): void {
+  if (pendingToolCallIds.length === 0) {
+    throw new Error(
+      'native continuation requires a pending tool call from the preceding completion'
+    );
+  }
+  const resultCallIds = input.map((item) => {
+    if (!('type' in item) || item.type !== 'tool_result') {
+      throw new Error(
+        'native continuation accepts only results for the pending tool calls'
+      );
+    }
+    return item.callId;
+  });
+  if (
+    resultCallIds.length !== pendingToolCallIds.length ||
+    resultCallIds.some((callId, index) => callId !== pendingToolCallIds[index])
+  ) {
+    throw new Error(
+      `native continuation tool results do not match pending calls: expected ${JSON.stringify(pendingToolCallIds)}, observed ${JSON.stringify(resultCallIds)}`
+    );
   }
 }
 

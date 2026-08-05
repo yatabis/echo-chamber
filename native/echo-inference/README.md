@@ -8,16 +8,18 @@ process plus per-existence lifecycle.
 
 The admitted model family is Qwen3.5-style hybrid MoE, with
 Qwen3.6-35B-A3B-MLX-4bit as the current primary artifact. The implementation
-contains the complete batch-one model path: embeddings, GDN and full-attention
-layers, Q4/Q8 projections, sparse routed and shared experts, final
-normalization, sampling, chat rendering, tool parsing, and KV/GDN state carry.
+contains the complete model path plus variable-width continuous batching:
+embeddings, GDN and full-attention layers, Q4/Q8 projections, sparse routed
+and shared experts, final normalization, sampling, chat rendering, tool
+parsing, and KV/GDN state carry.
 The numerical path and retained performance work are described in
 `evidence/`; those dated reports remain historical evidence and may describe
 the older state protocol used when they were recorded.
 
 ## Current state contract
 
-One E.C.H.O. existence owns exactly one current composite inference state:
+One independently named state lane owns exactly one current composite
+inference state:
 
 - all GDN convolution and recurrent tensors;
 - all full-attention key/value tensors;
@@ -25,9 +27,19 @@ One E.C.H.O. existence owns exactly one current composite inference state:
   tokenizer, and chat-template digests.
 
 There is no revision history, rollback generation, current pointer, sidecar
-manifest, or separately persisted token sequence. Same-instance work is
+manifest, or separately persisted token sequence. Same-lane work is
 serialized, so the resident owner can replace the single current state
-directly. Different existences remain isolated while sharing one loaded model.
+directly. Different lanes remain isolated while sharing one loaded model.
+
+The local E.C.H.O. composition opens three stable lanes per existence:
+
+- `main`: durable and eligible to publish `current.safetensors`;
+- `memory`: process-local and ephemeral;
+- `emotion`: process-local and ephemeral.
+
+Memory and emotion may generate in parallel from their own KV/GDN states.
+They never commit into `main`, never snapshot, and do not consume each other's
+same-turn result. The main thought path integrates both outputs.
 
 The three request transitions are:
 
@@ -45,6 +57,16 @@ opaque, process-local continuation capability, not an LLM token or durable
 cursor. Its contents are not decoded or persisted. Restoring a process starts
 with state but no live response token, so its first request is necessarily a
 `new_session`.
+
+Exact `continuation` currently accepts only tool-result input. In particular,
+a persistent memory or emotion lane is a lightweight tool loop: each
+invocation ends in one valid update tool call, and the next observation is
+returned as the result of that exact pending call. A fabricated tool result
+after a normal assistant message is not an admitted semantic boundary. This
+constraint preserves the official Qwen chat-template prefix without replaying
+or separately storing the prior token sequence. The adapter rejects a
+continuation before native execution unless its ordered tool-result call IDs
+exactly match the preceding completion's pending calls.
 
 For the bounded cross-session quality experiment only,
 `ECHO_NATIVE_NEW_SESSION_GDN_POLICY=carry_recurrent_only` clears each GDN
@@ -70,9 +92,28 @@ cancelled or failed request currently rolls back the whole request. Restarting
 in the middle of one live thinking session is also outside the contract; only
 the last published session boundary is recoverable.
 
+## Continuous batching
+
+The production stdio scheduler starts a lone request immediately. Before its
+first decode step it may admit up to six already-ready state lanes; after
+decode begins, late joining is capped at width four. Membership changes occur
+only after a sampled token has advanced model state. Completed or cancelled
+rows are split back to compact, independently owned KV/GDN states while their
+survivors continue. Work beyond the active limit remains in the bounded queue.
+
+Batch widths are not required to match each other bit-for-bit because the
+floating-point execution shape changes. Admission instead requires exact
+official-MLX parity within each shape, co-tenant and row-position invariance,
+independent state ownership, and valid output. The retained 16K integrated
+probe found aggregate wall throughput effectively saturated at widths four
+through six. The hard capacity remains six; choosing a narrower cohort for a
+particular latency/fairness workload is an admission-policy decision rather
+than a state-layout change.
+
 ## Durable state
 
-Each instance directory contains one authoritative payload:
+Each durable lane directory contains one authoritative payload. The auxiliary
+memory and emotion lanes have no durable directory:
 
 ```text
 <snapshot-directory>/<instance-id>/
@@ -173,6 +214,36 @@ cargo run --release -p echo-inference \
   run-moe-performance-diagnostic \
   /absolute/path/to/model 1 3 128 \
   /absolute/path/to/local-result.json
+cargo run --release -p echo-inference \
+  --features parallel-generation-diagnostics -- \
+  run-parallel-generation-diagnostic \
+  /absolute/path/to/model 1 3 128 \
+  /absolute/path/to/local-result.json
+cargo run --release -p echo-inference \
+  --features parallel-generation-diagnostics -- \
+  run-resident-batch-oracle-parity \
+  /absolute/path/to/model \
+  /absolute/path/to/resident-batch-oracle
+cargo run --release -p echo-inference \
+  --features parallel-generation-diagnostics -- \
+  run-resident-batch-context-diagnostic \
+  /absolute/path/to/model 1 2 64 \
+  /absolute/path/to/local-context-result.json
+cargo run --release -p echo-inference \
+  --features parallel-generation-diagnostics -- \
+  run-production-batch-quality-diagnostic \
+  /absolute/path/to/model 1 2 64 4096 3 \
+  /absolute/path/to/local-quality-result.json
+cargo run --release -p echo-inference \
+  --features parallel-generation-diagnostics -- \
+  run-batch-width-scaling-diagnostic \
+  /absolute/path/to/model 6 1 2 64 \
+  /absolute/path/to/local-width-result.json
+cargo run --release -p echo-inference \
+  --features parallel-generation-diagnostics -- \
+  run-production-batch-width-scaling-diagnostic \
+  /absolute/path/to/model 6 1 2 64 \
+  /absolute/path/to/local-production-width-result.json
 cargo run --release -p echo-inference -- serve-stdio \
   /absolute/path/to/model \
   8
@@ -214,6 +285,38 @@ inputs instead of comparing it bit-for-bit with the single-execution state.
 or `shared_only`. Every mode except `full` deliberately changes model output
 and is valid only for fixed-length component-cost diagnosis.
 
+`run-parallel-generation-diagnostic` is also excluded from ordinary builds.
+It is the initial equal-length, simultaneous-arrival greedy comparison of
+production FIFO, two independent MLX streams, and a fixed batch of two.
+`run-resident-batch-oracle-parity` checks unequal resident caches against an
+official MLX-LM fixture. `run-resident-batch-context-diagnostic` compares FIFO
+and fixed batch at 4K, 16K, and 32K resident lengths. The production-quality
+diagnostic uses request-owned production sampling, fixed-row isolation, a
+mixed EOS/length boundary, and sampled two-turn tool workflows. Its arguments
+are warmup rounds, measured rounds, generated tokens, resident context tokens,
+and workflow seed-pair count.
+
+`run-batch-width-scaling-diagnostic` measures every fixed width from one
+through the requested maximum (currently at most six) at 4K, 16K, and 32K.
+It rotates execution order, reports aggregate and per-request decode rates plus
+Metal allocation, verifies same-shape co-tenant and row-permutation isolation
+at the maximum width, and exercises exact state accounting while membership
+shrinks one row at a time from the maximum to one. Its arguments are maximum
+batch width, warmup rounds, measured rounds, and generated tokens per row.
+`run-production-batch-width-scaling-diagnostic` applies the same width sweep
+at 4K with each row's current production sampling configuration, seed, and
+generated-token presence history kept request-owned. It repeats maximum-width
+co-tenant and row-permutation isolation under sampling.
+
+These diagnostics supplied the numerical and performance gates used by the
+production continuous scheduler. Different batch-width floating-point paths
+are not required to be bit-exact with each other; official MLX-LM exhibits the
+same shape dependence. Admission instead requires official-oracle parity
+within each shape, exact co-tenant and row-placement invariance, correct
+per-lane state ownership, and representative output quality. Raw JSON belongs
+in the ignored local diagnostic archive; retain conclusions under `evidence/`
+instead of committing repeated machine-local attempts.
+
 The parity manifests above describe oracle fixtures; they are unrelated to the
 production durable-state layout.
 
@@ -221,13 +324,13 @@ production durable-state layout.
 
 `serve-stdio` reads one JSON command per stdin line and writes one typed event
 per stdout line. The second argument bounds active plus waiting generation
-requests. Protocol version 7 admits:
+requests. Protocol version 9 admits:
 
-- `open_state`: bind an instance to a durable directory for this process
-  lifetime and restore `current.safetensors` if present;
+- `open_state`: register either a durable lane with a fixed snapshot root or
+  an ephemeral process-local lane;
 - `generate`: process one `initial`, `continuation`, or `new_session` request;
 - `cancel`: request rollback at the next cancellation boundary;
-- `snapshot`: atomically replace the opened instance's fixed current payload;
+- `snapshot`: atomically replace a durable lane's fixed current payload;
 - `shutdown`: close the resident owner.
 
 Every `generate` command must set `stream_tokens`. Production requests use
@@ -284,6 +387,33 @@ and verifies identical output, state length, and finish reason:
 ECHO_STREAM_OVERHEAD_ROUNDS=21 \
 ECHO_NATIVE_LIBRARY_PATH=/absolute/path/to/mlx-c/build:/absolute/path/to/mlx/lib \
 pnpm --filter @echo-chamber/native-inference-adapter probe:stream-overhead \
+  /absolute/path/to/echo-inference \
+  /absolute/path/to/Qwen3.6-35B-A3B-MLX-4bit
+```
+
+The production-scheduler probe covers six-row admission, late joining,
+independent cancellation, survivor commit, and retry from the prior state:
+
+```sh
+ECHO_NATIVE_LIBRARY_PATH=/absolute/path/to/mlx-c/build:/absolute/path/to/mlx/lib \
+pnpm --filter @echo-chamber/native-inference-adapter probe:continuous-batch \
+  /absolute/path/to/echo-inference \
+  /absolute/path/to/Qwen3.6-35B-A3B-MLX-4bit
+```
+
+The three-E.C.H.O. module probe exercises durable main lanes, ephemeral memory
+and emotion lanes, exact pending-tool continuations, cancellation retry, and
+main-only publication. The 16K soak reuses that valid tool loop while sweeping
+active widths three through six:
+
+```sh
+ECHO_NATIVE_LIBRARY_PATH=/absolute/path/to/mlx-c/build:/absolute/path/to/mlx/lib \
+pnpm --filter @echo-chamber/native-inference-adapter probe:module-workload \
+  /absolute/path/to/echo-inference \
+  /absolute/path/to/Qwen3.6-35B-A3B-MLX-4bit
+
+ECHO_NATIVE_LIBRARY_PATH=/absolute/path/to/mlx-c/build:/absolute/path/to/mlx/lib \
+pnpm --filter @echo-chamber/native-inference-adapter probe:16k-soak \
   /absolute/path/to/echo-inference \
   /absolute/path/to/Qwen3.6-35B-A3B-MLX-4bit
 ```
