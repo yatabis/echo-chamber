@@ -33,7 +33,15 @@ evidence. It also records the integrated protocol-v9 continuous scheduler,
 durable-main/ephemeral-auxiliary state-lane contract, real three-E.C.H.O. tool
 loop, cancellation retry, six-lane 16K soak, and the 2026-08-06 promotion of
 exact batched MoE and GDN decode fast paths through width six. Raw performance
-and diagnostic outputs remain local-only.
+and diagnostic outputs remain local-only. The same dated README also records
+the exact width-two-through-six production-sampling filter batch path and its
+both-order A/B promotion, plus the exact exercised replacement of the
+248,320-way top-p sort with top-k-first nucleus filtering. It also records the
+exact routed-expert gate/up-and-SwiGLU fusion, including the neutral high-width
+boundary and the positive both-order 16K result. The final sections reject a
+device-serial Q8 router projection fusion and retain only the exact,
+both-context-positive width-one shared-expert gate/up-and-SwiGLU fusion; the
+non-beneficial width-two-through-six shared trial remains local-only evidence.
 
 ## Local diagnostic archive
 

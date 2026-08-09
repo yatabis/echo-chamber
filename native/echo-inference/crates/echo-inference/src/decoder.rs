@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
+#[cfg(test)]
+use echo_mlx::QuantizedMatmulConfig;
 use echo_mlx::{
     Array, DType, GatherQuantizedMatmulConfig, Gpu, MetalKernel, MetalKernelDispatch, MetalOutput,
     SafeTensors,
@@ -154,8 +156,9 @@ const MOE_DECODE_ROUTER_SOURCE: &str = r"
         }
     ";
 
-// Fixed-shape specialization of MLX 0.32.0's affine `qmv_fast` arithmetic.
-// In particular, the BF16 four-value sum below is load-bearing for exactness.
+// Fixed-shape specialization of MLX 0.32.0's affine `qmv_fast` arithmetic,
+// followed by the compiled BF16 SwiGLU operation. In particular, the BF16
+// four-value sum and activation casts below are load-bearing for exactness.
 const MOE_DECODE_EXPERT_GATE_UP_SOURCE: &str = r"
         constexpr uint input_dimension = __INPUT_DIMENSION__;
         constexpr uint intermediate_dimension = __INTERMEDIATE_DIMENSION__;
@@ -266,12 +269,135 @@ const MOE_DECODE_EXPERT_GATE_UP_SOURCE: &str = r"
         for (uint row = 0; row < results_per_simdgroup; ++row) {
           gate_results[row] = simd_sum(gate_results[row]);
           up_results[row] = simd_sum(up_results[row]);
-          if (lane == 0) {
-            expert_gate[output_offset + row] =
-                static_cast<bfloat16_t>(gate_results[row]);
-            expert_up[output_offset + row] =
-                static_cast<bfloat16_t>(up_results[row]);
+        }
+        if (lane < results_per_simdgroup) {
+          auto gate = static_cast<bfloat16_t>(gate_results[lane]);
+          auto up = static_cast<bfloat16_t>(up_results[lane]);
+          auto sigmoid_tail = 1 / (1 + metal::exp(metal::abs(gate)));
+          bfloat16_t sigmoid = gate < 0
+              ? sigmoid_tail
+              : 1 - sigmoid_tail;
+          bfloat16_t activated_gate = gate * sigmoid;
+          expert_activated[output_offset + lane] = activated_gate * up;
+        }
+    ";
+
+// Rank-two shared-expert counterpart of the routed gate/up kernel. It keeps
+// MLX's affine-Q4 and BF16 SwiGLU operation order while avoiding two projection
+// outputs and one separate activation dispatch for every decode layer.
+const MOE_DECODE_SHARED_GATE_UP_SOURCE: &str = r"
+        constexpr uint input_dimension = __INPUT_DIMENSION__;
+        constexpr uint intermediate_dimension = __INTERMEDIATE_DIMENSION__;
+        constexpr uint rows_per_threadgroup = 8;
+        constexpr uint results_per_simdgroup = 4;
+        constexpr uint values_per_thread = 16;
+        constexpr uint block_size = 512;
+        constexpr uint group_size = 64;
+        constexpr uint groups_per_row = input_dimension / group_size;
+        constexpr uint bytes_per_row = input_dimension / 2;
+
+        auto batch_index = threadgroup_position_in_grid.z;
+        auto output_block = threadgroup_position_in_grid.y;
+        auto simd_group = simdgroup_index_in_threadgroup;
+        auto lane = thread_index_in_simdgroup;
+        auto output_row =
+            output_block * rows_per_threadgroup
+            + simd_group * results_per_simdgroup;
+
+        const device uchar* gate_weights =
+            (const device uchar*)shared_gate_weight
+            + output_row * bytes_per_row + lane * 8;
+        const device uchar* up_weights =
+            (const device uchar*)shared_up_weight
+            + output_row * bytes_per_row + lane * 8;
+        auto gate_scales = shared_gate_scales
+            + output_row * groups_per_row + lane / 4;
+        auto gate_biases = shared_gate_biases
+            + output_row * groups_per_row + lane / 4;
+        auto up_scales = shared_up_scales
+            + output_row * groups_per_row + lane / 4;
+        auto up_biases = shared_up_biases
+            + output_row * groups_per_row + lane / 4;
+        auto input_values = shared_input
+            + batch_index * input_dimension + lane * values_per_thread;
+
+        float gate_results[results_per_simdgroup] = {0.0f};
+        float up_results[results_per_simdgroup] = {0.0f};
+        float input_thread[values_per_thread];
+
+        for (uint block = 0; block < input_dimension; block += block_size) {
+          float input_sum = 0.0f;
+          for (uint index = 0; index < values_per_thread; index += 4) {
+            input_sum += input_values[index]
+                + input_values[index + 1]
+                + input_values[index + 2]
+                + input_values[index + 3];
+            input_thread[index] = input_values[index];
+            input_thread[index + 1] = input_values[index + 1] / 16.0f;
+            input_thread[index + 2] = input_values[index + 2] / 256.0f;
+            input_thread[index + 3] = input_values[index + 3] / 4096.0f;
           }
+
+          for (uint row = 0; row < results_per_simdgroup; ++row) {
+            const device ushort* gate_words = (const device ushort*)(
+                gate_weights + row * bytes_per_row);
+            const device ushort* up_words = (const device ushort*)(
+                up_weights + row * bytes_per_row);
+            float gate_accumulator = 0.0f;
+            float up_accumulator = 0.0f;
+            for (uint index = 0; index < values_per_thread / 4; ++index) {
+              auto x_offset = index * 4;
+              auto gate_word = gate_words[index];
+              auto up_word = up_words[index];
+              gate_accumulator +=
+                  input_thread[x_offset] * (gate_word & 0x000f)
+                  + input_thread[x_offset + 1] * (gate_word & 0x00f0)
+                  + input_thread[x_offset + 2] * (gate_word & 0x0f00)
+                  + input_thread[x_offset + 3] * (gate_word & 0xf000);
+              up_accumulator +=
+                  input_thread[x_offset] * (up_word & 0x000f)
+                  + input_thread[x_offset + 1] * (up_word & 0x00f0)
+                  + input_thread[x_offset + 2] * (up_word & 0x0f00)
+                  + input_thread[x_offset + 3] * (up_word & 0xf000);
+            }
+
+            auto row_group_offset = row * groups_per_row;
+            auto gate_scale =
+                static_cast<float>(gate_scales[row_group_offset]);
+            auto gate_bias =
+                static_cast<float>(gate_biases[row_group_offset]);
+            auto up_scale = static_cast<float>(up_scales[row_group_offset]);
+            auto up_bias = static_cast<float>(up_biases[row_group_offset]);
+            gate_results[row] +=
+                gate_scale * gate_accumulator + input_sum * gate_bias;
+            up_results[row] +=
+                up_scale * up_accumulator + input_sum * up_bias;
+          }
+
+          gate_weights += block_size / 2;
+          up_weights += block_size / 2;
+          gate_scales += block_size / group_size;
+          gate_biases += block_size / group_size;
+          up_scales += block_size / group_size;
+          up_biases += block_size / group_size;
+          input_values += block_size;
+        }
+
+        auto output_offset =
+            batch_index * intermediate_dimension + output_row;
+        for (uint row = 0; row < results_per_simdgroup; ++row) {
+          gate_results[row] = simd_sum(gate_results[row]);
+          up_results[row] = simd_sum(up_results[row]);
+        }
+        if (lane < results_per_simdgroup) {
+          auto gate = static_cast<bfloat16_t>(gate_results[lane]);
+          auto up = static_cast<bfloat16_t>(up_results[lane]);
+          auto sigmoid_tail = 1 / (1 + metal::exp(metal::abs(gate)));
+          bfloat16_t sigmoid = gate < 0
+              ? sigmoid_tail
+              : 1 - sigmoid_tail;
+          bfloat16_t activated_gate = gate * sigmoid;
+          shared_activated[output_offset + lane] = activated_gate * up;
         }
     ";
 
@@ -471,6 +597,7 @@ pub(crate) struct MoeKernel {
     decode_router_kernel: MetalKernel,
     decode_router_dispatches: Vec<MetalKernelDispatch>,
     decode_expert_gate_up: Option<MoeExpertGateUpKernel>,
+    decode_shared_gate_up: Option<MoeSharedGateUpKernel>,
     decode_routed_down_reduce: Option<MoeRoutedDownReduceKernel>,
     expert_count: usize,
     experts_per_token: usize,
@@ -481,6 +608,13 @@ pub(crate) struct MoeKernel {
 struct MoeExpertGateUpKernel {
     kernel: MetalKernel,
     dispatches: Vec<MetalKernelDispatch>,
+    input_dimension: usize,
+    intermediate_dimension: usize,
+}
+
+struct MoeSharedGateUpKernel {
+    kernel: MetalKernel,
+    dispatch: MetalKernelDispatch,
     input_dimension: usize,
     intermediate_dimension: usize,
 }
@@ -513,6 +647,7 @@ impl MoeKernel {
     pub(crate) fn new(plan: &ModelPlan) -> Result<Self, EngineError> {
         let mut kernel = Self::for_dimensions(plan.expert_count, plan.experts_per_token)?;
         kernel.decode_expert_gate_up = prepare_decode_expert_gate_up_kernel(plan)?;
+        kernel.decode_shared_gate_up = prepare_decode_shared_gate_up_kernel(plan)?;
         kernel.decode_routed_down_reduce = prepare_decode_routed_down_reduce_kernel(plan)?;
         #[cfg(feature = "moe-performance-diagnostics")]
         let kernel = Self {
@@ -579,6 +714,7 @@ impl MoeKernel {
             decode_router_kernel,
             decode_router_dispatches,
             decode_expert_gate_up: None,
+            decode_shared_gate_up: None,
             decode_routed_down_reduce: None,
             expert_count,
             experts_per_token,
@@ -626,14 +762,14 @@ impl MoeKernel {
         Ok((expert_indices, expert_scores))
     }
 
-    fn expert_gate_up_decode(
+    fn expert_gate_up_swiglu_decode(
         &self,
         gpu: &Gpu,
         input: &Array,
         expert_indices: &Array,
         weights: &BoundMoeWeights,
         batch_size: usize,
-    ) -> Result<Option<(Array, Array)>, EngineError> {
+    ) -> Result<Option<Array>, EngineError> {
         let Some(kernel) = &self.decode_expert_gate_up else {
             return Ok(None);
         };
@@ -659,13 +795,10 @@ impl MoeKernel {
                 dispatch,
             )
             .map_err(EngineError::Mlx)?;
-        let expert_up = outputs.pop().ok_or_else(|| {
-            EngineError::Unsupported("decode expert fusion omitted up projection".into())
+        let expert_activated = outputs.pop().ok_or_else(|| {
+            EngineError::Unsupported("decode expert fusion omitted SwiGLU output".into())
         })?;
-        let expert_gate = outputs.pop().ok_or_else(|| {
-            EngineError::Unsupported("decode expert fusion omitted gate projection".into())
-        })?;
-        Ok(Some((expert_gate, expert_up)))
+        Ok(Some(expert_activated))
     }
 
     fn supports_expert_gate_up_decode(
@@ -683,6 +816,59 @@ impl MoeKernel {
                 && input.dtype() == DType::BFloat16
                 && plan.hidden_size == kernel.input_dimension
                 && plan.moe_intermediate_size == kernel.intermediate_dimension
+        })
+    }
+
+    fn shared_gate_up_swiglu_decode(
+        &self,
+        gpu: &Gpu,
+        input: &Array,
+        weights: &BoundMoeWeights,
+        batch_size: usize,
+    ) -> Result<Option<Array>, EngineError> {
+        let Some(kernel) = &self.decode_shared_gate_up else {
+            return Ok(None);
+        };
+        if batch_size != 1 {
+            return Ok(None);
+        }
+        let mut outputs = kernel
+            .kernel
+            .apply_prepared(
+                gpu,
+                &[
+                    &weights.shared_gate.weight,
+                    &weights.shared_gate.scales,
+                    &weights.shared_gate.biases,
+                    &weights.shared_up.weight,
+                    &weights.shared_up.scales,
+                    &weights.shared_up.biases,
+                    input,
+                ],
+                &kernel.dispatch,
+            )
+            .map_err(EngineError::Mlx)?;
+        let activated = outputs.pop().ok_or_else(|| {
+            EngineError::Unsupported("decode shared fusion omitted SwiGLU output".into())
+        })?;
+        Ok(Some(activated))
+    }
+
+    fn supports_shared_gate_up_decode(
+        &self,
+        input: &Array,
+        batch_size: usize,
+        sequence_length: usize,
+        plan: &ModelPlan,
+        capture_trace: bool,
+    ) -> bool {
+        self.decode_shared_gate_up.as_ref().is_some_and(|kernel| {
+            !capture_trace
+                && batch_size == 1
+                && sequence_length == 1
+                && input.dtype() == DType::BFloat16
+                && plan.hidden_size == kernel.input_dimension
+                && plan.shared_expert_intermediate_size == kernel.intermediate_dimension
         })
     }
 
@@ -781,7 +967,7 @@ fn create_decode_expert_gate_up_kernel(
         )
         .replace("__SELECTED_COUNT__", &experts_per_token.to_string());
     let name = format!(
-        "moe_decode_expert_gate_up_bf16_q4_h{input_dimension}_m{intermediate_dimension}_e{expert_count}_top{experts_per_token}"
+        "moe_decode_expert_gate_up_swiglu_bf16_q4_h{input_dimension}_m{intermediate_dimension}_e{expert_count}_top{experts_per_token}"
     );
     let kernel = MetalKernel::new(
         &name,
@@ -795,24 +981,17 @@ fn create_decode_expert_gate_up_kernel(
             "expert_input",
             "expert_indices",
         ],
-        &["expert_gate", "expert_up"],
+        &["expert_activated"],
         &source,
     )
     .map_err(EngineError::Mlx)?;
     let dispatches = (1..=MAX_ACTIVE_BATCH_SIZE)
         .map(|batch_size| {
-            let output_shape = vec![batch_size, 1, experts_per_token, 1, intermediate_dimension];
             MetalKernel::prepare_dispatch(
-                &[
-                    MetalOutput {
-                        shape: output_shape.clone(),
-                        dtype: DType::BFloat16,
-                    },
-                    MetalOutput {
-                        shape: output_shape,
-                        dtype: DType::BFloat16,
-                    },
-                ],
+                &[MetalOutput {
+                    shape: vec![batch_size, 1, experts_per_token, 1, intermediate_dimension],
+                    dtype: DType::BFloat16,
+                }],
                 &[],
                 [
                     64,
@@ -827,6 +1006,69 @@ fn create_decode_expert_gate_up_kernel(
     Ok(MoeExpertGateUpKernel {
         kernel,
         dispatches,
+        input_dimension,
+        intermediate_dimension,
+    })
+}
+
+fn prepare_decode_shared_gate_up_kernel(
+    plan: &ModelPlan,
+) -> Result<Option<MoeSharedGateUpKernel>, EngineError> {
+    let compatible = plan.quantization_bits == 4
+        && plan.quantization_group_size == 64
+        && plan.quantization_mode == "affine"
+        && plan.hidden_size.is_multiple_of(512)
+        && plan.shared_expert_intermediate_size.is_multiple_of(8);
+    if !compatible {
+        return Ok(None);
+    }
+    Ok(Some(create_decode_shared_gate_up_kernel(
+        plan.hidden_size,
+        plan.shared_expert_intermediate_size,
+    )?))
+}
+
+fn create_decode_shared_gate_up_kernel(
+    input_dimension: usize,
+    intermediate_dimension: usize,
+) -> Result<MoeSharedGateUpKernel, EngineError> {
+    let source = MOE_DECODE_SHARED_GATE_UP_SOURCE
+        .replace("__INPUT_DIMENSION__", &input_dimension.to_string())
+        .replace(
+            "__INTERMEDIATE_DIMENSION__",
+            &intermediate_dimension.to_string(),
+        );
+    let name = format!(
+        "moe_decode_shared_gate_up_swiglu_bf16_q4_h{input_dimension}_m{intermediate_dimension}"
+    );
+    let kernel = MetalKernel::new(
+        &name,
+        &[
+            "shared_gate_weight",
+            "shared_gate_scales",
+            "shared_gate_biases",
+            "shared_up_weight",
+            "shared_up_scales",
+            "shared_up_biases",
+            "shared_input",
+        ],
+        &["shared_activated"],
+        &source,
+    )
+    .map_err(EngineError::Mlx)?;
+    let dispatch = MetalKernel::prepare_dispatch(
+        &[MetalOutput {
+            shape: vec![1, 1, intermediate_dimension],
+            dtype: DType::BFloat16,
+        }],
+        &[],
+        [64, intermediate_dimension / 8, 1],
+        [64, 1, 1],
+    )
+    .map_err(EngineError::Mlx)?;
+    Ok(MoeSharedGateUpKernel {
+        kernel,
+        dispatch,
         input_dimension,
         intermediate_dimension,
     })
@@ -1369,30 +1611,52 @@ fn execute_shared_expert(
     input: &Array,
     weights: &MoeWeightSource<'_>,
     plan: &ModelPlan,
-    batch_size: usize,
-    sequence_length: usize,
+    kernel: &MoeKernel,
     capture_trace: bool,
 ) -> Result<SharedExpertExecution, EngineError> {
-    let gate_projection = weights.apply_linear(gpu, input, MoeLinear::SharedGate, plan)?;
-    let up_projection = weights.apply_linear(gpu, input, MoeLinear::SharedUp, plan)?;
-    for (name, value) in [
-        ("shared gate projection", &gate_projection),
-        ("shared up projection", &up_projection),
-    ] {
-        validate_array(
-            value,
-            &[
-                batch_size,
-                sequence_length,
-                plan.shared_expert_intermediate_size,
-            ],
-            input.dtype(),
-            name,
-        )?;
-    }
-    let activated = gpu
-        .swiglu(&gate_projection, &up_projection)
-        .map_err(EngineError::Mlx)?;
+    let batch_size = input.shape()[0];
+    let sequence_length = input.shape()[1];
+    let fused_activated = if kernel.supports_shared_gate_up_decode(
+        input,
+        batch_size,
+        sequence_length,
+        plan,
+        capture_trace,
+    ) {
+        match weights {
+            MoeWeightSource::Bound(weights) => {
+                kernel.shared_gate_up_swiglu_decode(gpu, input, weights, batch_size)?
+            }
+            MoeWeightSource::Named { .. } => None,
+        }
+    } else {
+        None
+    };
+    let (gate_projection, up_projection, activated) = if let Some(activated) = fused_activated {
+        (None, None, activated)
+    } else {
+        let gate_projection = weights.apply_linear(gpu, input, MoeLinear::SharedGate, plan)?;
+        let up_projection = weights.apply_linear(gpu, input, MoeLinear::SharedUp, plan)?;
+        for (name, value) in [
+            ("shared gate projection", &gate_projection),
+            ("shared up projection", &up_projection),
+        ] {
+            validate_array(
+                value,
+                &[
+                    batch_size,
+                    sequence_length,
+                    plan.shared_expert_intermediate_size,
+                ],
+                input.dtype(),
+                name,
+            )?;
+        }
+        let activated = gpu
+            .swiglu(&gate_projection, &up_projection)
+            .map_err(EngineError::Mlx)?;
+        (Some(gate_projection), Some(up_projection), activated)
+    };
     let expert_output = weights.apply_linear(gpu, &activated, MoeLinear::SharedDown, plan)?;
     validate_array(
         &expert_output,
@@ -1412,6 +1676,12 @@ fn execute_shared_expert(
         .multiply(&gate, &expert_output)
         .map_err(EngineError::Mlx)?;
     let trace = if capture_trace {
+        let gate_projection = gate_projection.ok_or_else(|| {
+            EngineError::Unsupported("captured shared trace omitted gate projection".into())
+        })?;
+        let up_projection = up_projection.ok_or_else(|| {
+            EngineError::Unsupported("captured shared trace omitted up projection".into())
+        })?;
         Some(SharedExpertTrace {
             gate_projection,
             up_projection,
@@ -1463,16 +1733,7 @@ fn execute_sparse_moe_impl(
     #[cfg(feature = "moe-performance-diagnostics")]
     if performance_mode == MoePerformanceMode::SharedOnly {
         return Ok(MoeExecution {
-            output: execute_shared_expert(
-                gpu,
-                input,
-                weights,
-                plan,
-                batch_size,
-                sequence_length,
-                false,
-            )?
-            .output,
+            output: execute_shared_expert(gpu, input, weights, plan, kernel, false)?.output,
             trace: None,
         });
     }
@@ -1578,7 +1839,7 @@ fn execute_sparse_moe_impl(
         (&switch_inputs, &expert_indices),
         |(_, _, sorted_inputs, sorted_indices)| (sorted_inputs, sorted_indices),
     );
-    let fused_gate_up = if kernel.supports_expert_gate_up_decode(
+    let fused_expert_activated = if kernel.supports_expert_gate_up_decode(
         input,
         batch_size,
         sequence_length,
@@ -1586,7 +1847,7 @@ fn execute_sparse_moe_impl(
         capture_trace,
     ) {
         match weights {
-            MoeWeightSource::Bound(bound_weights) => kernel.expert_gate_up_decode(
+            MoeWeightSource::Bound(bound_weights) => kernel.expert_gate_up_swiglu_decode(
                 gpu,
                 gather_inputs,
                 gather_indices,
@@ -1597,33 +1858,6 @@ fn execute_sparse_moe_impl(
         }
     } else {
         None
-    };
-    let (expert_gate, expert_up) = if let Some(projections) = fused_gate_up {
-        projections
-    } else {
-        let expert_up = weights.apply_expert_linear(
-            gpu,
-            gather_inputs,
-            gather_indices,
-            MoeExpertLinear::Up,
-            plan.expert_count,
-            plan.moe_intermediate_size,
-            plan.hidden_size,
-            plan,
-            use_sorted_dispatch,
-        )?;
-        let expert_gate = weights.apply_expert_linear(
-            gpu,
-            gather_inputs,
-            gather_indices,
-            MoeExpertLinear::Gate,
-            plan.expert_count,
-            plan.moe_intermediate_size,
-            plan.hidden_size,
-            plan,
-            use_sorted_dispatch,
-        )?;
-        (expert_gate, expert_up)
     };
     let expert_projection_shape = if use_sorted_dispatch {
         vec![selection_count, 1, plan.moe_intermediate_size]
@@ -1636,21 +1870,55 @@ fn execute_sparse_moe_impl(
             plan.moe_intermediate_size,
         ]
     };
+    let (expert_gate, expert_up, expert_activated) =
+        if let Some(expert_activated) = fused_expert_activated {
+            (None, None, expert_activated)
+        } else {
+            let expert_up = weights.apply_expert_linear(
+                gpu,
+                gather_inputs,
+                gather_indices,
+                MoeExpertLinear::Up,
+                plan.expert_count,
+                plan.moe_intermediate_size,
+                plan.hidden_size,
+                plan,
+                use_sorted_dispatch,
+            )?;
+            let expert_gate = weights.apply_expert_linear(
+                gpu,
+                gather_inputs,
+                gather_indices,
+                MoeExpertLinear::Gate,
+                plan.expert_count,
+                plan.moe_intermediate_size,
+                plan.hidden_size,
+                plan,
+                use_sorted_dispatch,
+            )?;
+            validate_array(
+                &expert_up,
+                &expert_projection_shape,
+                input.dtype(),
+                "expert up projection",
+            )?;
+            validate_array(
+                &expert_gate,
+                &expert_projection_shape,
+                input.dtype(),
+                "expert gate projection",
+            )?;
+            let expert_activated = gpu
+                .swiglu(&expert_gate, &expert_up)
+                .map_err(EngineError::Mlx)?;
+            (Some(expert_gate), Some(expert_up), expert_activated)
+        };
     validate_array(
-        &expert_up,
+        &expert_activated,
         &expert_projection_shape,
         input.dtype(),
-        "expert up projection",
+        "expert activation",
     )?;
-    validate_array(
-        &expert_gate,
-        &expert_projection_shape,
-        input.dtype(),
-        "expert gate projection",
-    )?;
-    let expert_activated = gpu
-        .swiglu(&expert_gate, &expert_up)
-        .map_err(EngineError::Mlx)?;
     let fused_routed_output = if kernel.supports_routed_down_reduce_decode(
         input,
         batch_size,
@@ -1736,15 +2004,7 @@ fn execute_sparse_moe_impl(
             trace: None,
         });
     }
-    let shared = execute_shared_expert(
-        gpu,
-        input,
-        weights,
-        plan,
-        batch_size,
-        sequence_length,
-        capture_trace,
-    )?;
+    let shared = execute_shared_expert(gpu, input, weights, plan, kernel, capture_trace)?;
     let moe_output = gpu
         .add(&routed_output, &shared.output)
         .map_err(EngineError::Mlx)?;
@@ -1758,6 +2018,12 @@ fn execute_sparse_moe_impl(
         })?;
         let router_probabilities = router_probabilities.ok_or_else(|| {
             EngineError::Unsupported("captured MoE trace omitted router probabilities".into())
+        })?;
+        let expert_gate = expert_gate.ok_or_else(|| {
+            EngineError::Unsupported("captured MoE trace omitted expert gate projection".into())
+        })?;
+        let expert_up = expert_up.ok_or_else(|| {
+            EngineError::Unsupported("captured MoE trace omitted expert up projection".into())
         })?;
         let shared = shared.trace.ok_or_else(|| {
             EngineError::Unsupported("captured MoE trace omitted shared expert trace".into())
@@ -2189,7 +2455,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::cast_possible_wrap, clippy::float_cmp, clippy::too_many_lines)]
-    fn fused_decode_expert_gate_up_matches_mlx_qmv_exactly() {
+    fn fused_decode_expert_gate_up_swiglu_matches_mlx_exactly() {
         const INPUT_DIMENSION: usize = 2048;
         const INTERMEDIATE_DIMENSION: usize = 512;
         const EXPERT_COUNT: usize = 16;
@@ -2325,6 +2591,9 @@ mod tests {
                     },
                 )
                 .expect("reference up projection");
+            let expected_activated = gpu
+                .swiglu(&expected_gate, &expected_up)
+                .expect("reference SwiGLU");
             let dispatch = decode_dispatch_for_batch(
                 &kernel.dispatches,
                 batch_size,
@@ -2347,25 +2616,158 @@ mod tests {
                     ],
                     dispatch,
                 )
-                .expect("fused expert projections");
-            let actual_up = outputs.pop().expect("fused up projection");
-            let actual_gate = outputs.pop().expect("fused gate projection");
+                .expect("fused expert projection and SwiGLU");
+            let actual_activated = outputs.pop().expect("fused expert activation");
 
-            assert_eq!(actual_gate.shape(), expected_gate.shape());
-            assert_eq!(actual_up.shape(), expected_up.shape());
+            assert_eq!(actual_activated.shape(), expected_activated.shape());
             assert_eq!(
-                gpu.max_abs_difference(&actual_gate, &expected_gate)
-                    .expect("gate difference"),
+                gpu.max_abs_difference(&actual_activated, &expected_activated)
+                    .expect("activation difference"),
                 0.0,
-                "decode expert gate projection changed at batch size {batch_size}"
-            );
-            assert_eq!(
-                gpu.max_abs_difference(&actual_up, &expected_up)
-                    .expect("up difference"),
-                0.0,
-                "decode expert up projection changed at batch size {batch_size}"
+                "decode expert activation changed at batch size {batch_size}"
             );
         }
+    }
+
+    #[test]
+    #[allow(clippy::cast_possible_wrap, clippy::float_cmp, clippy::too_many_lines)]
+    fn fused_decode_shared_gate_up_swiglu_matches_mlx_exactly() {
+        const INPUT_DIMENSION: usize = 2048;
+        const INTERMEDIATE_DIMENSION: usize = 512;
+        const PACKED_INPUT_DIMENSION: usize = INPUT_DIMENSION / 8;
+        const GROUPS_PER_ROW: usize = INPUT_DIMENSION / 64;
+
+        let gpu = Gpu::new();
+        let kernel = create_decode_shared_gate_up_kernel(INPUT_DIMENSION, INTERMEDIATE_DIMENSION)
+            .expect("decode shared gate/up kernel");
+
+        let weight_count = INTERMEDIATE_DIMENSION * PACKED_INPUT_DIMENSION;
+        let mut gate_state = 0x1234_5678_u32;
+        let gate_words = (0..weight_count)
+            .map(|_| {
+                gate_state = gate_state
+                    .wrapping_mul(1_664_525)
+                    .wrapping_add(1_013_904_223);
+                (gate_state & 0x7fff_ffff) as i32
+            })
+            .collect::<Vec<_>>();
+        let mut up_state = 0x9abc_def0_u32;
+        let up_words = (0..weight_count)
+            .map(|_| {
+                up_state = up_state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (up_state & 0x7fff_ffff) as i32
+            })
+            .collect::<Vec<_>>();
+        let weight_shape = [INTERMEDIATE_DIMENSION, PACKED_INPUT_DIMENSION];
+        let gate_weight = Array::from_i32_slice(&gate_words, &weight_shape)
+            .and_then(|value| gpu.astype(&value, DType::Uint32))
+            .expect("shared gate weights");
+        let up_weight = Array::from_i32_slice(&up_words, &weight_shape)
+            .and_then(|value| gpu.astype(&value, DType::Uint32))
+            .expect("shared up weights");
+
+        let group_value_count = INTERMEDIATE_DIMENSION * GROUPS_PER_ROW;
+        let scale_values = (0..group_value_count)
+            .map(|index| f32::from(u8::try_from(index % 17 + 1).expect("scale")) / 128.0)
+            .collect::<Vec<_>>();
+        let bias_values = (0..group_value_count)
+            .map(|index| {
+                let bucket = i8::try_from(index % 11).expect("bias bucket") - 5;
+                f32::from(bucket) / 64.0
+            })
+            .collect::<Vec<_>>();
+        let group_shape = [INTERMEDIATE_DIMENSION, GROUPS_PER_ROW];
+        let gate_scales = Array::from_f32_slice(&scale_values, &group_shape)
+            .and_then(|value| gpu.astype(&value, DType::BFloat16))
+            .expect("shared gate scales");
+        let gate_biases = Array::from_f32_slice(&bias_values, &group_shape)
+            .and_then(|value| gpu.astype(&value, DType::BFloat16))
+            .expect("shared gate biases");
+        let up_scales = Array::from_f32_slice(
+            &scale_values.iter().rev().copied().collect::<Vec<_>>(),
+            &group_shape,
+        )
+        .and_then(|value| gpu.astype(&value, DType::BFloat16))
+        .expect("shared up scales");
+        let up_biases = Array::from_f32_slice(
+            &bias_values.iter().rev().copied().collect::<Vec<_>>(),
+            &group_shape,
+        )
+        .and_then(|value| gpu.astype(&value, DType::BFloat16))
+        .expect("shared up biases");
+
+        let batch_size = 1;
+        let mut input_state = 0x3141_5926_u32 ^ u32::try_from(batch_size).expect("batch seed");
+        let input_values = (0..batch_size * INPUT_DIMENSION)
+            .map(|_| {
+                input_state = input_state
+                    .wrapping_mul(1_664_525)
+                    .wrapping_add(1_013_904_223);
+                let bytes = input_state.to_le_bytes();
+                let sample = u16::from_le_bytes([bytes[2], bytes[3]]);
+                f32::from(sample) / 257.0 - 128.0
+            })
+            .collect::<Vec<_>>();
+        let input = Array::from_f32_slice(&input_values, &[batch_size, 1, INPUT_DIMENSION])
+            .and_then(|value| gpu.astype(&value, DType::BFloat16))
+            .expect("shared input");
+        let expected_gate = gpu
+            .quantized_matmul(
+                &input,
+                &gate_weight,
+                &gate_scales,
+                QuantizedMatmulConfig {
+                    biases: Some(&gate_biases),
+                    transpose: true,
+                    group_size: 64,
+                    bits: 4,
+                    mode: "affine",
+                },
+            )
+            .expect("reference shared gate projection");
+        let expected_up = gpu
+            .quantized_matmul(
+                &input,
+                &up_weight,
+                &up_scales,
+                QuantizedMatmulConfig {
+                    biases: Some(&up_biases),
+                    transpose: true,
+                    group_size: 64,
+                    bits: 4,
+                    mode: "affine",
+                },
+            )
+            .expect("reference shared up projection");
+        let expected_activated = gpu
+            .swiglu(&expected_gate, &expected_up)
+            .expect("reference shared SwiGLU");
+
+        let mut outputs = kernel
+            .kernel
+            .apply_prepared(
+                &gpu,
+                &[
+                    &gate_weight,
+                    &gate_scales,
+                    &gate_biases,
+                    &up_weight,
+                    &up_scales,
+                    &up_biases,
+                    &input,
+                ],
+                &kernel.dispatch,
+            )
+            .expect("fused shared projection and SwiGLU");
+        let actual_activated = outputs.pop().expect("fused shared activation");
+
+        assert_eq!(actual_activated.shape(), expected_activated.shape());
+        assert_eq!(
+            gpu.max_abs_difference(&actual_activated, &expected_activated)
+                .expect("shared activation difference"),
+            0.0,
+            "decode shared activation changed at batch size {batch_size}"
+        );
     }
 
     #[test]

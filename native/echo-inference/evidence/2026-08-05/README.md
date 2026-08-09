@@ -525,6 +525,280 @@ built from working trees based on
 the ignored local archive under
 `.artifacts/model-evaluation/native-inference/evidence/2026-08-06/`.
 
+## Batched production-sampling filters promotion — 2026-08-06
+
+The production sampler previously sliced every active row and independently
+ran its complete 248,320-vocabulary graph: presence penalty, log-probability
+normalization, top-p sorting and cumulative filtering, top-k filtering,
+temperature scaling, and categorical sampling. The retained path now batches
+only the deterministic full-vocabulary portion for widths two through six
+when every non-seed control is identical. Presence histories remain
+row-owned, and categorical sampling still uses one functional MLX key per
+request with the unchanged `seed + generated-token-index` derivation. Width
+one, greedy generation, and mixed sampling controls fall back to the previous
+row-by-row path.
+
+Fixed-logit tests covered every width from two through six in both FP32 and
+BF16. The retained top-k indices and finite sampling logits had maximum
+absolute difference `0.0` from the previous row-by-row graph, and sampled
+tokens were exact. Reversing all rows and changing another row's logits also
+left each logical request's sampled token unchanged.
+
+The integrated production A/B used the 4K resident state, one warmup, three
+measured 64-token rounds per width, and the admitted
+`0.7/0.8/top-20/presence-1.5` profile. The first run ordered baseline before
+candidate; the second ordered candidate before baseline. Values below are
+the median over all six measured attempts, not the mean of the two reported
+per-run medians.
+
+| Width | Row-by-row | Batched filters | Change |
+| ----: | ---------: | --------------: | -----: |
+|     1 |      79.09 |           78.87 | -0.28% |
+|     2 |     119.79 |          120.14 | +0.29% |
+|     3 |     135.03 |          136.16 | +0.83% |
+|     4 |     140.90 |          142.55 | +1.17% |
+|     5 |     145.42 |          147.19 | +1.22% |
+|     6 |     148.33 |          150.57 | +1.51% |
+
+Width six recovered approximately `0.60 ms` per six-token decode step. Width
+one is an unchanged-path control, and both affected runs improved at every
+width from two through six. TTFT did not improve uniformly: the combined
+medians for widths one through six changed from
+`27.22/35.94/46.78/59.77/74.03/86.59 ms` to
+`28.33/35.84/46.55/60.17/74.36/87.33 ms`; therefore this A/B supports a
+decode-throughput claim, not a TTFT claim.
+
+All baseline and candidate output-token hashes matched at every width. Both
+candidates passed the maximum-width co-tenant replacement and row-reversal
+checks, every retained KV/GDN state comparison had maximum absolute
+difference `0.0`, and all measured state lengths were exact. Active and peak
+Metal memory were effectively unchanged. The final allocator cache was
+154,123,468 bytes larger with the batched graph; this is reclaimable cache,
+not live tensor allocation, but it is retained as a measured cost.
+
+The row-by-row release binary SHA-256 was
+`2c60a11904424fdf5565e2e4c2420c86fad2ed157ca4a50a9c3fb65f3506f392`.
+The measured batched-filter candidate was
+`482aa271cc172f67cc52ed96ceb7c5069c26fa8131eb50d175667bb461018571`.
+The baseline was commit
+`011d8285227e87f3a72353e5dd4b112220e53243`; the candidate was built from its
+uncommitted sampling-only working-tree change. The four raw JSON outputs
+remain in the ignored local archive under
+`.artifacts/model-evaluation/native-inference/evidence/2026-08-06/`.
+
+## Top-k-first production nucleus filtering — 2026-08-06
+
+The batched production sampler still performed one complete 248,320-element
+ascending sort per row for top-p, even though the admitted profile discards
+every token outside top-20 immediately afterward. The retained implementation
+now selects top-20 first with the same `argpartition`, sorts only those 20
+log-probabilities, and reconstructs the top-p cumulative mass as:
+
+```text
+probability outside top-20 + cumulative probability inside sorted top-20
+```
+
+The full-vocabulary log-sum-exp and probability sum remain, so the nucleus
+threshold still accounts for every token. The retained candidates are
+scattered back into a 248,320-wide negative-infinity buffer before categorical
+sampling. The request-owned functional key, categorical input shape, presence
+history, and sampled-token/state boundary therefore remain unchanged.
+
+Mathematically this produces the same intersection of top-p and top-k. It is
+not a formal proof of identical floating-point threshold decisions for every
+possible adversarial logit vector because the outside probability uses a
+different reduction order. The exercised boundary was exact: width-two
+through-six FP32/BF16 tests had identical masks and finite values, and a
+248,320-wide BF16 distribution with the top-p boundary inside top-20 also had
+maximum mask/value difference `0.0` from the full-sort graph.
+
+The real-model 4K A/B used one warmup and three measured 64-token rounds per
+width in both execution orders. Values below are the median over all six
+measured attempts.
+
+| Width | Full sort | Top-k first | Change |
+| ----: | --------: | ----------: | -----: |
+|     1 |     78.89 |       80.67 | +2.26% |
+|     2 |    120.07 |      123.73 | +3.05% |
+|     3 |    136.65 |      141.79 | +3.76% |
+|     4 |    143.98 |      148.11 | +2.87% |
+|     5 |    148.48 |      152.42 | +2.65% |
+|     6 |    151.89 |      156.37 | +2.95% |
+
+Width six recovered `1.13 ms` per six-token decode step. Every measured output
+hash matched across both binaries and execution orders. Maximum-width
+co-tenant replacement, complete row reversal, state length, and every retained
+KV/GDN comparison remained exact.
+
+The 16K production-quality A/B also used both execution orders, with one
+warmup and three measured 64-token rounds. Serial aggregate throughput moved
+from 67.91 to 69.19 tok/s (`+1.89%`); fixed width two moved from 96.84 to
+98.97 tok/s (`+2.20%`). All output hashes matched, and every sampling-isolation,
+length-boundary, workflow-quality, and state gate passed. The lower percentage
+at 16K is consistent with a roughly context-independent sampling saving being
+a smaller fraction of the longer model step.
+
+Active and peak Metal allocation were effectively unchanged at 4K. The final
+allocator cache was approximately 140.45 MB smaller than the batched full-sort
+baseline. This supersedes the preceding full-sort production-throughput
+figures, not its row-batching decision or the separate greedy measurements.
+
+The full-sort baseline release SHA-256 was
+`482aa271cc172f67cc52ed96ceb7c5069c26fa8131eb50d175667bb461018571`.
+The measured top-k-first candidate was
+`dd9a333c019cf5f82b51fa58bf26dd1a4f43dee8cab6d71ee661fe4f1d7fa4b4`.
+The final release candidate was
+`d0705a9582cb4552fb52a0510685f824afae9e5dfe2db51221250a45208ac6d3`;
+it additionally removes duplicate fallback validation and shape inspection.
+Its final 4K rerun retained exact output/state isolation and reported
+`80.56/123.94/142.15/147.92/152.40/156.23 tok/s` at widths one through six.
+Raw A/B and final JSON remain only in the ignored local archive under
+`.artifacts/model-evaluation/native-inference/evidence/2026-08-06/`.
+
+## Fused routed gate/up and SwiGLU — 2026-08-06
+
+The exact decode-specialized routed-expert kernel previously emitted separate
+BF16 gate and up projections. A compiled MLX SwiGLU dispatch then read both
+arrays and produced the activation consumed by the routed down kernel. The
+retained implementation performs MLX's BF16 sigmoid and two BF16
+multiplications at the end of the existing Q4 gate/up kernel and emits only the
+activated tensor. This removes 40 SwiGLU dispatches per decode step and the two
+gate/up device intermediates. Trace capture, prefill, sorted expert dispatch,
+and unsupported model shapes keep the preceding MLX path.
+
+The integer literal types in MLX's sigmoid expression are load-bearing. Two
+seemingly equivalent float-literal formulations differed by one BF16 unit in
+the fixed-shape test and were rejected. Reproducing `1 / (1 + exp(abs(x)))`
+with the same BF16 overloads matched the compiled MLX SwiGLU exactly at every
+admitted width from one through six. The width-six official MLX-LM fixture then
+matched all continuation layer outputs, generation logits, eight generated
+steps, and all final KV/GDN tensors with maximum difference `0.0`.
+
+The real-model 4K production A/B used one warmup and three measured 64-token
+rounds per width in both execution orders. Values below are the median over all
+six measured attempts.
+
+| Width | Separate SwiGLU | Fused SwiGLU | Change |
+| ----: | --------------: | -----------: | -----: |
+|     1 |           80.57 |        81.99 | +1.76% |
+|     2 |          123.76 |       125.07 | +1.07% |
+|     3 |          141.60 |       142.71 | +0.78% |
+|     4 |          148.23 |       149.68 | +0.97% |
+|     5 |          153.57 |       153.36 | -0.14% |
+|     6 |          156.40 |       156.94 | +0.34% |
+
+Widths one through three improved independently in both orders. Width four
+was `-0.37%/+1.13%`, width five `-0.06%/+0.22%`, and width six
+`+0.99%/-0.87%`; the retained evidence therefore treats widths five and six as
+neutral rather than claiming a throughput gain. All measured output hashes
+matched across both binaries and orders. Maximum-width co-tenant replacement,
+row reversal, state lengths, and every retained KV/GDN comparison were exact.
+
+The 16K production-quality A/B was clearer. Across the same two execution
+orders and six measured attempts, serial aggregate throughput moved from 69.27
+to 70.33 tok/s (`+1.52%`) and fixed width two moved from 99.24 to 100.16 tok/s
+(`+0.93%`). The order-specific changes were `+1.47%/+1.71%` for serial and
+`+0.87%/+0.94%` for width two. Every output hash, sampling-isolation check,
+length boundary, workflow-quality check, and adoption gate passed. Active,
+peak, and final allocator memory were effectively unchanged.
+
+The retained top-k-first baseline SHA-256 was
+`d0705a9582cb4552fb52a0510685f824afae9e5dfe2db51221250a45208ac6d3`.
+The measured gate/up-SwiGLU release SHA-256 was
+`653c1fc06602497280c626543d24631d1534755876665da156712bcfcd393056`.
+Raw 4K and 16K A/B JSON remain only in the ignored local archive under
+`.artifacts/model-evaluation/native-inference/evidence/2026-08-06/`.
+
+## Q8 router-projection fusion rejected — 2026-08-06
+
+The local Qwen3.6 artifact uses an explicit affine-Q8, group-64 override for
+each 2,048-to-256 router projection; it is not Q4 despite the model's default
+quantization. A trial kernel fused that exact projection with the already
+retained 256-way BF16 routing reduction. Fixed-shape tests matched MLX exactly
+from width one through six, including selected indices and weights.
+
+The real-model router-only diagnostic rejected the design. With one warmup,
+three measured 128-token runs, and width one, median decode changed from
+`7.7031` to `8.3088 ms/token` (`+7.86%`). Removing all MoE work measured
+`6.7442 ms/token`, so the approximate router stage grew from `0.9589` to
+`1.5646 ms/token` (`+63.2%`). Output-token hashes were unchanged.
+
+The fused implementation forced the complete Q8 reduction into one
+threadgroup. MLX's standalone `qmv_fast` distributes this shape over 32
+threadgroups, so the saved dispatch and 256-logit intermediate did not repay
+the lost device parallelism. The trial source was removed. The baseline
+release SHA-256 was
+`637326a07bee8128e9665a693d4d5c7cd8ec65efbdfefe23be4d40f28fb49226`;
+the rejected candidate was
+`d673341379f9caa09219119fab5b8a0a5887bb22ff16d7a98e94e60d13d96817`.
+
+## Width-one shared gate/up and SwiGLU fusion — 2026-08-06
+
+The retained shared-expert decode path now performs the two affine-Q4
+projections and MLX's exact BF16 SwiGLU expression in one fixed-shape Metal
+kernel at active width one. It emits only the activated shared-expert tensor,
+removing two projection outputs and one activation dispatch per layer. Trace
+capture, prefill, unsupported model shapes, and active widths two through six
+continue through the preceding MLX operations.
+
+A separate trial reproduced MLX 0.32.0's `qmv_wide` accumulation order for
+widths two through six and was bit-exact in the fixed-shape test. Its 4K
+production A/B did not support promotion. The order-specific throughput
+changes for widths one through six were respectively
+`+0.79/+1.21%`, `+0.32/-0.62%`, `+0.21/+0.17%`,
+`-0.36/+0.68%`, `-0.62/-1.29%`, and `+1.47/+0.21%`.
+Width five regressed in both orders, while the apparent gains at the other
+batched widths were too small or inconsistent to justify the extra kernels.
+All `qmv_wide` trial code was therefore removed.
+
+The measured width-one comparison used a 4K resident state, production sampling,
+one warmup, seven measured 128-token rounds, and a width-two unchanged-path
+control:
+
+| Width | Baseline median | Candidate median | Median change | Baseline mean | Candidate mean | Mean change |
+| ----: | --------------: | ---------------: | ------------: | ------------: | -------------: | ----------: |
+|     1 |           82.41 |            83.20 |        +0.96% |         82.38 |          83.09 |      +0.87% |
+|     2 |          125.01 |           124.84 |        -0.14% |        124.98 |         124.89 |      -0.07% |
+
+The width-one mean difference was `0.713 tok/s`, approximately 4.66 times the
+unpaired standard error of these measured samples. Median TTFT changed from
+`24.71` to `24.58 ms`. Width two executes identical code in both binaries;
+its small negative observation is retained as the local noise control. Every
+state-length and maximum-width isolation check passed.
+
+At 16K, both execution orders again improved the affected serial path:
+`70.26 -> 70.88 tok/s` (`+0.87%`) and
+`70.46 -> 70.84 tok/s` (`+0.55%`). The mean of the two order-specific medians
+was `70.36 -> 70.86 tok/s` (`+0.71%`). The unchanged fixed-width-two control
+was effectively neutral at approximately `100.05 -> 100.00 tok/s`. All output
+hashes, sampling-isolation comparisons, mixed EOS/length state boundaries,
+and sampled tool-workflow quality gates passed.
+
+The fixed-shape width-one kernel matched the preceding MLX projection plus
+SwiGLU with maximum absolute difference `0.0`. More importantly, the official
+width-one MLX-LM full-model fixture with SHA-256
+`600bfc53c5fbb4404e040088136c968826962fbe691d800c99f351568dce801c`
+matched every layer output, logits, generated token, and final KV/GDN tensor
+with maximum difference `0.0`. The width-six fallback fixture also remained
+exact over eight generated steps.
+
+The baseline release SHA-256 was
+`637326a07bee8128e9665a693d4d5c7cd8ec65efbdfefe23be4d40f28fb49226`.
+The measured width-one candidate was
+`ea03fe10d4761b4b55b0761594b513e4fd59d4a0c0c11c8e074c50ac3cddda16`.
+The lint-only follow-up removed two redundant private helper arguments without
+changing the model graph. Its final-source release SHA-256 was
+`06f643f6d937f341fe97104925d021a2d6a82792941b56a4753d20407d04f6e5`.
+That binary reran the 4K seven-round probe at a width-one median of
+`83.15 tok/s` (`+0.90%` over the same baseline) with every state check exact,
+and reran the width-one full-model oracle at maximum difference `0.0`. The
+final-source attempt contained intermittent system-wide stalls affecting both
+the changed width-one path and unchanged width-two control, so its means are
+not used as a cleaner replacement for the counterbalanced results above.
+Raw router, shared-only, 4K, and 16K attempts remain only in the ignored local
+archive under
+`.artifacts/model-evaluation/native-inference/evidence/2026-08-06/`.
+
 ## Interpretation and remaining work
 
 The combined evidence supports the implemented hard maximum of six and
