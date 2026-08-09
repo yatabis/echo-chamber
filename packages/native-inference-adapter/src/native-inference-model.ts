@@ -12,6 +12,7 @@ import type {
   ModelUsage,
 } from '@echo-chamber/core/ports/model';
 
+import { NativeTokenListenerCompletionError } from './native-inference-client';
 import {
   toModelOutputItem,
   toNativeWireInput,
@@ -110,13 +111,14 @@ export class NativeInferenceIncompleteGenerationError extends Error {
  * answer the exact pending tool calls emitted by the preceding completion.
  */
 export class NativeInferenceModel implements ModelPort {
-  private readonly maxTokens: number;
+  private readonly maxTokens: number | undefined;
   private readonly sampling: Omit<NativeSamplingConfig, 'seed'>;
   private readonly seedSource: () => number;
   private readonly events: EchoEventPort | undefined;
   private readonly onToken: NativeTokenListener | undefined;
   private readonly client: NativeInferenceClient;
   private readonly instanceId: string;
+  private resolvedMaxTokens: number | undefined;
   private stateOpened = false;
   private persistence: NativeStatePersistence | undefined;
   private hasState = false;
@@ -128,6 +130,7 @@ export class NativeInferenceModel implements ModelPort {
   private toolFingerprint: string | undefined;
   private engineId: number | undefined;
   private activeRequestId: string | undefined;
+  private stopping = false;
   private requestSequence = 0;
 
   /**
@@ -137,8 +140,11 @@ export class NativeInferenceModel implements ModelPort {
   constructor(options: NativeInferenceModelOptions) {
     this.client = options.client;
     this.instanceId = requireNonEmpty(options.instanceId, 'instanceId');
-    this.maxTokens = options.maxTokens ?? 32_768;
-    if (!Number.isSafeInteger(this.maxTokens) || this.maxTokens < 1) {
+    this.maxTokens = options.maxTokens;
+    if (
+      this.maxTokens !== undefined &&
+      (!Number.isSafeInteger(this.maxTokens) || this.maxTokens < 1)
+    ) {
       throw new Error('maxTokens must be a positive safe integer');
     }
     this.sampling = options.sampling ?? ECHO_NATIVE_PRODUCTION_SAMPLING;
@@ -156,6 +162,14 @@ export class NativeInferenceModel implements ModelPort {
   ): Promise<NativeInferenceModelState> {
     if (this.stateOpened) {
       throw new Error('native instance state is already open');
+    }
+    const ready = await this.client.ready();
+    const resolvedMaxTokens =
+      this.maxTokens ?? ready.max_new_tokens_per_request;
+    if (resolvedMaxTokens > ready.max_new_tokens_per_request) {
+      throw new Error(
+        `maxTokens ${resolvedMaxTokens} exceeds resident owner limit ${ready.max_new_tokens_per_request}`
+      );
     }
     const requestId = this.beginLifecycleRequest();
     try {
@@ -189,6 +203,7 @@ export class NativeInferenceModel implements ModelPort {
         );
       }
       this.stateOpened = true;
+      this.resolvedMaxTokens = resolvedMaxTokens;
       this.persistence = event.persistence;
       this.hasState = event.restored;
       this.snapshotDirty = false;
@@ -209,6 +224,9 @@ export class NativeInferenceModel implements ModelPort {
   async generate(request: ModelRequest): Promise<ModelResponse> {
     if (!this.stateOpened) {
       throw new Error('native instance state must be opened before generation');
+    }
+    if (this.stopping) {
+      throw new Error(`native instance ${this.instanceId} is stopping`);
     }
     if (this.activeRequestId !== undefined) {
       throw new Error(
@@ -234,14 +252,42 @@ export class NativeInferenceModel implements ModelPort {
     const requestId = this.nextRequestId();
     this.activeRequestId = requestId;
     try {
-      const prepared = this.prepareCommand(request, requestId, flow);
-      const event = await this.client.generate(prepared.command, this.onToken);
-      return await this.acceptCompleted(
+      const prepared = this.prepareCommand(
         request,
-        prepared.toolFingerprint,
-        event,
-        flow
+        requestId,
+        flow,
+        this.requireResolvedMaxTokens()
       );
+      try {
+        const event = await this.client.generate(
+          prepared.command,
+          this.onToken
+        );
+        return await this.acceptCompleted(
+          request,
+          prepared.toolFingerprint,
+          event,
+          flow
+        );
+      } catch (error) {
+        if (!(error instanceof NativeTokenListenerCompletionError)) {
+          throw error;
+        }
+        try {
+          await this.acceptCompleted(
+            request,
+            prepared.toolFingerprint,
+            error.completedEvent,
+            flow
+          );
+        } catch (completionError) {
+          throw new AggregateError(
+            [completionError, error.listenerError],
+            'native generation committed after a token listener error, but completion handling also failed'
+          );
+        }
+        throw error.listenerError;
+      }
     } finally {
       this.activeRequestId = undefined;
     }
@@ -254,6 +300,11 @@ export class NativeInferenceModel implements ModelPort {
     }
     await this.client.cancel(this.activeRequestId);
     return true;
+  }
+
+  /** Permanently rejects generation requests admitted after owner shutdown begins. */
+  stopAcceptingGeneration(): void {
+    this.stopping = true;
   }
 
   /** Atomically replaces the opened instance's current.safetensors. */
@@ -323,7 +374,8 @@ export class NativeInferenceModel implements ModelPort {
   private prepareCommand(
     request: ModelRequest,
     requestId: string,
-    flow: NativeRequestFlow
+    flow: NativeRequestFlow,
+    maxTokens: number
   ): { command: NativeGenerateCommand; toolFingerprint: string } {
     if (flow === 'continuation') {
       validateContinuationInput(request.input, this.pendingToolCallIds);
@@ -352,11 +404,18 @@ export class NativeInferenceModel implements ModelPort {
         stream_tokens: this.onToken !== undefined,
         input: request.input.map(toNativeWireInput),
         tools: flow === 'continuation' ? [] : wireTools,
-        max_new_tokens: this.maxTokens,
+        max_new_tokens: maxTokens,
         sampling: { ...this.sampling, seed },
       },
       toolFingerprint,
     };
+  }
+
+  private requireResolvedMaxTokens(): number {
+    if (this.resolvedMaxTokens === undefined) {
+      throw new Error('native generation limit was not resolved at state open');
+    }
+    return this.resolvedMaxTokens;
   }
 
   private async acceptCompleted(
@@ -515,6 +574,9 @@ function validateContinuationInput(
   pendingToolCallIds: readonly string[]
 ): void {
   if (pendingToolCallIds.length === 0) {
+    if (input.length === 0) {
+      return;
+    }
     throw new Error(
       'native continuation requires a pending tool call from the preceding completion'
     );

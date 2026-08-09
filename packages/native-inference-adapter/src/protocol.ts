@@ -5,7 +5,7 @@ import type {
 } from '@echo-chamber/core/ports/model';
 
 /** Exact native wire contract required by this adapter. */
-export const NATIVE_INFERENCE_PROTOCOL_VERSION = 9;
+export const NATIVE_INFERENCE_PROTOCOL_VERSION = 10;
 
 /** Sampling controls admitted by the specialized native engine. */
 export interface NativeSamplingConfig {
@@ -121,7 +121,8 @@ export interface NativeRuntimeMetrics {
   input_execution_nanos: number;
   input_graph_construction_nanos: number;
   input_materialization_nanos: number;
-  first_generated_token_nanos?: number;
+  /** First sampled-token latency, or null when no token was generated. */
+  first_generated_token_nanos: number | null;
   decode_execution_nanos: number;
   decode_graph_construction_nanos: number;
   decode_schedule_nanos: number;
@@ -130,7 +131,8 @@ export interface NativeRuntimeMetrics {
   model_execution_nanos: number;
   request_nanos: number;
   committed_state_logical_nbytes: number;
-  metal_memory: NativeMetalMemoryStats;
+  /** Post-commit allocator counters, or null when MLX could not observe them. */
+  metal_memory: NativeMetalMemoryStats | null;
 }
 
 /** Process-wide MLX Metal allocator observations at one native boundary. */
@@ -138,6 +140,17 @@ export interface NativeMetalMemoryStats {
   active_nbytes: number;
   cache_nbytes: number;
   peak_nbytes: number;
+}
+
+/** Requires allocator counters for a diagnostic that cannot run without them. */
+export function requireNativeMetalMemory(
+  metrics: NativeRuntimeMetrics,
+  label: string
+): NativeMetalMemoryStats {
+  if (metrics.metal_memory === null) {
+    throw new Error(`${label} has no post-commit Metal memory observation`);
+  }
+  return metrics.metal_memory;
 }
 
 /** State-advancing native response included in a completed event. */
@@ -201,6 +214,7 @@ export type NativeWireEvent =
       engine: Record<string, unknown>;
       eos_token_id: number;
       chat_template_sha256: string;
+      max_new_tokens_per_request: number;
       max_outstanding_requests: number;
       max_active_batch_size: number;
       max_late_join_batch_size: number;
@@ -353,16 +367,38 @@ function validateEventEnvelope(
     return;
   }
   requireString(event, 'request_id');
-  if (event.event === 'completed') {
-    validateCompletedEvent(event);
-    return;
-  }
-  if (event.event === 'state_opened') {
-    validateStateOpenedEvent(event);
-    return;
-  }
-  if (event.event === 'snapshot_published') {
-    validateSnapshotPublishedEvent(event);
+  validateRequestEvent(event);
+}
+
+function validateRequestEvent(event: Record<string, unknown>): void {
+  switch (event.event) {
+    case 'queued':
+      requireNonnegativeSafeInteger(event, 'outstanding_requests');
+      return;
+    case 'started':
+      requireNonnegativeSafeInteger(event, 'prompt_tokens');
+      return;
+    case 'token':
+      validateTokenEvent(event);
+      return;
+    case 'completed':
+      validateCompletedEvent(event);
+      return;
+    case 'cancel_acknowledged':
+      requireBoolean(event, 'accepted');
+      return;
+    case 'cancelled':
+      return;
+    case 'state_opened':
+      validateStateOpenedEvent(event);
+      return;
+    case 'snapshot_published':
+      validateSnapshotPublishedEvent(event);
+      return;
+    default:
+      throw new Error(
+        `unsupported native inference request event: ${String(event.event)}`
+      );
   }
 }
 
@@ -373,6 +409,7 @@ function validateReadyEvent(event: Record<string, unknown>): void {
   if (!isRecord(event.engine)) {
     throw new Error('native ready event field engine must be an object');
   }
+  requirePositiveSafeInteger(event, 'max_new_tokens_per_request');
   const maxOutstandingRequests = requirePositiveSafeInteger(
     event,
     'max_outstanding_requests'
@@ -398,8 +435,20 @@ function validateReadyEvent(event: Record<string, unknown>): void {
 }
 
 function validateFailedEvent(event: Record<string, unknown>): void {
+  if (event.request_id !== undefined) {
+    requireString(event, 'request_id');
+  }
   requireString(event, 'phase');
   requireString(event, 'error');
+}
+
+function validateTokenEvent(event: Record<string, unknown>): void {
+  requireNonnegativeSafeInteger(event, 'index');
+  requireNonnegativeSafeInteger(event, 'token_id');
+  if (event.text !== undefined) {
+    requireString(event, 'text');
+  }
+  requireBoolean(event, 'terminal');
 }
 
 function validateCompletedEvent(event: Record<string, unknown>): void {
@@ -410,15 +459,96 @@ function validateCompletedEvent(event: Record<string, unknown>): void {
   ) {
     throw new Error('native completed event is missing response/output');
   }
+  requireNonnegativeSafeInteger(event.response, 'engine_id');
   requireString(event.response, 'instance_id');
+  if (!isRecord(event.response.model)) {
+    throw new Error(
+      'native completed event field response.model must be an object'
+    );
+  }
   requireNonnegativeSafeInteger(event.response, 'state_sequence_length');
-  requirePositiveSafeInteger(
-    event.response.metrics,
-    'maximum_decode_batch_size'
-  );
-  requireNonnegativeSafeInteger(
-    event.response.metrics,
-    'decode_batch_membership_changes'
+  requireNonnegativeSafeIntegerArray(event.response, 'generated_tokens');
+  const finishReason = requireString(event.response, 'finish_reason');
+  if (finishReason !== 'length' && finishReason !== 'stop_token') {
+    throw new Error(
+      'native completed event field response.finish_reason must be length or stop_token'
+    );
+  }
+  validateRuntimeMetrics(event.response.metrics);
+  requireString(event, 'text');
+  event.output.forEach(validateOutputItem);
+  if (event.tool_parse_warning !== undefined) {
+    requireString(event, 'tool_parse_warning');
+  }
+}
+
+function validateRuntimeMetrics(metrics: Record<string, unknown>): void {
+  for (const key of NONNEGATIVE_RUNTIME_METRIC_FIELDS) {
+    requireNonnegativeSafeInteger(metrics, key);
+  }
+  requirePositiveSafeInteger(metrics, 'maximum_decode_batch_size');
+  requireNonnegativeSafeInteger(metrics, 'decode_batch_membership_changes');
+  const firstGeneratedTokenNanos = metrics.first_generated_token_nanos;
+  if (firstGeneratedTokenNanos !== null) {
+    requireNonnegativeSafeInteger(metrics, 'first_generated_token_nanos');
+  }
+  const metalMemory = metrics.metal_memory;
+  if (metalMemory !== null && !isRecord(metalMemory)) {
+    throw new Error(
+      'native completed event field metrics.metal_memory must be an object or null'
+    );
+  }
+  if (metalMemory !== null) {
+    requireNonnegativeSafeInteger(metalMemory, 'active_nbytes');
+    requireNonnegativeSafeInteger(metalMemory, 'cache_nbytes');
+    requireNonnegativeSafeInteger(metalMemory, 'peak_nbytes');
+  }
+}
+
+const NONNEGATIVE_RUNTIME_METRIC_FIELDS = [
+  'queue_wait_nanos',
+  'cached_prefix_tokens',
+  'input_tokens_processed',
+  'generated_tokens',
+  'model_step_count',
+  'input_model_execution_count',
+  'input_execution_nanos',
+  'input_graph_construction_nanos',
+  'input_materialization_nanos',
+  'decode_execution_nanos',
+  'decode_graph_construction_nanos',
+  'decode_schedule_nanos',
+  'decode_token_wait_nanos',
+  'decode_finalization_nanos',
+  'model_execution_nanos',
+  'request_nanos',
+  'committed_state_logical_nbytes',
+] as const satisfies readonly (keyof NativeRuntimeMetrics)[];
+
+function validateOutputItem(item: unknown, index: number): void {
+  if (!isRecord(item) || typeof item.type !== 'string') {
+    throw new Error(
+      `native completed event field output[${index}] must be an output object`
+    );
+  }
+  if (item.type === 'message') {
+    if (item.role !== 'assistant' || typeof item.content !== 'string') {
+      throw new Error(
+        `native completed event field output[${index}] must be an assistant message`
+      );
+    }
+    return;
+  }
+  if (
+    item.type === 'tool_call' &&
+    typeof item.call_id === 'string' &&
+    typeof item.tool_name === 'string' &&
+    typeof item.input === 'string'
+  ) {
+    return;
+  }
+  throw new Error(
+    `native completed event field output[${index}] must be a complete tool call or assistant message`
   );
 }
 
@@ -454,6 +584,32 @@ function requireString(record: Record<string, unknown>, key: string): string {
     throw new Error(`native inference event field ${key} must be a string`);
   }
   return value;
+}
+
+function requireBoolean(record: Record<string, unknown>, key: string): boolean {
+  const value = record[key];
+  if (typeof value !== 'boolean') {
+    throw new Error(`native inference event field ${key} must be a boolean`);
+  }
+  return value;
+}
+
+function requireNonnegativeSafeIntegerArray(
+  record: Record<string, unknown>,
+  key: string
+): void {
+  const value = record[key];
+  if (
+    !Array.isArray(value) ||
+    value.some(
+      (item) =>
+        typeof item !== 'number' || !Number.isSafeInteger(item) || item < 0
+    )
+  ) {
+    throw new Error(
+      `native inference event field ${key} must be an array of nonnegative safe integers`
+    );
+  }
 }
 
 function requireNonnegativeSafeInteger(

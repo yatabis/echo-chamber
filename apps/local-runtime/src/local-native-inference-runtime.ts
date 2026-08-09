@@ -241,6 +241,11 @@ export class LocalNativeInferenceRuntime {
       return;
     }
     this.lifecycle = 'stopping';
+    for (const modules of this.modules.values()) {
+      for (const model of moduleModels(modules)) {
+        model.stopAcceptingGeneration();
+      }
+    }
     this.shutdownPromise = this.performShutdown();
     await this.shutdownPromise;
   }

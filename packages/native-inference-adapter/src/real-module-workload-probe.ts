@@ -3,7 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 
-import { NativeInferenceClient } from './native-inference-client';
+import {
+  NATIVE_INFERENCE_PROTOCOL_VERSION,
+  NativeInferenceClient,
+} from './native-inference-client';
 
 import type {
   NativeCompletedEvent,
@@ -246,7 +249,8 @@ try {
     );
 
   const checks = {
-    protocolVersion: ready.protocol_version === 9,
+    protocolVersion:
+      ready.protocol_version === NATIVE_INFERENCE_PROTOCOL_VERSION,
     sixActiveRowsAdvertised: ready.max_active_batch_size === 6,
     mainOwnersAreDurable: openedMain.every(isDurableOpen),
     auxiliaryOwnersAreEphemeral: openedAuxiliary.every(isEphemeralOpen),

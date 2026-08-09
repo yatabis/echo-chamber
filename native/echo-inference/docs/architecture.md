@@ -6,7 +6,7 @@ This is the current implementation boundary for E.C.H.O. Chamber's local
 Qwen3.5-family MoE inference path. The primary admitted artifact is
 Qwen3.6-35B-A3B-MLX-4bit. The numerical model, resident execution, composite
 KV/GDN state, variable-width continuous batching, atomic durable publication,
-protocol-v9 adapter, and local multi-module lifecycle are implemented.
+protocol-v10 adapter, and local multi-module lifecycle are implemented.
 
 Dated reports under `../evidence/` record the exact numerical and performance
 conditions tested at each milestone. Some reports predate this state design
@@ -29,7 +29,7 @@ harness evolve together, but Cargo remains independent from pnpm.
   executes the model, owns composite KV/GDN state, renders the admitted chat
   template, parses Qwen tool output, persists current state, and serves the
   local NDJSON protocol.
-- `@echo-chamber/native-inference-adapter` maps protocol version 9 to the
+- `@echo-chamber/native-inference-adapter` maps protocol version 10 to the
   provider-neutral `ModelPort`. It owns only process-local continuation
   capability and lifecycle metadata, never model tensors.
 - `@echo-chamber/local-runtime` owns one native child process, one stable
@@ -47,7 +47,7 @@ this path.
 ThinkingEngine session
   -> LocalNativeInferenceRuntime
      -> stable NativeInferenceModel for one state lane
-        -> protocol-v9 command over NDJSON
+        -> protocol-v10 command over NDJSON
            -> one resident Rust model owner
               -> exclusive state transaction
                  -> variable-width MLX/Metal execution
@@ -270,7 +270,7 @@ earlier model request committed, that earlier current state is still
 snapshotted. A process crash can lose commits made since the last successful
 snapshot; resuming in the middle of that thinking session is unsupported.
 
-## Protocol version 9
+## Protocol version 10
 
 The local child-process protocol accepts only:
 

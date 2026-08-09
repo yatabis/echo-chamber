@@ -3,6 +3,8 @@ use std::collections::BTreeSet;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
+use super::chat::EchoToolContract;
+
 const TOOL_CALL_OPEN: &str = "<tool_call>";
 const TOOL_CALL_CLOSE: &str = "</tool_call>";
 const FUNCTION_OPEN: &str = "<function=";
@@ -56,6 +58,19 @@ pub struct ParsedQwenOutput {
 /// Parses Qwen's admitted XML-like function-call envelope.
 #[must_use]
 pub fn parse_qwen_output(text: &str, request_id: &str) -> ParsedQwenOutput {
+    parse_qwen_output_with_tools(text, request_id, &[])
+}
+
+/// Parses Qwen tool output using the request's exact JSON Schemas.
+///
+/// XML parameter bodies carry no intrinsic type marker. Schema-less values
+/// therefore remain strings instead of guessing from JSON-looking text.
+#[must_use]
+pub fn parse_qwen_output_with_tools(
+    text: &str,
+    request_id: &str,
+    tools: &[EchoToolContract],
+) -> ParsedQwenOutput {
     let Some(first_tool) = text.find(TOOL_CALL_OPEN) else {
         return ParsedQwenOutput {
             output: message_output(text),
@@ -63,7 +78,7 @@ pub fn parse_qwen_output(text: &str, request_id: &str) -> ParsedQwenOutput {
         };
     };
 
-    match parse_tool_sequence(text, first_tool, request_id) {
+    match parse_tool_sequence(text, first_tool, request_id, tools) {
         Ok(output) => ParsedQwenOutput {
             output,
             warning: None,
@@ -79,6 +94,7 @@ fn parse_tool_sequence(
     text: &str,
     first_tool: usize,
     request_id: &str,
+    tools: &[EchoToolContract],
 ) -> Result<Vec<EchoOutputItem>, String> {
     let mut output = message_output(text[..first_tool].trim_end());
     let mut remaining = &text[first_tool..];
@@ -93,7 +109,7 @@ fn parse_tool_sequence(
         let close = after_open
             .find(TOOL_CALL_CLOSE)
             .ok_or_else(|| "tool_call envelope is missing </tool_call>".to_string())?;
-        let (tool_name, input) = parse_function(&after_open[..close])?;
+        let (tool_name, input) = parse_function(&after_open[..close], tools)?;
         output.push(EchoOutputItem::ToolCall {
             call_id: format!("{request_id}:tool:{ordinal}"),
             tool_name,
@@ -109,7 +125,7 @@ fn parse_tool_sequence(
     }
 }
 
-fn parse_function(block: &str) -> Result<(String, String), String> {
+fn parse_function(block: &str, tools: &[EchoToolContract]) -> Result<(String, String), String> {
     let block = block.trim();
     let after_open = block
         .strip_prefix(FUNCTION_OPEN)
@@ -130,13 +146,20 @@ fn parse_function(block: &str) -> Result<(String, String), String> {
         return Err("tool_call contains text after </function>".into());
     }
 
-    let parameters = parse_parameters(&after_name[..function_close])?;
+    let input_schema = tools
+        .iter()
+        .find(|tool| tool.name == name)
+        .map(|tool| &tool.input_schema);
+    let parameters = parse_parameters(&after_name[..function_close], input_schema)?;
     let input = serde_json::to_string(&Value::Object(parameters))
         .map_err(|error| format!("could not serialize parsed tool input: {error}"))?;
     Ok((name.into(), input))
 }
 
-fn parse_parameters(mut input: &str) -> Result<Map<String, Value>, String> {
+fn parse_parameters(
+    mut input: &str,
+    input_schema: Option<&Value>,
+) -> Result<Map<String, Value>, String> {
     let mut parameters = Map::new();
     let mut names = BTreeSet::new();
     loop {
@@ -160,13 +183,109 @@ fn parse_parameters(mut input: &str) -> Result<Map<String, Value>, String> {
             .find(PARAMETER_CLOSE)
             .ok_or_else(|| format!("parameter {name:?} is missing </parameter>"))?;
         let raw_value = after_name[..value_end].trim();
-        let value = if raw_value.is_empty() {
-            Value::String(String::new())
-        } else {
-            serde_json::from_str(raw_value).unwrap_or_else(|_| Value::String(raw_value.to_string()))
-        };
+        let value = parse_parameter_value(raw_value, parameter_schema(input_schema, name))
+            .map_err(|detail| format!("parameter {name:?} {detail}"))?;
         parameters.insert(name.into(), value);
         input = &after_name[value_end + PARAMETER_CLOSE.len()..];
+    }
+}
+
+fn parameter_schema<'a>(input_schema: Option<&'a Value>, name: &str) -> Option<&'a Value> {
+    let schema = input_schema?.as_object()?;
+    if let Some(property) = schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .and_then(|properties| properties.get(name))
+    {
+        return Some(property);
+    }
+    schema
+        .get("additionalProperties")
+        .filter(|additional| additional.is_object())
+}
+
+fn parse_parameter_value(raw_value: &str, schema: Option<&Value>) -> Result<Value, String> {
+    let Some(schema) = schema else {
+        return Ok(Value::String(raw_value.into()));
+    };
+    let mut declared_types = BTreeSet::new();
+    collect_declared_types(schema, &mut declared_types);
+    if declared_types.is_empty() {
+        return Ok(Value::String(raw_value.into()));
+    }
+    if let Ok(parsed) = serde_json::from_str::<Value>(raw_value)
+        && declared_types.contains(json_type(&parsed))
+    {
+        return Ok(parsed);
+    }
+    if declared_types.contains("string") {
+        return Ok(Value::String(raw_value.into()));
+    }
+    Err(format!(
+        "does not match declared JSON type(s): {}",
+        declared_types.into_iter().collect::<Vec<_>>().join(", ")
+    ))
+}
+
+fn collect_declared_types(schema: &Value, output: &mut BTreeSet<&'static str>) {
+    if let Some(declared) = schema.get("type") {
+        match declared {
+            Value::String(kind) => insert_declared_type(kind, output),
+            Value::Array(kinds) => {
+                for kind in kinds.iter().filter_map(Value::as_str) {
+                    insert_declared_type(kind, output);
+                }
+            }
+            _ => {}
+        }
+    }
+    for alternatives in ["anyOf", "oneOf", "allOf"] {
+        if let Some(branches) = schema.get(alternatives).and_then(Value::as_array) {
+            for branch in branches {
+                collect_declared_types(branch, output);
+            }
+        }
+    }
+    if let Some(constant) = schema.get("const") {
+        output.insert(json_type(constant));
+    }
+    if let Some(values) = schema.get("enum").and_then(Value::as_array) {
+        output.extend(values.iter().map(json_type));
+    }
+}
+
+fn insert_declared_type(kind: &str, output: &mut BTreeSet<&'static str>) {
+    match kind {
+        "integer" | "number" => {
+            output.insert("number");
+        }
+        "array" => {
+            output.insert("array");
+        }
+        "boolean" => {
+            output.insert("boolean");
+        }
+        "null" => {
+            output.insert("null");
+        }
+        "object" => {
+            output.insert("object");
+        }
+        "string" => {
+            output.insert("string");
+        }
+        _ => {}
+    }
+}
+
+fn json_type(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
     }
 }
 
@@ -195,6 +314,8 @@ fn message_output(text: &str) -> Vec<EchoOutputItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chat::EchoToolContract;
+    use serde_json::json;
 
     #[test]
     fn plain_text_remains_one_message() {
@@ -211,15 +332,25 @@ mod tests {
     }
 
     #[test]
-    fn function_parameters_become_one_json_object() {
-        let parsed = parse_qwen_output(
+    fn schema_restores_numbers_booleans_and_numeric_looking_strings() {
+        let tools = [tool_contract(
+            "check_notifications",
+            &json!({
+                "limit": { "type": "integer" },
+                "channel": { "type": "string" },
+                "silent": { "type": "boolean" }
+            }),
+        )];
+        let parsed = parse_qwen_output_with_tools(
             "<tool_call>\n\
              <function=check_notifications>\n\
              <parameter=limit>\n20\n</parameter>\n\
-             <parameter=channel>\ndiscord\n</parameter>\n\
+             <parameter=channel>\n123456789\n</parameter>\n\
+             <parameter=silent>\ntrue\n</parameter>\n\
              </function>\n\
              </tool_call>",
             "rin:7",
+            &tools,
         );
         assert_eq!(
             parsed,
@@ -227,7 +358,7 @@ mod tests {
                 output: vec![EchoOutputItem::ToolCall {
                     call_id: "rin:7:tool:1".into(),
                     tool_name: "check_notifications".into(),
-                    input: r#"{"limit":20,"channel":"discord"}"#.into(),
+                    input: r#"{"limit":20,"channel":"123456789","silent":true}"#.into(),
                 }],
                 warning: None,
             }
@@ -235,13 +366,31 @@ mod tests {
     }
 
     #[test]
-    fn reasoning_prefix_and_multiple_calls_keep_order() {
+    fn missing_schema_never_guesses_a_parameter_type() {
         let parsed = parse_qwen_output(
+            "<tool_call><function=unknown><parameter=value>123456789</parameter>\
+             </function></tool_call>",
+            "rin:8",
+        );
+        assert!(matches!(
+            &parsed.output[0],
+            EchoOutputItem::ToolCall { input, .. } if input == r#"{"value":"123456789"}"#
+        ));
+    }
+
+    #[test]
+    fn reasoning_prefix_and_multiple_calls_keep_order() {
+        let tools = [tool_contract(
+            "second",
+            &json!({ "value": { "type": "boolean" } }),
+        )];
+        let parsed = parse_qwen_output_with_tools(
             "先に確認します。\n\n\
              <tool_call><function=first></function></tool_call>\n\
              <tool_call><function=second><parameter=value>true</parameter>\
              </function></tool_call>",
             "marie:2",
+            &tools,
         );
         assert_eq!(parsed.output.len(), 3);
         assert!(matches!(
@@ -262,5 +411,19 @@ mod tests {
         let parsed = parse_qwen_output(text, "rin:3");
         assert_eq!(parsed.output, message_output(text));
         assert!(parsed.warning.is_some());
+    }
+
+    fn tool_contract(name: &str, properties: &Value) -> EchoToolContract {
+        EchoToolContract {
+            name: name.into(),
+            description: "test tool".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": properties,
+                "additionalProperties": false
+            }),
+            output_schema: None,
+            strict: true,
+        }
     }
 }

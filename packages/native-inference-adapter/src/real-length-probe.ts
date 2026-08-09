@@ -80,7 +80,7 @@ try {
     response.generated_tokens.length +
     1;
   const checks = {
-    protocolV7: ready.protocol_version === NATIVE_INFERENCE_PROTOCOL_VERSION,
+    protocolV10: ready.protocol_version === NATIVE_INFERENCE_PROTOCOL_VERSION,
     reportedLength: response.finish_reason === 'length',
     oneVisibleToken: response.generated_tokens.length === 1,
     closingEosAdvancedOnlyInState:

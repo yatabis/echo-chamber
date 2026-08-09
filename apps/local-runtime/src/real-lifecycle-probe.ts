@@ -6,6 +6,7 @@ import type {
   ModelResponse,
 } from '@echo-chamber/core/ports/model';
 import type { NativeInferenceModelState } from '@echo-chamber/native-inference-adapter/native-inference-model';
+import { requireEmptyProbeDirectory } from '@echo-chamber/native-inference-adapter/probe-filesystem';
 
 import { LocalNativeInferenceRuntime } from './local-native-inference-runtime';
 
@@ -32,7 +33,10 @@ const GREEDY_SAMPLING = {
 const probeArguments = process.argv.slice(2);
 const binaryPath = requireArgument(probeArguments[0]);
 const modelDirectory = requireArgument(probeArguments[1]);
-const snapshotDirectory = requireArgument(probeArguments[2]);
+const snapshotDirectory = await requireEmptyProbeDirectory(
+  requireArgument(probeArguments[2]),
+  'lifecycle probe snapshot directory'
+);
 const nativeLibraryPath = process.env.ECHO_NATIVE_LIBRARY_PATH;
 const nativeEnvironment =
   nativeLibraryPath === undefined

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { runAgentSession } from '@echo-chamber/core/agent/session';
 import type {
   EchoEvent,
   EchoEventPort,
@@ -69,13 +70,17 @@ class FakeTransport implements NativeInferenceTransport {
     }
   }
 
-  ready(protocolVersion: number = NATIVE_INFERENCE_PROTOCOL_VERSION): void {
+  ready(
+    protocolVersion: number = NATIVE_INFERENCE_PROTOCOL_VERSION,
+    maxNewTokensPerRequest = 4_096
+  ): void {
     this.emit({
       event: 'ready',
       protocol_version: protocolVersion,
       engine: { engine_id: 1 },
       eos_token_id: 248_046,
       chat_template_sha256: 'template',
+      max_new_tokens_per_request: maxNewTokensPerRequest,
       max_outstanding_requests: 8,
       max_active_batch_size: 6,
       max_late_join_batch_size: 4,
@@ -148,6 +153,67 @@ describe('NativeInferenceModel', () => {
     const published = await model.snapshot();
     expect(published.path).toBe('/state/rin/current.safetensors');
     expect(model.needsSnapshot()).toBe(false);
+  });
+
+  it('uses the owner-advertised generation limit when maxTokens is omitted', async () => {
+    const transport = new FakeTransport();
+    const client = new NativeInferenceClient(transport);
+    const model = new NativeInferenceModel({
+      client,
+      instanceId: 'rin',
+      seedSource: (): number => 42,
+    });
+    transport.ready(NATIVE_INFERENCE_PROTOCOL_VERSION, 4_096);
+    transport.onSend = (wire, current): void => {
+      if (wire.type === 'open_state') {
+        current.emit({
+          event: 'state_opened',
+          request_id: wire.request_id,
+          instance_id: wire.instance_id,
+          persistence: 'ephemeral',
+          restored: false,
+        });
+      } else if (wire.type === 'generate') {
+        expect(wire.max_new_tokens).toBe(4_096);
+        current.emit(completed(wire));
+      }
+    };
+
+    await model.openState({ persistence: 'ephemeral' });
+    await model.generate(request('owner limit'));
+  });
+
+  it('rejects an explicit generation limit above the resident owner limit', async () => {
+    const transport = new FakeTransport();
+    const client = new NativeInferenceClient(transport);
+    const model = new NativeInferenceModel({
+      client,
+      instanceId: 'rin',
+      maxTokens: 4_097,
+      seedSource: (): number => 42,
+    });
+    transport.ready(NATIVE_INFERENCE_PROTOCOL_VERSION, 4_096);
+    transport.onSend = (wire, current): void => {
+      if (wire.type === 'open_state') {
+        current.emit({
+          event: 'state_opened',
+          request_id: wire.request_id,
+          instance_id: wire.instance_id,
+          persistence: 'ephemeral',
+          restored: false,
+        });
+      }
+    };
+
+    await expect(model.openState({ persistence: 'ephemeral' })).rejects.toThrow(
+      'exceeds resident owner limit 4096'
+    );
+    expect(
+      transport.commands.filter(
+        (command) =>
+          command.type === 'open_state' || command.type === 'generate'
+      )
+    ).toEqual([]);
   });
 
   it('enables diagnostic token events only when a listener is configured', async () => {
@@ -252,7 +318,7 @@ describe('NativeInferenceModel', () => {
     });
   });
 
-  it('rejects continuation when the preceding completion has no pending tool call', async () => {
+  it('rejects non-empty continuation when the preceding completion has no pending tool call', async () => {
     const { model, transport } = setupModel();
     transport.onSend = autoResponder();
     await model.openState({
@@ -271,6 +337,114 @@ describe('NativeInferenceModel', () => {
     expect(
       transport.commands.filter((command) => command.type === 'generate')
     ).toHaveLength(1);
+  });
+
+  it('connects the core no-tool retry to an empty Native continuation', async () => {
+    const { model, transport } = setupModel();
+    let generation = 0;
+    const sessionRecord = {
+      content: 'No-tool recovery reached an explicit finish call.',
+      emotion: { valence: 0.1, arousal: 0.2, labels: ['calm'] },
+    };
+    transport.onSend = (wire, current): void => {
+      if (wire.type === 'open_state') {
+        current.emit({
+          event: 'state_opened',
+          request_id: wire.request_id,
+          instance_id: wire.instance_id,
+          persistence: 'ephemeral',
+          restored: false,
+        });
+        return;
+      }
+      if (wire.type !== 'generate') return;
+      generation += 1;
+      if (generation === 1) {
+        current.emit(completed(wire));
+        return;
+      }
+      expect(wire.state_transition).toBe('continuation');
+      expect(wire.input).toEqual([]);
+      current.emit(
+        completed(wire, {
+          output: [
+            {
+              type: 'tool_call',
+              call_id: 'call-finish',
+              tool_name: 'finish_thinking',
+              input: JSON.stringify({
+                reason: 'done',
+                session_record: sessionRecord,
+              }),
+            },
+          ],
+        })
+      );
+    };
+
+    await model.openState({ persistence: 'ephemeral' });
+    const result = await runAgentSession({
+      model,
+      initialInput: [{ role: 'developer', content: 'continue until finished' }],
+      tools: [
+        {
+          name: 'finish_thinking',
+          contract: TOOL,
+          execute: async (): Promise<string> =>
+            Promise.resolve('{"success":true}'),
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      context: sessionRecord,
+      terminationReason: 'finish_thinking',
+    });
+    expect(generation).toBe(2);
+  });
+
+  it('accepts committed state before surfacing a terminal token listener error', async () => {
+    const listenerError = new Error('synthetic token listener failure');
+    const { model, transport } = setupModel(() => {
+      throw listenerError;
+    });
+    transport.onSend = (wire, current): void => {
+      if (wire.type === 'open_state') {
+        current.emit({
+          event: 'state_opened',
+          request_id: wire.request_id,
+          instance_id: wire.instance_id,
+          persistence: 'durable',
+          restored: false,
+          current_path: '/state/rin/current.safetensors',
+        });
+      } else if (wire.type === 'generate') {
+        current.emit({
+          event: 'token',
+          request_id: wire.request_id,
+          index: 0,
+          token_id: 248_046,
+          terminal: true,
+        });
+        current.emit(completed(wire, { stateSequenceLength: 9 }));
+      }
+    };
+
+    await model.openState({
+      persistence: 'durable',
+      snapshotRoot: '/state/rin',
+    });
+    await expect(model.generate(request('stream failure'))).rejects.toThrow(
+      listenerError.message
+    );
+    expect(model.state()).toMatchObject({
+      hasState: true,
+      snapshotDirty: true,
+      stateSequenceLength: 9,
+    });
+    expect(
+      transport.commands.some((command) => command.type === 'cancel')
+    ).toBe(true);
   });
 
   it('rejects continuation results that do not match the pending call IDs', async () => {

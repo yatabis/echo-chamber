@@ -5,7 +5,9 @@
   "type": "module",
   "exports": {
     "./native-inference-client": "./src/native-inference-client.ts",
-    "./native-inference-model": "./src/native-inference-model.ts"
+    "./native-inference-model": "./src/native-inference-model.ts",
+    "./probe-filesystem": "./src/probe-filesystem.ts",
+    "./protocol": "./src/protocol.ts"
   },
   "scripts": {
     "probe:real-model": "vite-node src/real-model-probe.ts",

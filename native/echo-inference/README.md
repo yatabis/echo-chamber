@@ -324,7 +324,7 @@ production durable-state layout.
 
 `serve-stdio` reads one JSON command per stdin line and writes one typed event
 per stdout line. The second argument bounds active plus waiting generation
-requests. Protocol version 9 admits:
+requests. Protocol version 10 admits:
 
 - `open_state`: register either a durable lane with a fixed snapshot root or
   an ephemeral process-local lane;

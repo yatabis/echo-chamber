@@ -1,8 +1,14 @@
 import { performance } from 'node:perf_hooks';
 
-import { NativeInferenceClient } from './native-inference-client';
-
-import type { NativeCompletedEvent, NativeGenerateCommand } from './protocol';
+import {
+  NATIVE_INFERENCE_PROTOCOL_VERSION,
+  NativeInferenceClient,
+} from './native-inference-client';
+import {
+  requireNativeMetalMemory,
+  type NativeCompletedEvent,
+  type NativeGenerateCommand,
+} from './protocol';
 
 const [binaryPath, modelDirectory] = process.argv.slice(2);
 if (binaryPath === undefined || modelDirectory === undefined) {
@@ -178,7 +184,8 @@ try {
     };
   });
   const checks = {
-    protocolVersion: ready.protocol_version === 9,
+    protocolVersion:
+      ready.protocol_version === NATIVE_INFERENCE_PROTOCOL_VERSION,
     allOwnersAreEphemeral: opened.every(
       (event) =>
         event.persistence === 'ephemeral' &&
@@ -234,6 +241,9 @@ try {
     (total, round) => total + round.elapsedMilliseconds,
     0
   );
+  const metalMemories = allEvents.map((event) =>
+    requireNativeMetalMemory(event.response.metrics, event.request_id)
+  );
   const report = {
     schemaVersion: 1,
     protocolVersion: ready.protocol_version,
@@ -269,19 +279,13 @@ try {
       minimumFinalStateSequenceLength: Math.min(...finalLengths),
       maximumFinalStateSequenceLength: Math.max(...finalLengths),
       maximumActiveMetalBytes: Math.max(
-        ...allEvents.map(
-          (event) => event.response.metrics.metal_memory.active_nbytes
-        )
+        ...metalMemories.map((memory) => memory.active_nbytes)
       ),
       maximumCachedMetalBytes: Math.max(
-        ...allEvents.map(
-          (event) => event.response.metrics.metal_memory.cache_nbytes
-        )
+        ...metalMemories.map((memory) => memory.cache_nbytes)
       ),
       maximumObservedMetalBytes: Math.max(
-        ...allEvents.map(
-          (event) => event.response.metrics.metal_memory.peak_nbytes
-        )
+        ...metalMemories.map((memory) => memory.peak_nbytes)
       ),
     },
     checks,

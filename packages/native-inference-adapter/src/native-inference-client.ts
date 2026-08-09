@@ -48,6 +48,32 @@ interface PendingGeneration {
   resolve(event: NativeCompletedEvent): void;
   reject(error: Error): void;
   onToken?: NativeTokenListener;
+  listenerError?: Error;
+}
+
+/**
+ * A token listener failed, but Native committed and reported the terminal
+ * completion before cancellation took effect.
+ *
+ * The model adapter must accept `completedEvent` before surfacing
+ * `listenerError`, keeping its process-local continuation state synchronized
+ * with the resident owner.
+ */
+export class NativeTokenListenerCompletionError extends Error {
+  /** Listener failure that requested cancellation. */
+  readonly listenerError: Error;
+
+  /** Authoritative completion emitted after Native committed state. */
+  readonly completedEvent: NativeCompletedEvent;
+
+  constructor(listenerError: Error, completedEvent: NativeCompletedEvent) {
+    super(
+      `native token listener failed after generation committed: ${listenerError.message}`
+    );
+    this.name = 'NativeTokenListenerCompletionError';
+    this.listenerError = listenerError;
+    this.completedEvent = completedEvent;
+  }
 }
 
 type NativeLifecycleEvent =
@@ -186,6 +212,9 @@ export class NativeInferenceClient {
       this.handleRequestFailure(event);
       return;
     }
+    if (event.event === 'shutdown') {
+      return;
+    }
     this.handleCancellation(event);
   }
 
@@ -206,6 +235,12 @@ export class NativeInferenceClient {
   private handleCompleted(event: NativeCompletedEvent): void {
     const pending = this.pending.get(event.request_id);
     this.pending.delete(event.request_id);
+    if (pending?.listenerError !== undefined) {
+      pending.reject(
+        new NativeTokenListenerCompletionError(pending.listenerError, event)
+      );
+      return;
+    }
     pending?.resolve(event);
   }
 
@@ -216,7 +251,8 @@ export class NativeInferenceClient {
     const pending = this.pending.get(event.request_id);
     this.pending.delete(event.request_id);
     pending?.reject(
-      new Error(`native request cancelled before commit: ${event.request_id}`)
+      pending.listenerError ??
+        new Error(`native request cancelled before commit: ${event.request_id}`)
     );
   }
 
@@ -224,14 +260,14 @@ export class NativeInferenceClient {
     event: Extract<NativeWireEvent, { event: 'token' }>
   ): void {
     const pending = this.pending.get(event.request_id);
-    if (pending?.onToken === undefined) {
+    if (pending?.onToken === undefined || pending.listenerError !== undefined) {
       return;
     }
     try {
       pending.onToken(event);
     } catch (error) {
-      this.pending.delete(event.request_id);
-      pending.reject(toError(error));
+      pending.listenerError = toError(error);
+      delete pending.onToken;
       void this.cancel(event.request_id).catch((cancelError: unknown) => {
         this.fail(toError(cancelError));
       });
@@ -250,7 +286,14 @@ export class NativeInferenceClient {
     }
     const pending = this.pending.get(event.request_id);
     this.pending.delete(event.request_id);
-    pending?.reject(error);
+    pending?.reject(
+      pending.listenerError === undefined
+        ? error
+        : new AggregateError(
+            [pending.listenerError, error],
+            `native request failed after token listener error: ${event.request_id}`
+          )
+    );
     const pendingLifecycle = this.pendingLifecycle.get(event.request_id);
     this.pendingLifecycle.delete(event.request_id);
     pendingLifecycle?.reject(error);
@@ -337,12 +380,17 @@ class StdioNativeInferenceTransport implements NativeInferenceTransport {
   private readonly exitDeferred = createDeferred<undefined>();
   private stderr = '';
   private closed = false;
+  private shutdownObserved = false;
+  private exitSettled = false;
 
   private constructor(private readonly child: ChildProcessWithoutNullStreams) {
     const lines = createInterface({ input: child.stdout });
     lines.on('line', (line) => {
       try {
         const event = parseNativeWireEvent(line);
+        if (event.event === 'shutdown') {
+          this.shutdownObserved = true;
+        }
         for (const listener of this.eventListeners) {
           listener(event);
         }
@@ -355,17 +403,36 @@ class StdioNativeInferenceTransport implements NativeInferenceTransport {
       this.stderr = `${this.stderr}${chunk}`.slice(-MAX_STDERR_CHARACTERS);
     });
     child.once('error', (error) => {
-      this.emitError(error);
-      this.exitDeferred.reject(error);
+      this.failExit(error);
     });
-    child.once('exit', (code, signal) => {
+    child.once('close', (code, signal) => {
+      if (this.exitSettled) {
+        return;
+      }
+
+      const exitDetails = `code ${String(code)} signal ${String(signal)}${this.stderr === '' ? '' : `: ${this.stderr.trim()}`}`;
+      if (code !== 0 || signal !== null) {
+        this.failExit(new Error(`native inference exited with ${exitDetails}`));
+        return;
+      }
       if (!this.closed) {
-        this.emitError(
+        this.failExit(
           new Error(
-            `native inference exited with code ${String(code)} signal ${String(signal)}${this.stderr === '' ? '' : `: ${this.stderr.trim()}`}`
+            `native inference exited before close was requested (${exitDetails})`
           )
         );
+        return;
       }
+      if (!this.shutdownObserved) {
+        this.failExit(
+          new Error(
+            `native inference exited normally without a protocol shutdown event (${exitDetails})`
+          )
+        );
+        return;
+      }
+
+      this.exitSettled = true;
       this.exitDeferred.resolve(undefined);
     });
   }
@@ -434,6 +501,15 @@ class StdioNativeInferenceTransport implements NativeInferenceTransport {
     for (const listener of this.errorListeners) {
       listener(error);
     }
+  }
+
+  private failExit(error: Error): void {
+    if (this.exitSettled) {
+      return;
+    }
+    this.exitSettled = true;
+    this.emitError(error);
+    this.exitDeferred.reject(error);
   }
 }
 

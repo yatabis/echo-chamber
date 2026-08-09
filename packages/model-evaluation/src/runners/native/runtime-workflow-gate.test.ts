@@ -22,9 +22,10 @@ import type {
 } from '@echo-chamber/core/ports/echo-event';
 import { NativeInferenceClient } from '@echo-chamber/native-inference-adapter/native-inference-client';
 import { NativeInferenceModel } from '@echo-chamber/native-inference-adapter/native-inference-model';
-import type {
-  NativeRuntimeMetrics,
-  NativeStateTransition,
+import {
+  requireNativeMetalMemory,
+  type NativeRuntimeMetrics,
+  type NativeStateTransition,
 } from '@echo-chamber/native-inference-adapter/protocol';
 
 import {
@@ -371,7 +372,7 @@ function requireNativeMetrics(value: unknown): NativeRuntimeMetrics {
   for (const key of ['active_nbytes', 'cache_nbytes', 'peak_nbytes']) {
     requireNumber(value.metal_memory, key, 'metrics.metal_memory');
   }
-  if (value.first_generated_token_nanos !== undefined) {
+  if (value.first_generated_token_nanos !== null) {
     requireNumber(value, 'first_generated_token_nanos', 'metrics');
   }
   return value as unknown as NativeRuntimeMetrics;
@@ -539,7 +540,13 @@ function summarize(
     ),
     maximumMetalPeakNbytes: Math.max(
       0,
-      ...requests.map((request) => request.metrics.metal_memory.peak_nbytes)
+      ...requests.map(
+        (request) =>
+          requireNativeMetalMemory(
+            request.metrics,
+            `runtime workflow session ${request.sessionIndex} request ${request.requestIndexWithinSession}`
+          ).peak_nbytes
+      )
     ),
   };
 }

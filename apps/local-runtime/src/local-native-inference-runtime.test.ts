@@ -71,6 +71,7 @@ class FakeTransport implements NativeInferenceTransport {
       engine: { engine_id: 1 },
       eos_token_id: 248_046,
       chat_template_sha256: 'template',
+      max_new_tokens_per_request: 4_096,
       max_outstanding_requests: 8,
       max_active_batch_size: 6,
       max_late_join_batch_size: 4,
@@ -377,6 +378,87 @@ describe('LocalNativeInferenceRuntime', () => {
       'shutdown',
     ]);
     expect(runtime.state('rin').hasState).toBe(false);
+  });
+
+  it('rejects a generation that follows tool work after shutdown starts', async () => {
+    const snapshotDirectory = await createSnapshotDirectory();
+    const transport = new FakeTransport();
+    const client = new NativeInferenceClient(transport);
+    const toolWorkStarted = deferred<undefined>();
+    const finishToolWork = deferred<undefined>();
+    let generationCount = 0;
+    transport.ready();
+    transport.onSend = (command, current): void => {
+      if (command.type === 'open_state') {
+        emitOpened(current, command, snapshotDirectory, false);
+      } else if (command.type === 'generate') {
+        generationCount += 1;
+        current.emit(
+          completed(
+            command,
+            generationCount * 10,
+            generationCount === 1
+              ? [
+                  {
+                    type: 'tool_call',
+                    call_id: 'rin:1:tool:1',
+                    tool_name: 'lookup',
+                    input: '{}',
+                  },
+                ]
+              : undefined
+          )
+        );
+      } else if (command.type === 'snapshot') {
+        current.emit({
+          event: 'snapshot_published',
+          request_id: command.request_id,
+          instance_id: command.instance_id,
+          path: join(
+            snapshotDirectory,
+            command.instance_id,
+            'current.safetensors'
+          ),
+          physical_nbytes: 71_000_000,
+        });
+      }
+    };
+    const runtime = await startWithClient(snapshotDirectory, client);
+
+    const activeSession = runtime.runThinkingSession('rin', async (model) => {
+      const first = await model.generate(modelRequest());
+      const responseToken = first.responseToken;
+      if (responseToken === undefined) {
+        throw new Error('missing response token before tool work');
+      }
+      toolWorkStarted.resolve(undefined);
+      await finishToolWork.promise;
+      return await model.generate({
+        input: [
+          {
+            type: 'tool_result',
+            callId: 'rin:1:tool:1',
+            output: '{"found":true}',
+          },
+        ],
+        tools: [],
+        previousResponseToken: responseToken,
+      });
+    });
+    await toolWorkStarted.promise;
+    const shutdown = runtime.shutdown();
+    finishToolWork.resolve(undefined);
+
+    await expect(activeSession).rejects.toThrow(
+      'native instance rin is stopping'
+    );
+    await shutdown;
+    expect(generationCount).toBe(1);
+    expect(commandTypesAfterOpen(transport)).toEqual([
+      'generate',
+      'snapshot',
+      'shutdown',
+    ]);
   });
 
   it('waits for an in-flight snapshot without sending it a cancellation', async () => {

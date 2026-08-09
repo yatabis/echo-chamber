@@ -2,6 +2,7 @@ import type { ModelOutputItem } from '@echo-chamber/core/ports/model';
 
 import { NativeInferenceClient } from './native-inference-client';
 import { NativeInferenceModel } from './native-inference-model';
+import { requireEmptyProbeDirectory } from './probe-filesystem';
 import { NATIVE_INFERENCE_PROTOCOL_VERSION } from './protocol';
 
 const INSTANCE_ID = 'echo-native-recovery-probe';
@@ -28,7 +29,10 @@ const GREEDY_SAMPLING = {
 const probeArguments = process.argv.slice(2);
 const binaryPath = requireArgument(probeArguments[0]);
 const modelDirectory = requireArgument(probeArguments[1]);
-const snapshotRoot = requireArgument(probeArguments[2]);
+const snapshotRoot = await requireEmptyProbeDirectory(
+  requireArgument(probeArguments[2]),
+  'recovery probe state root'
+);
 
 const nativeLibraryPath = process.env.ECHO_NATIVE_LIBRARY_PATH;
 const nativeEnvironment =
@@ -46,7 +50,7 @@ console.log(
       producer,
       restorer,
       checks: {
-        protocolV7InBothProcesses:
+        protocolV10InBothProcesses:
           producer.protocolVersion === NATIVE_INFERENCE_PROTOCOL_VERSION &&
           restorer.protocolVersion === NATIVE_INFERENCE_PROTOCOL_VERSION,
         separateNativeOwners: true,

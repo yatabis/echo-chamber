@@ -14,10 +14,11 @@ import { dirname, join } from 'node:path';
 import { expect, test } from 'vitest';
 
 import { NativeInferenceClient } from '@echo-chamber/native-inference-adapter/native-inference-client';
-import type {
-  NativeCompletedEvent,
-  NativeGenerateCommand,
-  NativeRuntimeMetrics,
+import {
+  requireNativeMetalMemory,
+  type NativeCompletedEvent,
+  type NativeGenerateCommand,
+  type NativeRuntimeMetrics,
 } from '@echo-chamber/native-inference-adapter/protocol';
 
 import {
@@ -452,7 +453,7 @@ function summarize(attempts: readonly AttemptRecord[]): AttemptSummary {
     medianInternalTtftMs: median(
       attempts.map((attempt) => {
         const nanos = attempt.metrics.first_generated_token_nanos;
-        if (nanos === undefined) {
+        if (nanos === null) {
           throw new Error(`${attempt.requestId} omitted internal TTFT`);
         }
         return nanos / 1_000_000;
@@ -693,13 +694,19 @@ liveTest(
       const cachedVsReplayTtftRatio =
         cachedSummary.medianVisibleTtftMs /
         statelessSummary.medianVisibleTtftMs;
-      const warmupMemory = warmupContinuation.record.metrics.metal_memory;
+      const warmupMemory = requireNativeMetalMemory(
+        warmupContinuation.record.metrics,
+        'stateful warmup continuation'
+      );
       const warmupActive = warmupMemory.active_nbytes;
       const finalAttempt = statelessReplays[statelessReplays.length - 1];
       if (finalAttempt === undefined) {
         throw new Error('stateful benchmark produced no final attempt');
       }
-      const finalMemory = finalAttempt.metrics.metal_memory;
+      const finalMemory = requireNativeMetalMemory(
+        finalAttempt.metrics,
+        'stateful final replay'
+      );
       const measuredInstanceCount = config.measuredRuns * 4;
       const activeGrowthNbytes = finalMemory.active_nbytes - warmupActive;
       const activeGrowthPerMeasuredInstance =

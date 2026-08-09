@@ -14,9 +14,10 @@ import { dirname, join } from 'node:path';
 import { expect, test } from 'vitest';
 
 import { NativeInferenceClient } from '@echo-chamber/native-inference-adapter/native-inference-client';
-import type {
-  NativeGenerateCommand,
-  NativeRuntimeMetrics,
+import {
+  requireNativeMetalMemory,
+  type NativeGenerateCommand,
+  type NativeRuntimeMetrics,
 } from '@echo-chamber/native-inference-adapter/protocol';
 
 import { EphemeralNativeStateRoots } from './ephemeral-state-roots';
@@ -250,8 +251,9 @@ async function runAttempt(
   const event = await client.generate(command);
   const totalMs = performance.now() - startedAt;
   const metrics = event.response.metrics;
+  const metalMemory = requireNativeMetalMemory(metrics, command.request_id);
   const firstGeneratedTokenNanos = metrics.first_generated_token_nanos;
-  if (firstGeneratedTokenNanos === undefined) {
+  if (firstGeneratedTokenNanos === null) {
     throw new Error(`${command.request_id} omitted first-token timing`);
   }
   return {
@@ -284,8 +286,7 @@ async function runAttempt(
       metalActiveGrowthFromPreviousAttemptNbytes:
         context.previousMetalActiveNbytes === null
           ? null
-          : metrics.metal_memory.active_nbytes -
-            context.previousMetalActiveNbytes,
+          : metalMemory.active_nbytes - context.previousMetalActiveNbytes,
     },
   };
 }
@@ -345,7 +346,13 @@ function summarizeTarget(
       selected.map((attempt) => attempt.metrics.committed_state_logical_nbytes)
     ),
     medianMetalActiveNbytes: median(
-      selected.map((attempt) => attempt.metrics.metal_memory.active_nbytes)
+      selected.map(
+        (attempt) =>
+          requireNativeMetalMemory(
+            attempt.metrics,
+            `context curve ${attempt.targetContextTokens}`
+          ).active_nbytes
+      )
     ),
     medianMetalActiveGrowthPerRetainedInstanceNbytes: median(
       selected.map((attempt) => {
@@ -358,10 +365,22 @@ function summarizeTarget(
       })
     ),
     medianMetalCacheNbytes: median(
-      selected.map((attempt) => attempt.metrics.metal_memory.cache_nbytes)
+      selected.map(
+        (attempt) =>
+          requireNativeMetalMemory(
+            attempt.metrics,
+            `context curve ${attempt.targetContextTokens}`
+          ).cache_nbytes
+      )
     ),
     maximumMetalPeakNbytes: Math.max(
-      ...selected.map((attempt) => attempt.metrics.metal_memory.peak_nbytes)
+      ...selected.map(
+        (attempt) =>
+          requireNativeMetalMemory(
+            attempt.metrics,
+            `context curve ${attempt.targetContextTokens}`
+          ).peak_nbytes
+      )
     ),
     decodeRateOverShortestContext: decodeRate / shortestContext.decodeRate,
     firstGeneratedTokenTimeOverShortestContext:
@@ -468,7 +487,10 @@ async function runTargetBlock(input: {
           }
         );
         input.attempts.push(attempt);
-        previousMetalActiveNbytes = attempt.metrics.metal_memory.active_nbytes;
+        previousMetalActiveNbytes = requireNativeMetalMemory(
+          attempt.metrics,
+          `context curve ${attempt.targetContextTokens}`
+        ).active_nbytes;
         block.completedAttempts = attemptIndexWithinTarget;
         writeResult(input.config.outputPath, input.result);
       }

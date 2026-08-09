@@ -93,7 +93,10 @@ pub use sampling::{SamplingConfig, SamplingParity, SamplingParityCase, run_sampl
 pub use snapshot::{
     CURRENT_STATE_FILE, CurrentStateOwner, PublishedMlxCheckpoint, RestoredMlxCheckpoint,
 };
-pub use tool_output::{EchoAssistantRole, EchoOutputItem, ParsedQwenOutput, parse_qwen_output};
+pub use tool_output::{
+    EchoAssistantRole, EchoOutputItem, ParsedQwenOutput, parse_qwen_output,
+    parse_qwen_output_with_tools,
+};
 
 /// Qwen3.5 architecture facts resolved once when the model is admitted.
 #[derive(Clone, Debug, PartialEq)]

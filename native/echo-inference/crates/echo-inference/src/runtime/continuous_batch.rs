@@ -1,12 +1,13 @@
 use std::time::{Duration, Instant};
 
 use echo_inference_state::{PreparedState, StateLease};
-use echo_mlx::{Array, metal_memory_stats};
+use echo_mlx::Array;
 
 use super::{
     EngineError, GenerationDirective, GenerationFinishReason, Gpu, InferenceRequest,
     InferenceResponse, MlxInferenceState, ResidentEngine, RuntimeError, RuntimeMetrics,
-    duration_nanos, selected_prefill_chunk_size, slice_token_chunk, token_array,
+    commit_with_optional_metal_memory, duration_nanos, selected_prefill_chunk_size,
+    slice_token_chunk, token_array,
 };
 use crate::MAX_ACTIVE_BATCH_SIZE;
 use crate::full_model::{
@@ -927,8 +928,8 @@ impl ResidentEngine {
             .ok_or_else(|| RuntimeError::InvalidRequest {
                 detail: "batch request lost its state lease before commit".into(),
             })?;
-        let committed = lease.commit(prepared)?;
-        let metal_memory = metal_memory_stats().map_err(EngineError::Mlx)?;
+        let (committed, metal_memory) =
+            commit_with_optional_metal_memory(lease, prepared, echo_mlx::metal_memory_stats)?;
         let generated_token_count = row.generated_tokens.len();
         Ok(InferenceResponse {
             engine_id: self.info.engine_id,
@@ -960,7 +961,7 @@ impl ResidentEngine {
                 model_execution_nanos: duration_nanos(row.model_started.elapsed()),
                 request_nanos: duration_nanos(row.request_started.elapsed()),
                 committed_state_logical_nbytes,
-                metal_memory: metal_memory.into(),
+                metal_memory,
             },
         })
     }

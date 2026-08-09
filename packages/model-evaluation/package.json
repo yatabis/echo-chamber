@@ -13,6 +13,7 @@
     "eval:native-runtime-workflow": "ECHO_NATIVE_RUNTIME_WORKFLOW_GATE=1 vitest run src/runners/native/runtime-workflow-gate.test.ts",
     "eval:session-prefix-cache": "ECHO_LOCAL_SESSION_PREFIX_CACHE_PROBE=1 vitest run src/runners/rapid-mlx/session-prefix-cache-probe.test.ts",
     "eval:rescore": "ECHO_EVAL_RESCORE_RESULT=1 vitest run src/qwen36-eat-readiness/rescore-result.test.ts",
+    "test:run": "vitest run src/runners/native",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {

@@ -14,9 +14,10 @@ import { dirname, join } from 'node:path';
 import { expect, test } from 'vitest';
 
 import { NativeInferenceClient } from '@echo-chamber/native-inference-adapter/native-inference-client';
-import type {
-  NativeGenerateCommand,
-  NativeRuntimeMetrics,
+import {
+  requireNativeMetalMemory,
+  type NativeGenerateCommand,
+  type NativeRuntimeMetrics,
 } from '@echo-chamber/native-inference-adapter/protocol';
 
 import { EphemeralNativeStateRoots } from './ephemeral-state-roots';
@@ -240,7 +241,7 @@ async function runAttempt(
   const metrics = event.response.metrics;
   const firstGeneratedTokenNanos = metrics.first_generated_token_nanos;
   if (
-    firstGeneratedTokenNanos === undefined ||
+    firstGeneratedTokenNanos === null ||
     metrics.decode_execution_nanos <= 0 ||
     metrics.generated_tokens <= 0
   ) {
@@ -340,6 +341,20 @@ function summarize(
   if (firstAttempt === undefined || lastAttempt === undefined) {
     throw new Error('sustained summary requires measured attempts');
   }
+  const metalMemories = attempts.map((attempt) =>
+    requireNativeMetalMemory(
+      attempt.metrics,
+      `sustained attempt ${attempt.index}`
+    )
+  );
+  const firstMetalMemory = requireNativeMetalMemory(
+    firstAttempt.metrics,
+    'first sustained attempt'
+  );
+  const lastMetalMemory = requireNativeMetalMemory(
+    lastAttempt.metrics,
+    'last sustained attempt'
+  );
   return {
     actualMeasuredDurationSeconds,
     measuredAttempts: attempts.length,
@@ -369,18 +384,16 @@ function summarize(
     medianTotalMsForFullLengthAttempts: median(
       fullLength.map((attempt) => attempt.totalMs)
     ),
-    firstMetalActiveNbytes: firstAttempt.metrics.metal_memory.active_nbytes,
-    lastMetalActiveNbytes: lastAttempt.metrics.metal_memory.active_nbytes,
+    firstMetalActiveNbytes: firstMetalMemory.active_nbytes,
+    lastMetalActiveNbytes: lastMetalMemory.active_nbytes,
     activeGrowthNbytes:
-      lastAttempt.metrics.metal_memory.active_nbytes -
-      firstAttempt.metrics.metal_memory.active_nbytes,
-    firstMetalCacheNbytes: firstAttempt.metrics.metal_memory.cache_nbytes,
-    lastMetalCacheNbytes: lastAttempt.metrics.metal_memory.cache_nbytes,
+      lastMetalMemory.active_nbytes - firstMetalMemory.active_nbytes,
+    firstMetalCacheNbytes: firstMetalMemory.cache_nbytes,
+    lastMetalCacheNbytes: lastMetalMemory.cache_nbytes,
     cacheGrowthNbytes:
-      lastAttempt.metrics.metal_memory.cache_nbytes -
-      firstAttempt.metrics.metal_memory.cache_nbytes,
+      lastMetalMemory.cache_nbytes - firstMetalMemory.cache_nbytes,
     maximumMetalPeakNbytes: Math.max(
-      ...attempts.map((attempt) => attempt.metrics.metal_memory.peak_nbytes)
+      ...metalMemories.map((memory) => memory.peak_nbytes)
     ),
   };
 }

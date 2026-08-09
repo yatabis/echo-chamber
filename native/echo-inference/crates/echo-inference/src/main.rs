@@ -448,6 +448,8 @@ fn serve_stdio_command(arguments: &mut impl Iterator<Item = String>) -> Result<(
         .transpose()?
         .unwrap_or(LocalServerConfig::default().max_outstanding_requests);
     reject_extra_arguments(arguments)?;
+    let server_defaults =
+        LocalServerConfig::defaults_for_max_outstanding_requests(max_outstanding_requests);
     let engine_defaults = ResidentEngineConfig::default();
     let chunk_size_override =
         optional_nonnegative_environment("ECHO_NATIVE_PREFILL_CHUNK_SIZE_TOKENS")?;
@@ -468,10 +470,13 @@ fn serve_stdio_command(arguments: &mut impl Iterator<Item = String>) -> Result<(
         chunk_at_or_above_override.unwrap_or(engine_defaults.prefill_chunk_at_or_above_tokens);
     let new_session_gdn_policy = new_session_gdn_policy_environment()?;
     let max_active_batch_size = optional_positive_environment("ECHO_NATIVE_MAX_ACTIVE_BATCH_SIZE")?
-        .unwrap_or(LocalServerConfig::default().max_active_batch_size);
+        .unwrap_or(server_defaults.max_active_batch_size);
     let max_late_join_batch_size =
-        optional_positive_environment("ECHO_NATIVE_MAX_LATE_JOIN_BATCH_SIZE")?
-            .unwrap_or(LocalServerConfig::default().max_late_join_batch_size);
+        optional_positive_environment("ECHO_NATIVE_MAX_LATE_JOIN_BATCH_SIZE")?.unwrap_or(
+            server_defaults
+                .max_late_join_batch_size
+                .min(max_active_batch_size),
+        );
     serve_local_stdio(
         Path::new(&model_directory),
         LocalServerConfig {
@@ -484,7 +489,7 @@ fn serve_stdio_command(arguments: &mut impl Iterator<Item = String>) -> Result<(
                 new_session_gdn_policy,
                 ..ResidentEngineConfig::default()
             },
-            ..LocalServerConfig::default()
+            ..server_defaults
         },
     )?;
     Ok(())

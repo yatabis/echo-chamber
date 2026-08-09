@@ -14,10 +14,11 @@ import { dirname, join } from 'node:path';
 import { expect, test } from 'vitest';
 
 import { NativeInferenceClient } from '@echo-chamber/native-inference-adapter/native-inference-client';
-import type {
-  NativeCompletedEvent,
-  NativeGenerateCommand,
-  NativeRuntimeMetrics,
+import {
+  requireNativeMetalMemory,
+  type NativeCompletedEvent,
+  type NativeGenerateCommand,
+  type NativeRuntimeMetrics,
 } from '@echo-chamber/native-inference-adapter/protocol';
 
 import { EphemeralNativeStateRoots } from './ephemeral-state-roots';
@@ -380,8 +381,12 @@ liveTest(
         finalCommittedStateLogicalNbytes:
           finalCached.metrics.committed_state_logical_nbytes,
         activeMemoryGrowthNbytes:
-          finalCached.metrics.metal_memory.active_nbytes -
-          prefix.record.metrics.metal_memory.active_nbytes,
+          requireNativeMetalMemory(
+            finalCached.metrics,
+            'long-session final continuation'
+          ).active_nbytes -
+          requireNativeMetalMemory(prefix.record.metrics, 'long-session prefix')
+            .active_nbytes,
       };
       result.checks = checks;
       writeResult(config.outputPath, result);

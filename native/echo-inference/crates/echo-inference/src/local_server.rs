@@ -22,9 +22,9 @@ use super::runtime::{
     ResidentEngineInfo, RuntimeError, StatePersistence,
 };
 use super::sampling::SamplingConfig;
-use super::tool_output::{EchoOutputItem, parse_qwen_output};
+use super::tool_output::{EchoOutputItem, parse_qwen_output_with_tools};
 
-const PROTOCOL_VERSION: u32 = 9;
+const PROTOCOL_VERSION: u32 = 10;
 
 /// Admission and backpressure limits for the dedicated local stdio server.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -49,6 +49,23 @@ impl Default for LocalServerConfig {
             max_late_join_batch_size: 4,
             event_buffer_capacity: 128,
             engine: ResidentEngineConfig::default(),
+        }
+    }
+}
+
+impl LocalServerConfig {
+    /// Returns the production defaults with batch widths bounded by one
+    /// caller-selected outstanding-request limit.
+    #[must_use]
+    pub fn defaults_for_max_outstanding_requests(max_outstanding_requests: usize) -> Self {
+        let defaults = Self::default();
+        let max_active_batch_size = defaults.max_active_batch_size.min(max_outstanding_requests);
+        let max_late_join_batch_size = defaults.max_late_join_batch_size.min(max_active_batch_size);
+        Self {
+            max_outstanding_requests,
+            max_active_batch_size,
+            max_late_join_batch_size,
+            ..defaults
         }
     }
 }
@@ -120,6 +137,7 @@ enum WireEvent {
         engine: ResidentEngineInfo,
         eos_token_id: u32,
         chat_template_sha256: String,
+        max_new_tokens_per_request: usize,
         max_outstanding_requests: usize,
         max_active_batch_size: usize,
         max_late_join_batch_size: usize,
@@ -219,6 +237,7 @@ pub fn serve_local_stdio(
             engine: engine.info().clone(),
             eos_token_id: tokenizer.eos_token_id(),
             chat_template_sha256: tokenizer.chat_template_sha256().into(),
+            max_new_tokens_per_request: config.engine.max_new_tokens_per_request,
             max_outstanding_requests: config.max_outstanding_requests,
             max_active_batch_size: config.max_active_batch_size,
             max_late_join_batch_size: config.max_late_join_batch_size,
@@ -266,6 +285,12 @@ fn validate_config(config: LocalServerConfig) -> Result<(), LocalServerError> {
         return Err(LocalServerError::InvalidConfiguration(
             "max_active_batch_size must be within 1..=6".into(),
         ));
+    }
+    if config.max_active_batch_size > config.max_outstanding_requests {
+        return Err(LocalServerError::InvalidConfiguration(format!(
+            "max_active_batch_size must not exceed max_outstanding_requests {}, observed {}",
+            config.max_outstanding_requests, config.max_active_batch_size
+        )));
     }
     if config.max_late_join_batch_size == 0
         || config.max_late_join_batch_size > config.max_active_batch_size
@@ -611,6 +636,7 @@ fn send_generation_outcome(
     events: &SyncSender<WireEvent>,
     tokenizer: &Qwen35ChatTokenizer,
     request_id: &str,
+    tools: &[EchoToolContract],
     outcome: &Result<InferenceResponse, RuntimeError>,
 ) -> Result<(), LocalServerError> {
     match outcome {
@@ -621,7 +647,7 @@ fn send_generation_outcome(
                 .position(|token| *token == tokenizer.eos_token_id())
                 .unwrap_or(response.generated_tokens.len());
             let text = tokenizer.decode(&response.generated_tokens[..text_token_count])?;
-            let parsed = parse_qwen_output(&text, request_id);
+            let parsed = parse_qwen_output_with_tools(&text, request_id, tools);
             send_event(
                 events,
                 WireEvent::Completed {
@@ -713,6 +739,7 @@ fn run_snapshot(
 
 struct StdioGenerationObserver<'a> {
     request_id: String,
+    tools: Vec<EchoToolContract>,
     cancellation: Arc<AtomicBool>,
     eos_token_id: u32,
     decoder: Option<Qwen35DecodeStream<'a>>,
@@ -724,6 +751,7 @@ struct StdioGenerationObserver<'a> {
 impl<'a> StdioGenerationObserver<'a> {
     fn new(
         request_id: String,
+        tools: Vec<EchoToolContract>,
         cancellation: Arc<AtomicBool>,
         eos_token_id: u32,
         decoder: Option<Qwen35DecodeStream<'a>>,
@@ -731,6 +759,7 @@ impl<'a> StdioGenerationObserver<'a> {
     ) -> Self {
         Self {
             request_id,
+            tools,
             cancellation,
             eos_token_id,
             decoder,
@@ -830,6 +859,7 @@ impl StdioBatchGenerationCoordinator<'_> {
         )?;
         self.rows.push(StdioGenerationObserver::new(
             request_id,
+            prompt.tools,
             cancellation,
             self.tokenizer.eos_token_id(),
             stream_tokens.then(|| self.tokenizer.decode_stream()),
@@ -909,9 +939,10 @@ impl BatchGenerationObserver for StdioBatchGenerationCoordinator<'_> {
             ));
         }
         let request_id = row.request_id.clone();
+        let tools = std::mem::take(&mut row.tools);
         row.finished = true;
         remove_registration(self.registry, &request_id);
-        send_generation_outcome(self.events, self.tokenizer, &request_id, outcome)
+        send_generation_outcome(self.events, self.tokenizer, &request_id, &tools, outcome)
             .map_err(|error| error.to_string())
     }
 }
@@ -1149,6 +1180,36 @@ mod tests {
         })
         .expect_err("late join wider than active batch must fail");
         assert!(error.to_string().contains("within 1..=3"));
+    }
+
+    #[test]
+    fn default_batch_widths_never_exceed_the_outstanding_limit() {
+        for (outstanding, expected_active, expected_late_join) in [
+            (1, 1, 1),
+            (2, 2, 2),
+            (3, 3, 3),
+            (4, 4, 4),
+            (5, 5, 4),
+            (6, 6, 4),
+            (8, 6, 4),
+        ] {
+            let config = LocalServerConfig::defaults_for_max_outstanding_requests(outstanding);
+            assert_eq!(config.max_active_batch_size, expected_active);
+            assert_eq!(config.max_late_join_batch_size, expected_late_join);
+            validate_config(config).expect("derived defaults must be protocol-valid");
+        }
+    }
+
+    #[test]
+    fn active_batch_limit_cannot_exceed_the_outstanding_limit() {
+        let error = validate_config(LocalServerConfig {
+            max_outstanding_requests: 2,
+            max_active_batch_size: 3,
+            max_late_join_batch_size: 2,
+            ..LocalServerConfig::default()
+        })
+        .expect_err("active batch wider than outstanding requests must fail");
+        assert!(error.to_string().contains("must not exceed"));
     }
 
     #[test]

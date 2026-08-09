@@ -199,7 +199,11 @@ pub struct RuntimeMetrics {
     /// Logical bytes in the newly committed KV and GDN state.
     pub committed_state_logical_nbytes: usize,
     /// Process-wide Metal allocator observations after this state commits.
-    pub metal_memory: RuntimeMemoryStats,
+    ///
+    /// `None` means the state committed successfully but MLX could not report
+    /// its allocator counters. Monitoring failure must not turn a committed
+    /// state transition into a failed inference response.
+    pub metal_memory: Option<RuntimeMemoryStats>,
 }
 
 /// Successful state-advancing result.
@@ -662,8 +666,8 @@ impl ResidentEngine {
             model,
             payload: model_run.state,
         };
-        let committed = lease.commit(prepared)?;
-        let metal_memory = metal_memory_stats().map_err(EngineError::Mlx)?;
+        let (committed, metal_memory) =
+            commit_with_optional_metal_memory(lease, prepared, metal_memory_stats)?;
         let request_nanos = duration_nanos(request_started.elapsed());
         let generated_token_count = model_run.generated_tokens.len();
 
@@ -697,7 +701,7 @@ impl ResidentEngine {
                 model_execution_nanos: model_run.model_execution_nanos,
                 request_nanos,
                 committed_state_logical_nbytes,
-                metal_memory: metal_memory.into(),
+                metal_memory,
             },
         })
     }
@@ -1036,6 +1040,19 @@ fn selected_prefill_chunk_size(
     })
 }
 
+fn commit_with_optional_metal_memory<P, F, E>(
+    lease: StateLease<P>,
+    prepared: PreparedState<P>,
+    observe: F,
+) -> Result<(Arc<CommittedState<P>>, Option<RuntimeMemoryStats>), CommitError>
+where
+    F: FnOnce() -> Result<MetalMemoryStats, E>,
+{
+    let committed = lease.commit(prepared)?;
+    let metal_memory = observe().ok().map(RuntimeMemoryStats::from);
+    Ok((committed, metal_memory))
+}
+
 fn duration_nanos(duration: Duration) -> u64 {
     u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
 }
@@ -1362,6 +1379,16 @@ mod tests {
         }
     }
 
+    fn model_identity() -> ModelIdentity {
+        ModelIdentity {
+            architecture: "qwen3_5_moe".into(),
+            config_digest: "config".into(),
+            weights_digest: "weights".into(),
+            tokenizer_digest: "tokenizer".into(),
+            template_digest: "template".into(),
+        }
+    }
+
     #[test]
     fn queue_is_fifo_and_cancellation_removes_only_waiting_ticket() {
         let mut queue = InferenceQueue::new(3).expect("valid queue");
@@ -1407,5 +1434,58 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn metal_memory_observation_failure_keeps_committed_state_usable() {
+        let store = StateStore::default();
+        let instance_id = InstanceId::new("echo:rin").expect("valid instance");
+        let lease = store
+            .begin(instance_id.clone(), ExpectedState::Absent)
+            .expect("initial lease");
+        let prepared = PreparedState {
+            model: model_identity(),
+            payload: 1_u32,
+        };
+
+        let (committed, metal_memory) = commit_with_optional_metal_memory(lease, prepared, || {
+            Err::<MetalMemoryStats, _>("allocator counters unavailable")
+        })
+        .expect("state commit must not depend on monitoring");
+
+        assert_eq!(committed.payload, 1);
+        assert_eq!(metal_memory, None);
+        assert_eq!(
+            store
+                .current(&instance_id)
+                .expect("committed state remains current")
+                .payload,
+            1
+        );
+
+        let next_lease = store
+            .begin(instance_id.clone(), ExpectedState::Present)
+            .expect("committed lane remains continuable");
+        let next_prepared = PreparedState {
+            model: model_identity(),
+            payload: 2_u32,
+        };
+        let expected_memory = RuntimeMemoryStats {
+            active_nbytes: 10,
+            cache_nbytes: 20,
+            peak_nbytes: 30,
+        };
+        let (next_committed, next_memory) =
+            commit_with_optional_metal_memory(next_lease, next_prepared, || {
+                Ok::<_, &str>(MetalMemoryStats {
+                    active_nbytes: 10,
+                    cache_nbytes: 20,
+                    peak_nbytes: 30,
+                })
+            })
+            .expect("next state commit");
+
+        assert_eq!(next_committed.payload, 2);
+        assert_eq!(next_memory, Some(expected_memory));
     }
 }
