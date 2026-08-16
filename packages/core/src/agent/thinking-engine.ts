@@ -162,6 +162,7 @@ export class ThinkingEngine {
       currentDatetime: new Date(),
       latestContext: toPromptContext(latestContext),
       relatedMemories: toPromptRelatedMemories(relatedMemories),
+      toolContracts: this.input.tools.map((tool) => tool.contract),
     });
     const promptInputs: ModelInputItem[] = promptMessages.map((message) => ({
       role: message.role,

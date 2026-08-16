@@ -7,6 +7,7 @@ import type { NotePort } from '@echo-chamber/core/ports/note';
 import { createDiscordChatPort } from '@echo-chamber/discord-adapter/chat-port';
 import { createDiscordNotificationPort } from '@echo-chamber/discord-adapter/notification-port';
 
+import { createCloudflareWebPageReader } from '../web/cloudflare-web-page-reader';
 import { createZennPort } from '../zenn/create-zenn-port';
 
 import type { EchoChatRuntimeBindings } from '../config/echo-runtime-bindings';
@@ -69,6 +70,7 @@ export function createToolExecutionContext(options: {
     }),
     memory: createMemoryPort(options.memorySystem),
     notes: createNotePort(options.noteSystem),
+    webPageReader: createCloudflareWebPageReader(),
     zenn: createZennPort(),
   };
 }

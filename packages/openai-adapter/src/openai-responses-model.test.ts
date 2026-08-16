@@ -333,6 +333,102 @@ describe('OpenAIResponsesModel', () => {
     });
   });
 
+  it('exchange eventではWeb call/resultだけを伏せ、live payloadと非Web値を保つ', async () => {
+    const rawUrl = 'https://public.example/page?token=RESPONSES_WEB_ARG';
+    const webResult = JSON.stringify({
+      success: true,
+      source: {
+        requestedUrl: rawUrl,
+        finalUrl: 'https://public.example/final',
+        title: 'RESPONSES_PRIVATE_TITLE',
+        httpStatus: 200,
+        contentType: 'text/html',
+        redirectCount: 1,
+      },
+      document: {
+        text: 'RESPONSES_WEB_RESULT',
+        returnedCharacters: 20,
+        extractedCharacters: 40,
+        truncated: false,
+        links: [{ text: 'private', url: 'https://public.example/private' }],
+      },
+    });
+    const firstProviderResponse = {
+      id: 'response_web_1',
+      output: [
+        {
+          type: 'function_call',
+          call_id: 'web-call',
+          name: 'read_web_page',
+          arguments: JSON.stringify({ url: rawUrl }),
+          status: 'completed',
+        },
+      ],
+      usage: {
+        input_tokens: 1,
+        input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
+        output_tokens: 1,
+        output_tokens_details: { reasoning_tokens: 0 },
+        total_tokens: 2,
+      },
+    };
+    mockCreateResponse
+      .mockResolvedValueOnce(firstProviderResponse)
+      .mockResolvedValueOnce({
+        id: 'response_web_2',
+        output: [],
+        usage: {
+          input_tokens: 1,
+          input_tokens_details: {
+            cached_tokens: 0,
+            cache_write_tokens: 0,
+          },
+          output_tokens: 1,
+          output_tokens_details: { reasoning_tokens: 0 },
+          total_tokens: 2,
+        },
+      });
+    const model = new OpenAIResponsesModel({
+      apiKey: 'test-key',
+      events: mockEvents,
+    });
+
+    await model.generate({ input: [], tools: [] });
+    await model.generate({
+      input: [
+        { type: 'tool_result', callId: 'web-call', output: webResult },
+        {
+          type: 'tool_call',
+          callId: 'other-call',
+          toolName: 'think_deeply',
+          input: 'RESPONSES_NON_WEB_CANARY',
+        },
+        {
+          type: 'tool_result',
+          callId: 'other-call',
+          output: 'RESPONSES_NON_WEB_CANARY',
+        },
+      ],
+      tools: [],
+    });
+
+    const exchangeEvents = mockEmit.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.type === 'model.exchange.recorded');
+    const serializedEvents = JSON.stringify(exchangeEvents);
+    expect(serializedEvents).not.toContain('RESPONSES_WEB_ARG');
+    expect(serializedEvents).not.toContain('RESPONSES_WEB_RESULT');
+    expect(serializedEvents).not.toContain('RESPONSES_PRIVATE_TITLE');
+    expect(serializedEvents).toContain('RESPONSES_NON_WEB_CANARY');
+
+    expect(JSON.stringify(mockCreateResponse.mock.calls[1]?.[0])).toContain(
+      'RESPONSES_WEB_RESULT'
+    );
+    expect(JSON.stringify(firstProviderResponse)).toContain(
+      'RESPONSES_WEB_ARG'
+    );
+  });
+
   it('usage がない response はゼロ usage として扱う', async () => {
     const model = new OpenAIResponsesModel({
       apiKey: 'test-key',

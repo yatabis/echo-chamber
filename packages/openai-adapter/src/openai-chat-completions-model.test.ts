@@ -377,6 +377,127 @@ describe('OpenAIChatCompletionsModel', () => {
     });
   });
 
+  it('exchange eventではWeb historyだけを伏せ、live payloadと非Web値を保つ', async () => {
+    const rawUrl = 'https://public.example/page?token=CHAT_WEB_ARG';
+    const webResult = JSON.stringify({
+      success: true,
+      source: {
+        requestedUrl: rawUrl,
+        finalUrl: 'https://public.example/final',
+        title: 'CHAT_PRIVATE_TITLE',
+        httpStatus: 200,
+        contentType: 'text/html',
+        redirectCount: 0,
+      },
+      document: {
+        text: 'CHAT_WEB_RESULT',
+        returnedCharacters: 15,
+        extractedCharacters: 30,
+        truncated: false,
+        links: [{ text: 'private', url: 'https://public.example/private' }],
+      },
+    });
+    const firstProviderResponse = {
+      id: 'chat_web_1',
+      choices: [
+        {
+          index: 0,
+          finish_reason: 'tool_calls',
+          logprobs: null,
+          message: {
+            role: 'assistant',
+            content: null,
+            refusal: null,
+            tool_calls: [
+              {
+                id: 'web-call',
+                type: 'function',
+                function: {
+                  name: 'read_web_page',
+                  arguments: JSON.stringify({ url: rawUrl }),
+                },
+              },
+            ],
+          },
+        },
+      ],
+      created: 0,
+      model: 'qwen3.6',
+      object: 'chat.completion',
+      usage: {
+        prompt_tokens: 1,
+        completion_tokens: 1,
+        total_tokens: 2,
+      },
+    };
+    mockChatCreate
+      .mockResolvedValueOnce(firstProviderResponse)
+      .mockResolvedValueOnce({
+        id: 'chat_web_2',
+        choices: [
+          {
+            index: 0,
+            finish_reason: 'stop',
+            logprobs: null,
+            message: {
+              role: 'assistant',
+              content: 'finished',
+              refusal: null,
+            },
+          },
+        ],
+        created: 0,
+        model: 'qwen3.6',
+        object: 'chat.completion',
+        usage: {
+          prompt_tokens: 1,
+          completion_tokens: 1,
+          total_tokens: 2,
+        },
+      });
+    const model = new OpenAIChatCompletionsModel({
+      apiKey: 'local-key',
+      model: 'qwen3.6',
+      events: mockEvents,
+    });
+
+    await model.generate({ input: [], tools: [] });
+    await model.generate({
+      input: [
+        { type: 'tool_result', callId: 'web-call', output: webResult },
+        {
+          type: 'tool_call',
+          callId: 'other-call',
+          toolName: 'think_deeply',
+          input: 'CHAT_NON_WEB_CANARY',
+        },
+        {
+          type: 'tool_result',
+          callId: 'other-call',
+          output: 'CHAT_NON_WEB_CANARY',
+        },
+      ],
+      tools: [],
+    });
+
+    const exchangeEvents = mockEmit.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.type === 'model.exchange.recorded');
+    const serializedEvents = JSON.stringify(exchangeEvents);
+    expect(serializedEvents).not.toContain('CHAT_WEB_ARG');
+    expect(serializedEvents).not.toContain('CHAT_WEB_RESULT');
+    expect(serializedEvents).not.toContain('CHAT_PRIVATE_TITLE');
+    expect(serializedEvents).toContain('CHAT_NON_WEB_CANARY');
+
+    expect(JSON.stringify(mockChatCreate.mock.calls[1]?.[0])).toContain(
+      'CHAT_WEB_ARG'
+    );
+    expect(JSON.stringify(mockChatCreate.mock.calls[1]?.[0])).toContain(
+      'CHAT_WEB_RESULT'
+    );
+    expect(JSON.stringify(firstProviderResponse)).toContain('CHAT_WEB_ARG');
+  });
+
   it('画像付き message を Chat Completions content part に変換する', async () => {
     const model = new OpenAIChatCompletionsModel({
       apiKey: 'local-key',

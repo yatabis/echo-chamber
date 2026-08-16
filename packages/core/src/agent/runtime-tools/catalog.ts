@@ -15,6 +15,7 @@ import {
   updateNoteTool,
 } from './note';
 import { thinkDeeplyTool } from './think';
+import { readWebPageTool } from './web';
 import { getZennArticleTool, listTrendingZennArticlesTool } from './zenn';
 
 export const canonicalRuntimeTools = [
@@ -32,6 +33,7 @@ export const canonicalRuntimeTools = [
   deleteNoteTool,
   listTrendingZennArticlesTool,
   getZennArticleTool,
+  readWebPageTool,
   thinkDeeplyTool,
   finishThinkingTool,
 ] as const;

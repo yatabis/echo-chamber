@@ -5,7 +5,9 @@ import {
   buildRuntimeContextPrompt,
   buildToolCatalogPrompt,
 } from './prompt-builder';
-import { canonicalToolSpecifications } from './tools/catalog';
+import { canonicalRuntimeTools } from './runtime-tools/catalog';
+
+import type { ModelToolContract } from '../ports/model';
 
 const testCurrentDatetime = new Date('2025-01-25T15:00:00.000Z');
 const testLatestContext = {
@@ -29,15 +31,31 @@ const testRelatedMemories = [
     },
   },
 ];
+const canonicalToolContracts = canonicalRuntimeTools.map(
+  (tool) => tool.contract
+);
+
+function createToolContract(name: string): ModelToolContract {
+  return {
+    name,
+    description: `${name} description`,
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    },
+    strict: true,
+  };
+}
 
 describe('buildToolCatalogPrompt', () => {
-  it('canonical tool definitions からツール一覧を生成する', () => {
-    const result = buildToolCatalogPrompt();
+  it('bind対象のtool contractsからツール一覧を生成する', () => {
+    const result = buildToolCatalogPrompt(canonicalToolContracts);
 
     expect(result).toContain('<available_tools>');
     expect(result).toContain('</available_tools>');
 
-    for (const tool of canonicalToolSpecifications) {
+    for (const tool of canonicalToolContracts) {
       expect(result).toContain(`- ${tool.name}: ${tool.description}`);
     }
 
@@ -46,6 +64,16 @@ describe('buildToolCatalogPrompt', () => {
     );
     expect(result).toContain('limit (required): 取得するメッセージ数');
     expect(result).toContain('arguments: none');
+  });
+
+  it('渡されていないtoolをstatic catalogから補完しない', () => {
+    const result = buildToolCatalogPrompt([
+      createToolContract('only_bound_tool'),
+    ]);
+
+    expect(result).toContain('- only_bound_tool: only_bound_tool description');
+    expect(result).not.toContain('finish_thinking');
+    expect(result).not.toContain('read_web_page');
   });
 });
 
@@ -113,6 +141,7 @@ describe('buildAgentPromptMessages', () => {
       systemPrompt: '<persona>Test persona</persona>',
       currentDatetime: testCurrentDatetime,
       latestContext: null,
+      toolContracts: [createToolContract('only_bound_tool')],
     });
 
     expect(result).toEqual([
@@ -125,6 +154,7 @@ describe('buildAgentPromptMessages', () => {
     ]);
     expect(result[0]?.content).toContain('<persona>Test persona</persona>');
     expect(result[0]?.content).toContain('<available_tools>');
+    expect(result[0]?.content).toContain('only_bound_tool');
     expect(result[1]?.content).toContain('<runtime_context>');
   });
 });

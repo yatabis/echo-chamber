@@ -201,6 +201,15 @@ class StatefulRuntimeWorld {
         },
       },
       notes: this.createNotePort(),
+      webPageReader: {
+        readPage: async () => ({
+          success: false,
+          code: 'internal_error',
+          error:
+            'Public Web access is disabled in deterministic evaluation fixtures.',
+          retryable: false,
+        }),
+      },
       zenn: {
         listTrendingArticles: async (): Promise<
           readonly ZennTrendingArticleSummary[]

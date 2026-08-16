@@ -50,6 +50,9 @@ const mockToolContext: ToolContext = {
     update: updateNoteMock,
     delete: deleteNoteMock,
   },
+  webPageReader: {
+    readPage: vi.fn(),
+  },
   zenn: {
     listTrendingArticles: vi.fn().mockResolvedValue([]),
     getArticleBySlug: vi.fn(),

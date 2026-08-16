@@ -1,21 +1,7 @@
-import { z } from 'zod';
-
 import { formatJapaneseDatetime } from '../utils/datetime';
 
-import { canonicalToolSpecifications } from './tools/catalog';
-
 import type { Emotion, MemoryType } from '../echo/types';
-
-/**
- * Prompt builder が参照する最小限のツール仕様。
- * canonical tool definitions 全体を持ち込まずに、
- * prompt 生成に必要なメタ情報だけを扱う。
- */
-interface PromptToolSpecification {
-  name: string;
-  description: string;
-  parameters: z.ZodRawShape;
-}
+import type { ModelToolContract } from '../ports/model';
 
 /**
  * 起動時に prompt へ注入する最新 context の要約。
@@ -47,7 +33,7 @@ export interface BuildAgentPromptInput {
   currentDatetime: Date;
   latestContext: PromptContextSnapshot | null;
   relatedMemories?: readonly PromptRelatedMemorySnapshot[];
-  toolSpecifications?: readonly PromptToolSpecification[];
+  toolContracts: readonly ModelToolContract[];
 }
 
 /**
@@ -60,22 +46,26 @@ export interface AgentPromptMessage {
 }
 
 /**
- * Zod schema から、prompt に埋め込める引数説明の箇条書きを生成する。
+ * JSON Schema から、prompt に埋め込める引数説明の箇条書きを生成する。
  * required/optional を明示して、LLM が tool 呼び出し時の前提を読み取りやすくする。
  */
-function buildToolParameterDescriptions(parameters: z.ZodRawShape): string[] {
-  const schema = z.toJSONSchema(z.object(parameters)) as {
-    properties?: Record<string, { description?: string }>;
-    required?: string[];
-  };
-  const properties = schema.properties ?? {};
-  const required = new Set(schema.required ?? []);
+function buildToolParameterDescriptions(inputSchema: unknown): string[] {
+  const schema = getRecord(inputSchema);
+  const properties = getRecord(schema?.properties) ?? {};
+  const required = new Set(
+    Array.isArray(schema?.required)
+      ? schema.required.filter(
+          (property): property is string => typeof property === 'string'
+        )
+      : []
+  );
 
   return Object.entries(properties).map(([name, property]) => {
     const requiredLabel = required.has(name) ? 'required' : 'optional';
+    const propertySchema = getRecord(property);
     const description =
-      typeof property.description === 'string'
-        ? property.description
+      typeof propertySchema?.description === 'string'
+        ? propertySchema.description
         : 'No description provided.';
 
     return `  - ${name} (${requiredLabel}): ${description}`;
@@ -83,14 +73,25 @@ function buildToolParameterDescriptions(parameters: z.ZodRawShape): string[] {
 }
 
 /**
- * canonical tool definitions をもとに `<available_tools>` ブロックを生成する。
- * prompt 内のツール仕様の正規ソースをコード定義へ揃えるために使う。
+ * unknown 値を配列ではないobjectとして扱える場合だけ返す。
+ */
+function getRecord(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+
+  return value as Record<string, unknown>;
+}
+
+/**
+ * bind済みtool contractsをもとに `<available_tools>` ブロックを生成する。
+ * prompt、provider contract、実行可能toolの広告対象を同じ集合へ揃える。
  */
 export function buildToolCatalogPrompt(
-  toolSpecifications: readonly PromptToolSpecification[] = canonicalToolSpecifications
+  toolContracts: readonly ModelToolContract[]
 ): string {
-  const lines = toolSpecifications.flatMap((tool) => {
-    const parameterLines = buildToolParameterDescriptions(tool.parameters);
+  const lines = toolContracts.flatMap((tool) => {
+    const parameterLines = buildToolParameterDescriptions(tool.inputSchema);
 
     return [
       `- ${tool.name}: ${tool.description}`,
@@ -187,7 +188,7 @@ export function buildRuntimeContextPrompt(
 export function buildAgentPromptMessages(
   input: BuildAgentPromptInput
 ): AgentPromptMessage[] {
-  const toolCatalog = buildToolCatalogPrompt(input.toolSpecifications);
+  const toolCatalog = buildToolCatalogPrompt(input.toolContracts);
   const runtimeContext = buildRuntimeContextPrompt(
     input.currentDatetime,
     input.latestContext,

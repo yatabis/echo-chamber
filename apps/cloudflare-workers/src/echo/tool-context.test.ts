@@ -6,6 +6,7 @@ import type { Emotion, Note } from '@echo-chamber/core/echo/types';
 import { createDiscordChatPort } from '@echo-chamber/discord-adapter/chat-port';
 import { createDiscordNotificationPort } from '@echo-chamber/discord-adapter/notification-port';
 
+import { createCloudflareWebPageReader } from '../web/cloudflare-web-page-reader';
 import { createZennPort } from '../zenn/create-zenn-port';
 
 import { createToolExecutionContext } from './tool-context';
@@ -22,6 +23,10 @@ vi.mock('../zenn/create-zenn-port', () => ({
   createZennPort: vi.fn(),
 }));
 
+vi.mock('../web/cloudflare-web-page-reader', () => ({
+  createCloudflareWebPageReader: vi.fn(),
+}));
+
 const mockChatPort = {
   readMessages: vi.fn(),
   sendMessage: vi.fn(),
@@ -35,6 +40,10 @@ const mockNotificationPort = {
 const mockZennPort = {
   listTrendingArticles: vi.fn(),
   getArticleBySlug: vi.fn(),
+};
+
+const mockWebPageReader = {
+  readPage: vi.fn(),
 };
 
 function createMemorySystemMock(): {
@@ -79,6 +88,7 @@ describe('createToolExecutionContext', () => {
       mockNotificationPort
     );
     vi.mocked(createZennPort).mockReturnValue(mockZennPort);
+    vi.mocked(createCloudflareWebPageReader).mockReturnValue(mockWebPageReader);
   });
 
   it('chat 用 runtime bindings だけで Discord ports を構築する', async () => {
@@ -147,6 +157,8 @@ describe('createToolExecutionContext', () => {
     expect(context.notifications).toBe(mockNotificationPort);
     expect(createZennPort).toHaveBeenCalledWith();
     expect(context.zenn).toBe(mockZennPort);
+    expect(createCloudflareWebPageReader).toHaveBeenCalledWith();
+    expect(context.webPageReader).toBe(mockWebPageReader);
 
     await context.memory.store('memory', emotion, 'episode');
     expect(storeMemory).toHaveBeenCalledWith('memory', emotion, 'episode');

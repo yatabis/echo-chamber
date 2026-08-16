@@ -18,6 +18,7 @@ import type {
 } from '@echo-chamber/core/ports/model';
 
 import { toFunctionParameters } from './openai-response-mappers';
+import { projectChatCompletionsWebToolExchange } from './web-tool-audit';
 
 import type {
   ChatCompletion,
@@ -81,6 +82,7 @@ export class OpenAIChatCompletionsModel implements ModelPort {
   private readonly messages: ChatCompletionMessageParam[] = [];
   private readonly events: EchoEventPort | undefined;
   private hasCompletedChatExchange = false;
+  private webToolCallIds = new Set<string>();
 
   /**
    * Chat Completions API を使う `ModelPort` adapter を構築する。
@@ -167,7 +169,8 @@ export class OpenAIChatCompletionsModel implements ModelPort {
   }
 
   /**
-   * raw API payload を debug event として記録する。
+   * API payloadの監査用コピーをdebug eventとして記録する。
+   * read_web_pageだけはURLと取得本文をmetadataへ置換する。
    *
    * @param request provider-neutral request
    * @param params Chat Completions request body
@@ -179,6 +182,13 @@ export class OpenAIChatCompletionsModel implements ModelPort {
       OpenAIChatCompletionsExtraBody,
     response: ChatCompletion
   ): Promise<void> {
+    const audit = projectChatCompletionsWebToolExchange(
+      params,
+      response,
+      this.webToolCallIds
+    );
+    this.webToolCallIds = audit.webToolCallIds;
+
     await emitEchoEvent(this.events, {
       type: 'model.exchange.recorded',
       severity: 'debug',
@@ -187,8 +197,8 @@ export class OpenAIChatCompletionsModel implements ModelPort {
         provider: 'openai.chat_completions',
         model: this.options.model,
         turnIndex: request.turnIndex,
-        request: params,
-        response,
+        request: audit.request,
+        response: audit.response,
       },
     });
   }

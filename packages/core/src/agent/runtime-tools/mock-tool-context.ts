@@ -23,6 +23,9 @@ export const mockToolContext: ToolContext = {
     update: vi.fn().mockResolvedValue(null),
     delete: vi.fn().mockResolvedValue(false),
   },
+  webPageReader: {
+    readPage: vi.fn(),
+  },
   zenn: {
     listTrendingArticles: vi.fn().mockResolvedValue([]),
     getArticleBySlug: vi.fn(),

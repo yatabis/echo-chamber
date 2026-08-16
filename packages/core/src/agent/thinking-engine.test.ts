@@ -163,6 +163,10 @@ describe('ThinkingEngine', () => {
           emotion: relatedMemory.emotion,
         },
       ],
+      toolContracts: [
+        createToolContract('check_notifications'),
+        createToolContract('finish_thinking'),
+      ],
     });
 
     expect(searchMemory).toHaveBeenCalledWith(latestContext.content);

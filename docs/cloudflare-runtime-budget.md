@@ -188,6 +188,30 @@ skip path events
 
 current embedding model と異なる memory row は、異なるベクトル空間や次元が混ざることを避けるため検索対象にしない。代わりに、日次 sleep maintenance で stale memory の再 embedding を最大 500 件実行し、model 変更後も既存 memory が検索対象へ戻る機会を維持する。
 
+### Public Web page reader
+
+`read_web_page` は model が明示的に tool を呼んだときだけ、同じ思考 session の run path 内で外部 HTTP(S) page を取得する。課金 quota や日次配分ではなく、偶発的な反復・並列取得を単純に抑える session-local counter を使う。
+
+| 項目                | 1 tool call                                            | 1 thinking session                                      |
+| ------------------- | ------------------------------------------------------ | ------------------------------------------------------- |
+| Tool call 上限      | -                                                      | 最大 4 call                                             |
+| 外部 Web fetch      | 初回 1 + redirect 最大 3 = 最大 4                      | 全 call が redirect 上限へ達した場合、理論上最大 16     |
+| Worker / DO request | 実行中の DO request 内で処理するため追加 0             | 追加 0                                                  |
+| Storage reads       | 0                                                      | 0                                                       |
+| Storage writes      | 既存の `tool.called` と completed / failed の約 2 rows | 最大約 8 event rows。次 model turn 等の既存変動分は別途 |
+| Response body       | stream 実測 1,048,576 byte 以下                        | call 間で共有する byte quota は設けない                 |
+| 抽出 Markdown       | 最大 64,000 UTF-16 code units                          | session 合計文字 quota は設けない                       |
+| Model 可視本文      | 既定 8,000、指定可能最大 12,000 UTF-16 code units      | call ごとの上限だけを適用                               |
+| Retry               | 自動 retry なし                                        | retryable 表示はするが reader 自身は再試行しない        |
+
+4 call は並列に実行され得る。各 call の入力 body は 1 MiB で停止するが、stream chunk、結合した byte array、decode 後の文字列、HTML 抽出中の作業文字列が一時的に共存するため、memory の瞬間値は body 上限そのものより大きい。HTMLRewriter は platform API を使い、新しい第三者 runtime dependency は追加しない。CPU、memory、bundle size は local fixture の最大サイズケース、`wrangler deploy --dry-run` の upload size、必要時の preview Worker analytics で確認する。本番 endpoint を負荷測定のために反復実行しない。
+
+2026-08-10 の実装後 dry-run では、Worker 全体の upload size は 1,533.57 KiB、gzip 後 272.33 KiB だった。変更前の同条件 baseline は保存されていないため、これは Web reader の増分ではなく実装後の総量として扱う。
+
+application は初回 URL と各 redirect について scheme、literal / special-use host、既知の internal suffix、credential、credential-like query key、非 default port、HTTPS downgrade を拒否する。hostname の DNS 解決先を application code で検証・pin はしていないため、解決後の egress 制約は Cloudflare platform boundary に依存する。この区別を、local runtime へ同じ adapter を移植できるという意味には解釈しない。
+
+Web tool の監査 event は URL、title、本文、link URL を保存せず、安全な件数・状態 metadata だけを保存する。非 Web tool の raw model exchange は従来どおり保持する。event row 数は変わらないが、Web result 本文を `model.exchange.recorded` へ複製しないため、該当 row の payload size は取得本文より小さくなる。
+
 ## Action analysis read model
 
 集計はテーブルである必要はない。必要条件は、dashboard 表示時に raw event を期間分 scan しないことである。

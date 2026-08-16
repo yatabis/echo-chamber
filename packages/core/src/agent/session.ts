@@ -1,4 +1,5 @@
 import { emitEchoEvent } from '../ports/echo-event';
+import { WEB_PAGE_READER_ERROR_CODES } from '../ports/web-page-reader';
 import { getErrorMessage } from '../utils/error';
 
 import {
@@ -6,6 +7,12 @@ import {
   type FinishThinkingInput,
   type FinishThinkingSessionRecord,
 } from './tools/thinking';
+import {
+  READ_WEB_PAGE_BUDGET_ERROR_MESSAGE,
+  READ_WEB_PAGE_INTERNAL_ERROR_MESSAGE,
+  READ_WEB_PAGE_MAX_CALLS_PER_SESSION,
+  READ_WEB_PAGE_TOOL_NAME,
+} from './tools/web';
 
 import type { EchoEventPort } from '../ports/echo-event';
 import type {
@@ -18,6 +25,15 @@ import type {
   ModelToolContract,
   ModelUsage,
 } from '../ports/model';
+
+const WEB_PAGE_READER_ERROR_CODE_SET = new Set<string>(
+  WEB_PAGE_READER_ERROR_CODES
+);
+const WEB_PAGE_CONTENT_TYPES = new Set([
+  'text/html',
+  'application/xhtml+xml',
+  'text/plain',
+]);
 
 /**
  * agent session が実行できる tool の最小契約。
@@ -114,6 +130,42 @@ function findTool(
   return tools.find((tool) => tool.name === toolName);
 }
 
+function createUnexpectedToolFailure(
+  toolName: string,
+  error: unknown
+): {
+  message: string;
+  metadata: Record<string, unknown>;
+  output: string;
+} {
+  if (toolName === READ_WEB_PAGE_TOOL_NAME) {
+    return {
+      message: READ_WEB_PAGE_INTERNAL_ERROR_MESSAGE,
+      metadata: { code: 'internal_error', retryable: false },
+      output: JSON.stringify({
+        success: false,
+        code: 'internal_error',
+        error: READ_WEB_PAGE_INTERNAL_ERROR_MESSAGE,
+        retryable: false,
+      }),
+    };
+  }
+
+  const message = getErrorMessage(error);
+  return {
+    message,
+    metadata: {},
+    output: JSON.stringify({ success: false, error: message }),
+  };
+}
+
+function createToolErrorAuditMetadata(
+  toolName: string,
+  error: unknown
+): Record<string, unknown> {
+  return toolName === READ_WEB_PAGE_TOOL_NAME ? {} : { error };
+}
+
 /**
  * 1件の tool call を実行し、そのまま次ターンへ返せる文字列結果に変換する。
  * 未登録 tool や handler 例外も JSON 文字列へ正規化して返す。
@@ -132,7 +184,7 @@ export async function executeAgentToolCall(
       callId: toolCall.callId,
       toolName: toolCall.toolName,
       turnIndex,
-      input: toolCall.input,
+      input: createToolInputAuditValue(toolCall),
     },
   });
 
@@ -173,8 +225,9 @@ export async function executeAgentToolCall(
         turnIndex,
         durationMs: Date.now() - startedAt,
         success,
-        error: parsedOutput.error,
-        ...(parsedOutput.diagnostics === undefined
+        ...createToolErrorAuditMetadata(toolCall.toolName, parsedOutput.error),
+        ...(toolCall.toolName === READ_WEB_PAGE_TOOL_NAME ||
+        parsedOutput.diagnostics === undefined
           ? {}
           : { diagnostics: parsedOutput.diagnostics }),
         outputLength: sanitizedOutput.length,
@@ -183,7 +236,7 @@ export async function executeAgentToolCall(
     });
     return sanitizedOutput;
   } catch (error) {
-    const message = getErrorMessage(error);
+    const failure = createUnexpectedToolFailure(toolCall.toolName, error);
     await emitEchoEvent(events, {
       type: 'tool.failed',
       severity: 'warn',
@@ -194,14 +247,40 @@ export async function executeAgentToolCall(
         turnIndex,
         durationMs: Date.now() - startedAt,
         success: false,
-        error: message,
+        ...createToolErrorAuditMetadata(toolCall.toolName, failure.message),
+        ...failure.metadata,
       },
     });
-    return JSON.stringify({
-      success: false,
-      error: message,
-    });
+    return failure.output;
   }
+}
+
+/**
+ * tool.calledへ載せるinputを作る。Web URLだけは生値を保存しない。
+ */
+function createToolInputAuditValue(toolCall: ModelToolCall): unknown {
+  if (toolCall.toolName !== READ_WEB_PAGE_TOOL_NAME) {
+    return toolCall.input;
+  }
+
+  const parsedInput = parseToolInput(toolCall.input);
+  const url = getStringProperty(parsedInput, 'url');
+  const maxCharacters = parsedInput?.maxCharacters;
+  let hasQuery = false;
+  if (url !== undefined) {
+    try {
+      hasQuery = new URL(url).search !== '';
+    } catch {
+      hasQuery = url.includes('?');
+    }
+  }
+
+  return {
+    redacted: true,
+    urlLength: url?.length ?? 0,
+    hasQuery,
+    ...(typeof maxCharacters === 'number' ? { maxCharacters } : {}),
+  };
 }
 
 function parseToolOutput(output: string): {
@@ -258,6 +337,10 @@ function createToolEventMetadata(
   toolCall: ModelToolCall,
   parsedOutput: { record?: Record<string, unknown> }
 ): Record<string, unknown> {
+  if (toolCall.toolName === READ_WEB_PAGE_TOOL_NAME) {
+    return createWebToolEventMetadata(parsedOutput.record);
+  }
+
   const operation = getToolOperation(toolCall.toolName);
   if (operation === undefined) {
     return {};
@@ -267,6 +350,52 @@ function createToolEventMetadata(
     operation,
     ...getToolEntityMetadata(toolCall, parsedOutput),
   };
+}
+
+/**
+ * Web tool resultからURLや本文を含まない監査metadataだけを選ぶ。
+ */
+function createWebToolEventMetadata(
+  output: Record<string, unknown> | undefined
+): Record<string, unknown> {
+  if (output === undefined) {
+    return {};
+  }
+
+  const source = getRecordProperty(output, 'source');
+  const document = getRecordProperty(output, 'document');
+  const links = document?.links;
+
+  return compactRecord({
+    code: getAllowedStringProperty(
+      output,
+      'code',
+      WEB_PAGE_READER_ERROR_CODE_SET
+    ),
+    retryable: getBooleanProperty(output, 'retryable'),
+    httpStatus: getNumberProperty(source, 'httpStatus'),
+    contentType: getAllowedStringProperty(
+      source,
+      'contentType',
+      WEB_PAGE_CONTENT_TYPES
+    ),
+    redirectCount: getNumberProperty(source, 'redirectCount'),
+    returnedCharacters: getNumberProperty(document, 'returnedCharacters'),
+    extractedCharacters: getNumberProperty(document, 'extractedCharacters'),
+    truncated: getBooleanProperty(document, 'truncated'),
+    linkCount: Array.isArray(links) ? links.length : undefined,
+  });
+}
+
+/**
+ * undefined値を監査metadataから除く。
+ */
+function compactRecord(
+  record: Record<string, unknown>
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(record).filter(([, value]) => value !== undefined)
+  );
 }
 
 function getToolOperation(toolName: string): string | undefined {
@@ -332,6 +461,76 @@ function getStringProperty(
 ): string | undefined {
   const value = record?.[key];
   return typeof value === 'string' ? value : undefined;
+}
+
+function getAllowedStringProperty(
+  record: Record<string, unknown> | undefined,
+  key: string,
+  allowedValues: ReadonlySet<string>
+): string | undefined {
+  const value = getStringProperty(record, key);
+  return value !== undefined && allowedValues.has(value) ? value : undefined;
+}
+
+function getRecordProperty(
+  record: Record<string, unknown> | undefined,
+  key: string
+): Record<string, unknown> | undefined {
+  const value = record?.[key];
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function getNumberProperty(
+  record: Record<string, unknown> | undefined,
+  key: string
+): number | undefined {
+  const value = record?.[key];
+  return typeof value === 'number' ? value : undefined;
+}
+
+function getBooleanProperty(
+  record: Record<string, unknown> | undefined,
+  key: string
+): boolean | undefined {
+  const value = record?.[key];
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+/**
+ * 一つのagent sessionだけで有効なread_web_page call counterを付ける。
+ * 判定と加算はwrapped executeがPromiseを返す前に同期的に完了する。
+ */
+function createSessionTools(
+  tools: readonly AgentSessionTool[]
+): readonly AgentSessionTool[] {
+  let readWebPageCalls = 0;
+
+  return tools.map((tool) => {
+    if (tool.name !== READ_WEB_PAGE_TOOL_NAME) {
+      return tool;
+    }
+
+    return {
+      ...tool,
+      async execute(input: string): Promise<string> {
+        if (readWebPageCalls >= READ_WEB_PAGE_MAX_CALLS_PER_SESSION) {
+          return JSON.stringify({
+            success: false,
+            code: 'budget_exceeded',
+            error: READ_WEB_PAGE_BUDGET_ERROR_MESSAGE,
+            retryable: false,
+          });
+        }
+
+        readWebPageCalls += 1;
+        return tool.execute(input);
+      },
+    };
+  });
 }
 
 function getToolCalls(response: ModelResponse): ModelToolCall[] {
@@ -631,6 +830,7 @@ export async function runAgentSession(
   input: RunAgentSessionInput
 ): Promise<AgentSessionResult> {
   const maxTurns = input.maxTurns ?? 10;
+  const sessionTools = createSessionTools(input.tools);
   let currentInput = input.initialInput;
   let previousResponseToken: string | undefined;
   let totalUsage = ZERO_MODEL_USAGE;
@@ -654,7 +854,7 @@ export async function runAgentSession(
     // eslint-disable-next-line no-await-in-loop
     const response = await input.model.generate({
       input: currentInput,
-      tools: getToolContracts(input.tools),
+      tools: getToolContracts(sessionTools),
       previousResponseToken,
       turnIndex: turn,
     });
@@ -690,7 +890,7 @@ export async function runAgentSession(
     // eslint-disable-next-line no-await-in-loop
     currentInput = await createNextInput(
       toolCalls,
-      input.tools,
+      sessionTools,
       input.events,
       turn
     );

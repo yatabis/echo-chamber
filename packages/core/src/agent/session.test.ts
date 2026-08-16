@@ -283,6 +283,143 @@ describe('executeAgentToolCall', () => {
     });
   });
 
+  it('read_web_pageのeventには生URLと本文を残さない', async () => {
+    const emit = vi.fn<EchoEventPort['emit']>().mockResolvedValue(undefined);
+    const rawUrl = 'https://example.com/private-path?topic=secret-canary';
+    const execute = vi.fn().mockResolvedValue(
+      JSON.stringify({
+        success: true,
+        source: {
+          requestedUrl: rawUrl,
+          finalUrl: rawUrl,
+          retrievedAt: '2026-08-10T00:00:00.000Z',
+          httpStatus: 200,
+          redirectCount: 0,
+          contentType: 'text/html',
+          title: 'secret-title-canary',
+        },
+        document: {
+          format: 'markdown',
+          rendering: 'static',
+          text: 'secret-body-canary',
+          returnedCharacters: 18,
+          extractedCharacters: 18,
+          truncated: false,
+          truncationReasons: [],
+          links: [
+            {
+              text: 'secret-link',
+              url: 'https://example.org/secret-link-canary',
+            },
+          ],
+        },
+        trust: 'untrusted_external_content',
+      })
+    );
+
+    await executeAgentToolCall(
+      {
+        type: 'tool_call',
+        callId: 'call-web',
+        toolName: 'read_web_page',
+        input: JSON.stringify({ url: rawUrl, maxCharacters: 8_000 }),
+      },
+      [
+        {
+          name: 'read_web_page',
+          contract: createToolContract('read_web_page'),
+          execute,
+        },
+      ],
+      { emit },
+      1
+    );
+
+    const serializedEvents = JSON.stringify(
+      emit.mock.calls.map(([event]) => event)
+    );
+    expect(serializedEvents).not.toContain(rawUrl);
+    expect(serializedEvents).not.toContain('secret-title-canary');
+    expect(serializedEvents).not.toContain('secret-body-canary');
+    expect(serializedEvents).not.toContain('secret-link-canary');
+
+    const calledEvent = emit.mock.calls.find(
+      ([event]) => event.type === 'tool.called'
+    )?.[0];
+    expect(calledEvent).toMatchObject({
+      payload: {
+        callId: 'call-web',
+        toolName: 'read_web_page',
+        turnIndex: 1,
+        input: {
+          redacted: true,
+          urlLength: rawUrl.length,
+          hasQuery: true,
+          maxCharacters: 8_000,
+        },
+      },
+    });
+
+    const completedEvent = emit.mock.calls.find(
+      ([event]) => event.type === 'tool.completed'
+    )?.[0];
+    expect(completedEvent).toMatchObject({
+      payload: {
+        success: true,
+        httpStatus: 200,
+        contentType: 'text/html',
+        redirectCount: 0,
+        returnedCharacters: 18,
+        extractedCharacters: 18,
+        truncated: false,
+        linkCount: 1,
+      },
+    });
+  });
+
+  it('read_web_pageのfailure eventにはraw error文字列を残さない', async () => {
+    const emit = vi.fn<EchoEventPort['emit']>().mockResolvedValue(undefined);
+    const rawError = 'private URL leaked into adapter error: FAILURE_CANARY';
+    const output = JSON.stringify({
+      success: false,
+      code: 'http_status',
+      error: rawError,
+      retryable: true,
+    });
+
+    const result = await executeAgentToolCall(
+      {
+        type: 'tool_call',
+        callId: 'call-web-failure',
+        toolName: 'read_web_page',
+        input: JSON.stringify({ url: 'https://www.wikipedia.org/page' }),
+      },
+      [
+        {
+          name: 'read_web_page',
+          contract: createToolContract('read_web_page'),
+          execute: vi.fn().mockResolvedValue(output),
+        },
+      ],
+      { emit },
+      1
+    );
+
+    expect(result).toBe(output);
+    expect(JSON.stringify(emit.mock.calls)).not.toContain('FAILURE_CANARY');
+    const failedEvent = emit.mock.calls.find(
+      ([event]) => event.type === 'tool.failed'
+    )?.[0];
+    expect(failedEvent).toMatchObject({
+      payload: {
+        success: false,
+        code: 'http_status',
+        retryable: true,
+      },
+    });
+    expect(failedEvent?.payload).not.toHaveProperty('error');
+  });
+
   it('未登録ツールはエラー文字列を返す', async () => {
     const result = await executeAgentToolCall(
       {
@@ -854,6 +991,104 @@ describe('runAgentSession', () => {
       responseToken: 'resp-2',
       terminationReason: 'finish_thinking',
     });
+  });
+
+  it('並列read_web_pageはthinking session内で4件だけ実行する', async () => {
+    const generate = vi
+      .fn<ModelPort['generate']>()
+      .mockResolvedValueOnce({
+        output: Array.from({ length: 5 }, (_, index) => ({
+          type: 'tool_call' as const,
+          callId: `call-web-${index + 1}`,
+          toolName: 'read_web_page',
+          input: JSON.stringify({ url: `https://example.com/${index + 1}` }),
+        })),
+        usage: createUsage(),
+        responseToken: 'resp-web',
+      })
+      .mockResolvedValueOnce({
+        output: [
+          {
+            type: 'tool_call',
+            callId: 'call-finish',
+            toolName: 'finish_thinking',
+            input: createFinishThinkingInput(),
+          },
+        ],
+        usage: createUsage(),
+        responseToken: 'resp-finish',
+      });
+    const executeWeb = vi.fn().mockResolvedValue('{"success":true}');
+
+    await runAgentSession({
+      model: { generate },
+      tools: [
+        {
+          name: 'read_web_page',
+          contract: createToolContract('read_web_page'),
+          execute: executeWeb,
+        },
+        {
+          name: 'finish_thinking',
+          contract: createToolContract('finish_thinking'),
+          execute: vi.fn().mockResolvedValue('{"success":true}'),
+        },
+      ],
+      initialInput: [],
+    });
+
+    expect(executeWeb).toHaveBeenCalledTimes(4);
+    const secondRequest = generate.mock.calls[1]?.[0];
+    expect(secondRequest).toBeDefined();
+    expect(secondRequest?.input).toHaveLength(5);
+    const fifthResult = secondRequest?.input[4];
+    expect(fifthResult).toEqual({
+      type: 'tool_result',
+      callId: 'call-web-5',
+      output: JSON.stringify({
+        success: false,
+        code: 'budget_exceeded',
+        error:
+          'The read_web_page call limit for this thinking session was reached.',
+        retryable: false,
+      }),
+    });
+  });
+
+  it('read_web_pageの4件上限は新しいsessionでresetされる', async () => {
+    const executeWeb = vi.fn().mockResolvedValue('{"success":true}');
+    const tools = [
+      {
+        name: 'read_web_page',
+        contract: createToolContract('read_web_page'),
+        execute: executeWeb,
+      },
+    ];
+
+    const runOnce = async (): Promise<void> => {
+      const generate = vi.fn<ModelPort['generate']>().mockResolvedValue({
+        output: Array.from({ length: 4 }, (_, index) => ({
+          type: 'tool_call' as const,
+          callId: `call-web-${index + 1}`,
+          toolName: 'read_web_page',
+          input: JSON.stringify({ url: `https://example.com/${index + 1}` }),
+        })),
+        usage: createUsage(),
+        responseToken: 'resp-web',
+      });
+
+      await runAgentSession({
+        model: { generate },
+        tools,
+        initialInput: [],
+        maxTurns: 1,
+      });
+    };
+
+    await runOnce();
+    await runOnce();
+
+    expect(executeWeb).toHaveBeenCalledTimes(8);
   });
 
   it('maxTurns を超えたら終了理由を返す', async () => {

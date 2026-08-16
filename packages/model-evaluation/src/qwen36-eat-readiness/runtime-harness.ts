@@ -27,6 +27,7 @@ import type {
   ModelUsage,
 } from '@echo-chamber/core/ports/model';
 import type { ChannelNotificationSummary } from '@echo-chamber/core/ports/notification';
+import type { WebPageReadResult } from '@echo-chamber/core/ports/web-page-reader';
 import type {
   ZennArticle,
   ZennTrendingArticleSummary,
@@ -259,6 +260,17 @@ function createRuntimeEnvironment(
           return deleted;
         },
       },
+      webPageReader: {
+        async readPage(): Promise<WebPageReadResult> {
+          return {
+            success: false,
+            code: 'internal_error',
+            error:
+              'Public Web access is disabled in deterministic evaluation fixtures.',
+            retryable: false,
+          };
+        },
+      },
       zenn: {
         async listTrendingArticles(): Promise<
           readonly ZennTrendingArticleSummary[]
@@ -301,6 +313,7 @@ export async function createRuntimeInitialInput(
     currentDatetime: input.currentDatetime,
     latestContext: input.latestContext,
     relatedMemories: input.relatedMemories,
+    toolContracts: tools.map((tool) => tool.contract),
   });
   const startupTool = tools.find((tool) => tool.name === 'check_notifications');
   if (startupTool === undefined) {

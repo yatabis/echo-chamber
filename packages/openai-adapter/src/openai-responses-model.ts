@@ -14,6 +14,7 @@ import {
   toModelUsage,
   toResponseInputItem,
 } from './openai-response-mappers';
+import { projectResponsesWebToolExchange } from './web-tool-audit';
 
 import type {
   EasyInputMessage,
@@ -43,6 +44,7 @@ export class OpenAIResponsesModel implements ModelPort {
   private readonly model: string;
   private readonly events: EchoEventPort | undefined;
   private readonly reasoningEffort: ReasoningEffort;
+  private webToolCallIds = new Set<string>();
 
   /**
    * OpenAI Responses API を使う `ModelPort` adapter を構築する。
@@ -139,7 +141,8 @@ export class OpenAIResponsesModel implements ModelPort {
   }
 
   /**
-   * raw API payload を debug event として記録する。
+   * API payloadの監査用コピーをdebug eventとして記録する。
+   * read_web_pageだけはURLと取得本文をmetadataへ置換する。
    *
    * @param request provider-neutral request
    * @param responseParams Responses API request body
@@ -150,6 +153,13 @@ export class OpenAIResponsesModel implements ModelPort {
     responseParams: ResponseCreateParamsNonStreaming,
     response: Response
   ): Promise<void> {
+    const audit = projectResponsesWebToolExchange(
+      responseParams,
+      response,
+      this.webToolCallIds
+    );
+    this.webToolCallIds = audit.webToolCallIds;
+
     await emitEchoEvent(this.events, {
       type: 'model.exchange.recorded',
       severity: 'debug',
@@ -158,8 +168,8 @@ export class OpenAIResponsesModel implements ModelPort {
         provider: 'openai.responses',
         model: this.model,
         turnIndex: request.turnIndex,
-        request: responseParams,
-        response,
+        request: audit.request,
+        response: audit.response,
       },
     });
   }

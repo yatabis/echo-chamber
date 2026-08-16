@@ -90,6 +90,7 @@ function createBaseMessages(): ChatCompletionMessageParam[] {
     currentDatetime: new Date('2026-07-19T06:00:00.000Z'),
     latestContext: null,
     relatedMemories: [],
+    toolContracts: canonicalRuntimeTools.map((tool) => tool.contract),
   });
   const convertedPrompt = promptMessages.map((message) => ({
     role: 'user' as const,
