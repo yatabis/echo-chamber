@@ -1,7 +1,7 @@
 import type {
   EchoInstanceDefinition,
   EchoMainLLMProvider,
-  EchoMainLLMReasoningEffort,
+  EchoModelReasoningEffort,
 } from '@echo-chamber/core/echo/instance-definitions';
 import { ECHO_SESSION_CACHE_RUNTIME_PROFILE } from '@echo-chamber/openai-adapter/echo-session-cache-v1';
 
@@ -42,7 +42,8 @@ const REASONING_EFFORTS = [
   'medium',
   'high',
   'xhigh',
-] as const satisfies readonly EchoMainLLMReasoningEffort[];
+] as const satisfies readonly EchoModelReasoningEffort[];
+type MainLLMReasoningEffort = (typeof REASONING_EFFORTS)[number];
 
 interface ResolveMainLLMValueOptions {
   skipDefinition?: boolean;
@@ -58,7 +59,7 @@ export interface MainLLMConfig {
   temperature?: number;
   topP?: number;
   presencePenalty?: number;
-  reasoningEffort?: EchoMainLLMReasoningEffort;
+  reasoningEffort?: MainLLMReasoningEffort;
   extraBody?: MainLLMExtraBody;
   runtimeProfile: MainLLMRuntimeProfile;
 }
@@ -137,15 +138,15 @@ function resolveMainLLMDefinitionValue(
  */
 function resolveReasoningEffort(
   reasoningEffort: string | undefined
-): EchoMainLLMReasoningEffort | undefined {
+): MainLLMReasoningEffort | undefined {
   const normalized = normalizeOptionalEnv(reasoningEffort)?.toLowerCase();
 
   if (normalized === undefined) {
     return undefined;
   }
 
-  if (REASONING_EFFORTS.includes(normalized as EchoMainLLMReasoningEffort)) {
-    return normalized as EchoMainLLMReasoningEffort;
+  if (REASONING_EFFORTS.includes(normalized as MainLLMReasoningEffort)) {
+    return normalized as MainLLMReasoningEffort;
   }
 
   throw new Error(

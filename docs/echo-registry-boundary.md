@@ -8,7 +8,7 @@
 
 ### `core`
 
-`core` は instance の identity / persona だけを持つ。
+`core` は instance catalogue として、identity / persona に加えて instance ごとの Main LLM、Cognitive Module、token limit の非secret default を持つ。secretとCloudflare bindingはworker、provider SDK clientはadapter / runtime packageが所有する。
 
 - `EchoInstanceId`
 - `EmbeddingConfig`
@@ -19,11 +19,14 @@
 - [packages/core/src/types/echo-config.ts](../packages/core/src/types/echo-config.ts)
 - [packages/core/src/echo/instance-definitions.ts](../packages/core/src/echo/instance-definitions.ts)
 
-`EchoInstanceDefinition` の責務は次の 3 つだけである。
+`EchoInstanceDefinition` の責務は次のとおり。
 
 - `id`
 - `name`
 - `systemPrompt`
+- `mainLlm`
+- `cognitiveModules`
+- `tokenLimits`
 
 ### worker
 
@@ -33,11 +36,13 @@ worker は Cloudflare 依存の runtime binding を解決する。
 - 固定 chat channel 定義の保持
 - thinking channel id の取得
 - thinking channel 用 KV key の管理
+- Cognitive Module の provider / API、API key、instance env override、global fallback の解決
 - `Env` / `KVNamespace` を読む resolver
 
 実装:
 
 - [apps/cloudflare-workers/src/config/echo-runtime-bindings.ts](../apps/cloudflare-workers/src/config/echo-runtime-bindings.ts)
+- [apps/cloudflare-workers/src/config/cognitive-module-config.ts](../apps/cloudflare-workers/src/config/cognitive-module-config.ts)
 
 `EchoRuntimeBindings` の責務は次のとおり。
 
@@ -46,11 +51,15 @@ worker は Cloudflare 依存の runtime binding を解決する。
 - `thinkingChannelId`
 - `embeddingConfig`
 
+Cognitive Moduleの非secretなmodel / reasoning defaultは`EchoInstanceDefinition.cognitiveModules`に置き、Memory / Emotionがinstance内で共有する。Worker composition rootのresolverは、instance固有env、definition、global env、Worker fallbackの順に値を解決する。
+
 ### consumer
 
 `Echo` は definition と runtime bindings を別 field で保持する。
 
 - `ThinkingEngine` には `systemPrompt`
+- `main-llm-config` には `mainLlm` の default、`token-limit-config` には `tokenLimits` の default
+- `cognitive-module-config` には `cognitiveModules` の default と instance identity
 - `DiscordEchoEventPort` には token と `thinkingChannelId`
 - `tool-context` には chat 用の binding だけを渡す
 
@@ -60,6 +69,8 @@ chat channels は worker 側の固定定義として管理し、`thinkingChannel
 
 - [apps/cloudflare-workers/src/echo/index.tsx](../apps/cloudflare-workers/src/echo/index.tsx)
 - [apps/cloudflare-workers/src/echo/tool-context.ts](../apps/cloudflare-workers/src/echo/tool-context.ts)
+- [apps/cloudflare-workers/src/config/main-llm-config.ts](../apps/cloudflare-workers/src/config/main-llm-config.ts)
+- [apps/cloudflare-workers/src/config/token-limit-config.ts](../apps/cloudflare-workers/src/config/token-limit-config.ts)
 
 ## 削除したもの
 

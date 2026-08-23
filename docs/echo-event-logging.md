@@ -139,6 +139,9 @@ type EchoEventInput = {
 | `memory.reembedding.completed`             | `memory`  | `system`, `analysis`            |
 | `memory.rerank.failed`                     | `memory`  | `system`, `analysis`            |
 | `memory.rerank.fallback`                   | `memory`  | `system`, `analysis`            |
+| `cognitive.phase.started`                  | `memory`  | `analysis`                      |
+| `cognitive.phase.committed`                | `memory`  | `system`, `analysis`            |
+| `cognitive.phase.failed`                   | `memory`  | `system`, `analysis`            |
 | `system.schedule.alarm_triggered`          | `system`  | `system`, `analysis`            |
 | `system.schedule.alarm_completed`          | `system`  | `system`, `analysis`            |
 | `system.schedule.alarm_scheduled`          | `system`  | `system`, `analysis`            |
@@ -153,7 +156,7 @@ type EchoEventInput = {
 | `system.run_decision.evaluated`            | `system`  | `system`, `analysis`            |
 | `usage.recorded`                           | `usage`   | `system`, `analysis`            |
 
-`model.output.emitted` は assistant message / reasoning のみを扱い、tool call は含めない。tool handler 内部の詳細エラーは、model に返す tool output からは除き、`tool.failed` payload の `diagnostics` に載せる。API payload の裏取りが必要な場合は `model.exchange.recorded` を `debug` severity / `analysis` stream として出す。
+`model.output.emitted` は assistant message / reasoning のみを扱い、tool call は含めない。tool handler 内部の詳細エラーは、model に返す tool output からは除き、`tool.failed` payload の `diagnostics` に載せる。Main API payload の裏取りが必要な場合は `model.exchange.recorded` を `debug` severity / `analysis` stream として出す。Cognitive Moduleのmodel eventにも同じevent型とpayload policyを適用し、`cognitiveModule: memory | emotion`を付けて`analysis` streamへ出す。
 
 ## Sink policy の考え方
 
@@ -174,7 +177,7 @@ Cloudflare Workers Observability で拾いやすいように、次のような�
   "category": "tool",
   "streams": ["thought", "analysis"],
   "severity": "info",
-  "summary": "search_memory called",
+  "summary": "read_chat_messages called",
   "payload": {}
 }
 ```
@@ -243,7 +246,7 @@ Dashboard は Cloudflare Observability の代替ではない。raw event stream 
 
 Dashboard API の `/:instanceId/session-logs` は raw event を返さない。Worker 側で保存済み event から session log view model を組み立てて `sessionLogs` として返す。Dashboard は session log を新しい順に並べ、各 session log を折りたためる activity として描画する。
 
-Dashboard API の `/:instanceId/action-analysis` も raw event を返さない。Worker 側で 1 / 7 / 30 archive day 分の保存済み event を集計し、session 数、tool 使用回数、tool failure rate、no-tool turn、memory search の結果件数などの period summary として返す。raw tool input/output や model output 本文は action analysis response に含めない。
+Dashboard API の `/:instanceId/action-analysis` も raw event を返さない。Worker 側で event archive への書き込み時に更新した日次集計 read model を 1 / 7 / 30 archive day ごとに読み、session 数、tool 使用回数、tool failure rate、no-tool turn、memory search の結果件数などの period summary として返す。raw event、raw tool input/output、model output 本文は action analysis response に含めない。
 
 #### Dashboard session log の責務
 
@@ -279,7 +282,9 @@ action analysis は次の問いに答える。
 - tool failure rate がどの程度か
 - no-tool turn がどれだけ発生したか
 - memory search が何回成功・失敗し、0件結果がどれだけあったか
-- `store_memory` がどれだけ実行されたか
+- `store_memory` がどれだけ明示的に実行されたか
+
+`storeMemoryCompletedCount`とtool別集計は`store_memory` callを数える。Cognitive ModuleのMemory更新件数は`cognitive.phase.committed`の`memoryUpdates`として追跡する。`memory.search.*`集計は共通MemorySystemがemitするため、Cognitive recallと`search_memory` callの両方を含み得る。
 
 action analysis は raw event の詳細確認ではない。詳細調査は session log、Cloudflare Observability、または DO SQLite の raw event を使う。
 
@@ -308,6 +313,7 @@ Session log に採用する raw event は allowlist とする。unknown event �
 - `model.provider.warning`: session 中の provider 警告
 - `tool.called` / `tool.completed` / `tool.failed`: tool 実行の開始と結果。ただし同じ `callId` の開始・完了は dashboard 上では 1 つの行動として扱う
 - `memory.search.completed` / `memory.search.failed`: session 中の関連 memory 参照
+- `cognitive.phase.committed` / `cognitive.phase.failed`: Memory の想起・記銘と Emotion 更新の確定結果または失敗
 - `model.turn.completed` の `no_tool_calls`: 確実に気づけるよう activity log に出す
 - session log として意味を持つ warning / error: 活動ログ上の issue として表示する
 
@@ -324,6 +330,7 @@ Tool activity は `tool.completed` / `tool.failed` を主行とする。対応�
 - `system.schedule.*`: alarm / sleep / wake の運用イベントであり、session log ではなく observability の対象
 - `usage.recorded`: session 結果の集計値は `session.completed` から読めるため、別 activity にしない
 - `memory.embedding.*` / `memory.reembedding.*` / `memory.evicted` / `memory.rerank.*`: memory subsystem の運用イベントであり、session log ではなく observability の対象
+- `cognitive.phase.started`: phase の開始だけでは人間が読む結果を持たない
 - `sessionId` を持たない event: session log の入力境界外
 
 #### 実装方針
@@ -337,14 +344,14 @@ Tool activity は `tool.completed` / `tool.failed` を主行とする。対応�
 - `createSessionLifecycleActivity`: session の開始・終了・失敗を扱う
 - `createModelActivity`: natural language output / provider warning / no tool calls を扱う
 - `createToolActivity`: `callId` 単位で tool call を畳み込む
-- `createMemoryActivity`: session 中の memory search 結果を扱う
+- `createMemoryActivity`: session 中の memory search と Cognitive phase の commit / failure を扱う
 
 この構造なら、review 時に「これは session log の構成要素か」という問いで判断できる。event type を増やす場合も、まず採用理由を docs に追加してから実装する。
 
 ## 現時点の未決事項
 
 - Discord 通知を thought / system など複数チャンネルへ分けるか
-- raw payload の redaction 方針
+- Main / Cognitiveに共通するraw payloadのredaction、sampling、閲覧権限の方針
 - payload が大きい event の分割・圧縮・sampling 方針
 - Cloudflare Observability の retention を前提に、どこまで console sink に頼るか
 - `model.turn.*` を `analysis` 専用のままにするか、system stream にも出すか

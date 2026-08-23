@@ -10,21 +10,24 @@ Echo は Cloudflare Workers + Durable Objects 上で動く。Free plan では、
 
 ## Cloudflare 側の制約
 
-Cloudflare Durable Objects pricing docs による現在の主な Free plan 制約は次のとおり。
+Cloudflare Durable Objects pricing と Workers limits による現在の主な Free plan 制約は次のとおり。
 
 Source: <https://developers.cloudflare.com/durable-objects/platform/pricing/>
+Source: <https://developers.cloudflare.com/workers/platform/limits/#subrequests>
 
-| 項目                      | Free plan limit | 備考                                                                                      |
-| ------------------------- | --------------- | ----------------------------------------------------------------------------------------- |
-| Durable Object requests   | 100,000 / day   | HTTP request、RPC session、WebSocket message、alarm invocation を含む                     |
-| Duration                  | 13,000 GB-s/day | active execution 中が対象                                                                 |
-| SQLite rows read          | 5,000,000 / day | SQLite-backed DO storage の read 制約                                                     |
-| SQLite rows written       | 100,000 / day   | insert / update / delete が対象                                                           |
-| SQL stored data           | 5 GB total      | SQLite-backed DO storage                                                                  |
-| Daily reset               | 00:00 UTC       | JST では 09:00                                                                            |
-| `setAlarm()`              | 1 row written   | alarm 設定も write として数える                                                           |
-| key-value storage methods | rows 課金対象   | `get()` / `put()` / `delete()` / `list()` も hidden SQLite table に対する操作として数える |
-| delete                    | rows written    | 削除も write として数える                                                                 |
+| 項目                      | Free plan limit    | 備考                                                                                      |
+| ------------------------- | ------------------ | ----------------------------------------------------------------------------------------- |
+| Durable Object requests   | 100,000 / day      | HTTP request、RPC session、WebSocket message、alarm invocation を含む                     |
+| Duration                  | 13,000 GB-s/day    | active execution 中が対象                                                                 |
+| SQLite rows read          | 5,000,000 / day    | SQLite-backed DO storage の read 制約                                                     |
+| SQLite rows written       | 100,000 / day      | insert / update / delete が対象                                                           |
+| SQL stored data           | 5 GB total         | SQLite-backed DO storage                                                                  |
+| Daily reset               | 00:00 UTC          | JST では 09:00                                                                            |
+| `setAlarm()`              | 1 row written      | alarm 設定も write として数える                                                           |
+| key-value storage methods | rows 課金対象      | `get()` / `put()` / `delete()` / `list()` も hidden SQLite table に対する操作として数える |
+| delete                    | rows written       | 削除も write として数える                                                                 |
+| Subrequests               | 50 / invocation    | Free plan の通常枠。internal service 向けは次行の別枠                                     |
+| Internal-service requests | 1,000 / invocation | Free plan。R2、KV、D1 など internal service 向け subrequest の別枠                        |
 
 ## 設計原則
 
@@ -159,17 +162,15 @@ alarm が思考 session を実行する場合。skip path の固定コストに�
 | ---- | ---------------------- |
 | `T`  | model turn 数。最大 10 |
 | `C`  | tool call 数           |
-| `M`  | memory search 回数     |
-| `S`  | store memory 回数      |
 
 追加 request / storage の概算:
 
-| 項目           | 追加コスト                                                                                                                          |
-| -------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| Model API      | `T` calls                                                                                                                           |
-| Discord API    | startup `check_notifications` でさらに約 6 calls。`read_chat_messages` / `send_chat_message` / reaction tool は tool 使用分だけ追加 |
-| Storage reads  | context load、usage read、memory search source 最大 500 rows、notes tool 使用時は最大 200 notes                                     |
-| Storage writes | state Running / Idling、session events、model turn events、tool events、usage、context、next wake、memory store など                |
+| 項目           | 追加コスト                                                                                                                                               |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Model API      | `T` calls                                                                                                                                                |
+| Discord API    | startup `check_notifications` でさらに約 6 calls。`read_chat_messages` / `send_chat_message` / reaction tool は tool 使用分だけ追加                      |
+| Storage reads  | usage / schedule / cognitive domain、Memory recall source 最大500 rows、`search_memory`使用時は追加の最大500 rows、notes tool使用時は最大200 notes       |
+| Storage writes | state Running / Idling、session / model / tool event、usage、next wake、cognitive domain / compatibility context / Memory commit、`store_memory`使用分等 |
 
 event rows written の目安:
 
@@ -184,9 +185,38 @@ skip path events
 + memory / embedding / rerank related events
 ```
 
+### Cognitive Module
+
+Cognitive phaseのmodel callとstorage操作は、各thinking sessionのrun budgetへ含める。Mainが`store_memory` / `search_memory`を選んだ場合は、そのtool callのcostも同じbudgetへ加算する。
+
+変数`T`をMain model turn数、`P = T + 1`をcognitive phase数とする。各Main model turnの前に`pre_main`を1回、session終了時に`post_main`を1回実行し、各phaseで2 moduleを呼ぶ。
+
+一時エラーでは失敗したmoduleだけを1回再試行する。Cognitive Module用のOpenAI SDK retryは0とし、1 application attemptを1 HTTP attemptとして数える。
+
+| 項目                       | 上限 / 挙動                                                                                                                 |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Worker / DO request        | 追加0。同じthinking sessionのDO request内で待機する                                                                         |
+| cognitive model requests   | retry無しで`2 * (T + 1)`。全module requestが1回ずつretryした場合は`4 * (T + 1)`。`T = 10`なら22〜44件                       |
+| external request hard gate | alarm / manual run全体で40件。Main、Cognitive、Discord、Web、Zenn、embedding、rerankが共有する                              |
+| model request timeout      | 30秒                                                                                                                        |
+| Memory recall              | `T`回。各回で最大500 rowsを読み、query embedding 1回、候補があればrerank 1回を行い、最大5件をMainへ渡す                     |
+| Memory update              | `post_main`で1件。Memory Moduleの`content` / `type`と同phaseのEmotionを1 SQLite transactionで保存する                       |
+| Event archive writes       | phase / model / commit event分。Cognitive model eventにはMainと同じpayload policyを適用する                                 |
+| main model calls / input   | Mainのcall数`T`は変わらないが、各turn前の`search_memory` / `update_emotion` exchangeによりMain requestのinput tokenが増える |
+
+任意toolを1回使う場合、`search_memory`はquery embedding 1回、候補があればrerank 1回、embedding BLOBを含む最大500 rowsのreadを追加し得る。`store_memory`はembedding 1回とMemory rowのinsert / eviction、関連event writeを追加し得る。いずれも`C`に含まれ、embedding / rerank requestは40件のexternal request hard gateを共有する。
+
+外部requestは送信直前に1件ずつ数える。40件を使い切った場合は追加requestを送らず、現在のsessionを失敗させる。
+
+`T = 10`ではretryがなくても、Main 10件、Cognitive 22件、recall query embedding 10件だけで42件になる。Discord APIやrerank、終了時のMemory embeddingも加わるため、現行hard gateのまま10 turn完走を保証することはできない。最大turn数またはrequest budgetを変更する場合は、Cloudflare上限とstaging計測を基にproduction投入前に決定する。
+
+この40件は、Free planの通常subrequest上限50件に対して10件の余裕を持たせるためのrun単位の上限である。
+
+`pre_main`では検索結果とEmotionを確定し、`post_main`では1件のMemoryとEmotionを1回のtransactionで保存する。片方のmoduleまたはMemory操作が失敗した場合、そのphaseのstate更新は行わない。
+
 `memory.search` は検索候補として embedding BLOB を含む memory rows を読む。現行の上限は memory 保持上限と同じ 500 rows で、同一 request 内では cache する。Dashboard 表示では embedding BLOB を読まない。
 
-current embedding model と異なる memory row は、異なるベクトル空間や次元が混ざることを避けるため検索対象にしない。代わりに、日次 sleep maintenance で stale memory の再 embedding を最大 500 件実行し、model 変更後も既存 memory が検索対象へ戻る機会を維持する。
+current embedding model と異なる memory row は、異なるベクトル空間や次元が混ざることを避けるため検索対象にしない。日次 sleep maintenance はstale候補を最大500件読むが、共有external request budget到達時は残りを反復せず停止し、後続の日次runへ繰り越す。これによりmodel変更後も既存memoryが検索対象へ戻る機会を維持しつつ、1 invocationでplatform上限を超えない。
 
 ### Public Web page reader
 
@@ -210,7 +240,7 @@ current embedding model と異なる memory row は、異なるベクトル空�
 
 application は初回 URL と各 redirect について scheme、literal / special-use host、既知の internal suffix、credential、credential-like query key、非 default port、HTTPS downgrade を拒否する。hostname の DNS 解決先を application code で検証・pin はしていないため、解決後の egress 制約は Cloudflare platform boundary に依存する。この区別を、local runtime へ同じ adapter を移植できるという意味には解釈しない。
 
-Web tool の監査 event は URL、title、本文、link URL を保存せず、安全な件数・状態 metadata だけを保存する。非 Web tool の raw model exchange は従来どおり保持する。event row 数は変わらないが、Web result 本文を `model.exchange.recorded` へ複製しないため、該当 row の payload size は取得本文より小さくなる。
+Web tool 自体の監査 event は URL、title、本文、link URL を保存せず、安全な件数・状態 metadata だけを保存する。Main / Cognitive model exchangeには共通payload policyを適用する。Cognitive boundaryにmodel-visible Web resultが含まれる場合、その本文は`model.exchange.recorded`へ保存され得る。Web監査eventのmetadata化はmodel exchangeの保存内容を変更しない。
 
 ## Action analysis read model
 

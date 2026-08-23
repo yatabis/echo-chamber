@@ -6,8 +6,9 @@ Cloudflare 非依存のコアロジックと共有型を提供する package で
 ## 役割
 
 - Echo の共通型と usage 集計ロジック
-- Echo instance definition catalogue（`src/echo/instance-definitions.ts`）
+- Echo instance definition catalogue（Main / Cognitive の非secret default と token limit を含む `src/echo/instance-definitions.ts`）
 - agent / runtime 分離のための port interface
+- agent session / ThinkingEngine / Cognitive Module の実行契約
 - 日時/ベクトル/エラーなどのユーティリティ
 - システムプロンプト定義（`rin` / `marie`）
 
@@ -20,6 +21,7 @@ Cloudflare 非依存のコアロジックと共有型を提供する package で
 
 - Echo 関連の型・定数・usage ロジック（`@echo-chamber/core/echo/*`）
 - port interface（`@echo-chamber/core/ports/*`）
+- agent runtime / Cognitive Module（`@echo-chamber/core/agent/*`）
 - 共有型（`@echo-chamber/core/types/*`）
 - ユーティリティ（`@echo-chamber/core/utils/*`）
 - システムプロンプト（`@echo-chamber/core/llm/prompts/*`）
