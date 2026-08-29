@@ -1,13 +1,9 @@
 /* eslint-disable @typescript-eslint/require-await -- Stateful fixture ports implement asynchronous production contracts without external I/O. */
 
-import type { PromptContextSnapshot } from '@echo-chamber/core/agent/prompt-builder';
-import { canonicalRuntimeTools } from '@echo-chamber/core/agent/runtime-tools/catalog';
-import { bindRuntimeTools } from '@echo-chamber/core/agent/runtime-tools/tool';
 import {
   runAgentSession,
   ZERO_MODEL_USAGE,
 } from '@echo-chamber/core/agent/session';
-import type { AgentSessionResult } from '@echo-chamber/core/agent/session';
 import type { ToolExecutionContext } from '@echo-chamber/core/agent/tool-context';
 import type { Note } from '@echo-chamber/core/echo/types';
 import type { ChatMessage } from '@echo-chamber/core/ports/chat';
@@ -22,7 +18,11 @@ import type {
   ZennTrendingArticleSummary,
 } from '@echo-chamber/core/ports/zenn';
 
-import { createRuntimeInitialInput, EvaluationTrace } from './runtime-harness';
+import {
+  bindQwenEvaluationRuntimeTools,
+  createRuntimeInitialInput,
+  EvaluationTrace,
+} from './runtime-harness';
 import { summarizeChecks } from './scoring';
 
 import type { RuntimeHarnessOptions } from './runtime-harness';
@@ -32,6 +32,7 @@ import type {
   RuntimeWorkflowSessionFixture,
 } from './runtime-workflows';
 import type {
+  RuntimeContextSnapshot,
   RuntimeSessionTrace,
   RuntimeWorkflowResult,
   TraceCall,
@@ -40,12 +41,12 @@ import type {
 interface SessionBoundary {
   callIndex: number;
   memoryCount: number;
-  contextBefore: PromptContextSnapshot | null;
+  contextBefore: RuntimeContextSnapshot | null;
 }
 
 function cloneContext(
-  context: PromptContextSnapshot | null
-): PromptContextSnapshot | null {
+  context: RuntimeContextSnapshot | null
+): RuntimeContextSnapshot | null {
   return context === null
     ? null
     : {
@@ -72,7 +73,7 @@ class StatefulRuntimeWorld {
   private readonly chatMessages = new Map<string, ChatMessage[]>();
   private readonly faultAttempts = new Map<string, number>();
   private activeSession: RuntimeWorkflowSessionFixture | null = null;
-  private context: PromptContextSnapshot | null;
+  private context: RuntimeContextSnapshot | null;
 
   constructor(
     private readonly fixture: RuntimeWorkflowFixture,
@@ -108,29 +109,26 @@ class StatefulRuntimeWorld {
     return this.calls.slice(boundary.callIndex);
   }
 
-  loadContext(): PromptContextSnapshot | null {
+  loadContext(): RuntimeContextSnapshot | null {
     return cloneContext(this.context);
   }
 
   saveSessionContext(
-    session: RuntimeWorkflowSessionFixture,
-    result: AgentSessionResult
+    record: Pick<RuntimeContextSnapshot, 'content' | 'emotion'>
   ): void {
-    if (result.context === undefined) {
-      return;
-    }
+    const session = this.requireActiveSession();
     this.context = {
-      content: result.context.content,
+      content: record.content,
       emotion: {
-        ...result.context.emotion,
-        labels: [...result.context.emotion.labels],
+        ...record.emotion,
+        labels: [...record.emotion.labels],
       },
       createdAt: session.currentDatetime.toISOString(),
     };
   }
 
   loadRelatedMemories(
-    context: PromptContextSnapshot | null
+    context: RuntimeContextSnapshot | null
   ): MemorySearchResult[] {
     if (context === null) {
       return [];
@@ -178,8 +176,13 @@ class StatefulRuntimeWorld {
         },
       },
       memory: {
-        store: async (content, emotion, type): Promise<void> => {
+        store: async (content, type): Promise<void> => {
           const now = this.requireActiveSession().currentDatetime.toISOString();
+          const emotion = this.context?.emotion ?? {
+            valence: 0,
+            arousal: 0,
+            labels: [],
+          };
           const memory: MemoryRecord = {
             content,
             emotion: { ...emotion, labels: [...emotion.labels] },
@@ -188,7 +191,7 @@ class StatefulRuntimeWorld {
             updatedAt: now,
           };
           this.memories.push(memory);
-          this.record('store_memory', { content, emotion, type }, memory);
+          this.record('store_memory', { content, type }, memory);
         },
         search: async (query, type): Promise<MemorySearchResult[]> => {
           const matching =
@@ -378,9 +381,11 @@ async function runWorkflowSession(input: {
   const sessionStartedAt = performance.now();
   const boundary = input.world.beginSession(input.session);
   const trace = new EvaluationTrace(input.workflowStartedAt);
-  const tools = bindRuntimeTools(
-    canonicalRuntimeTools,
-    input.world.createToolContext()
+  const tools = bindQwenEvaluationRuntimeTools(
+    input.world.createToolContext(),
+    (record): void => {
+      input.world.saveSessionContext(record);
+    }
   );
   const model = input.options.createModel({
     events: trace,
@@ -411,7 +416,6 @@ async function runWorkflowSession(input: {
       events: trace,
       maxTurns: input.options.maxTurns,
     });
-    input.world.saveSessionContext(input.session, result);
     outcome = {
       usage: result.usage,
       terminationReason: result.terminationReason,

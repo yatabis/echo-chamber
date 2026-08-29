@@ -304,6 +304,11 @@ describe('dashboard contract schemas', () => {
         createdAt: '2026-03-19T11:00:00.000Z',
         updatedAt: '2026-03-19T12:00:00.000Z',
       },
+      cognitive: {
+        domainVersion: 3,
+        lastBoundaryId: 'activation-1:3:post_main',
+        updatedAt: '2026-03-19T12:00:00.000Z',
+      },
       runtime: {
         mainLlm: {
           provider: 'openai',
@@ -369,6 +374,7 @@ describe('dashboard contract schemas', () => {
     expect(payload.context?.content).toBe(
       'Continue from the latest dashboard work.'
     );
+    expect(payload.cognitive.domainVersion).toBe(3);
   });
 
   it('rejects invalid /:instanceId payload', () => {
@@ -380,6 +386,11 @@ describe('dashboard contract schemas', () => {
         nextAlarm: null,
         nextWakeAt: null,
         context: null,
+        cognitive: {
+          domainVersion: 0,
+          lastBoundaryId: null,
+          updatedAt: null,
+        },
         runtime: {
           mainLlm: {
             provider: 'openai',

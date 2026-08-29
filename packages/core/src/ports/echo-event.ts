@@ -33,6 +33,9 @@ export type EchoEventType =
   | 'memory.reembedding.completed'
   | 'memory.rerank.failed'
   | 'memory.rerank.fallback'
+  | 'cognitive.phase.started'
+  | 'cognitive.phase.committed'
+  | 'cognitive.phase.failed'
   | 'system.schedule.alarm_triggered'
   | 'system.schedule.alarm_completed'
   | 'system.schedule.alarm_scheduled'
@@ -70,6 +73,9 @@ const ECHO_EVENT_CATEGORIES: Record<EchoEventType, EchoEventCategory> = {
   'memory.reembedding.completed': 'memory',
   'memory.rerank.failed': 'memory',
   'memory.rerank.fallback': 'memory',
+  'cognitive.phase.started': 'memory',
+  'cognitive.phase.committed': 'memory',
+  'cognitive.phase.failed': 'memory',
   'system.schedule.alarm_triggered': 'system',
   'system.schedule.alarm_completed': 'system',
   'system.schedule.alarm_scheduled': 'system',
@@ -108,6 +114,9 @@ const ECHO_EVENT_STREAMS: Record<EchoEventType, EchoEventStream[]> = {
   'memory.reembedding.completed': ['system', 'analysis'],
   'memory.rerank.failed': ['system', 'analysis'],
   'memory.rerank.fallback': ['system', 'analysis'],
+  'cognitive.phase.started': ['analysis'],
+  'cognitive.phase.committed': ['system', 'analysis'],
+  'cognitive.phase.failed': ['system', 'analysis'],
   'system.schedule.alarm_triggered': ['system', 'analysis'],
   'system.schedule.alarm_completed': ['system', 'analysis'],
   'system.schedule.alarm_scheduled': ['system', 'analysis'],

@@ -99,6 +99,11 @@ function createMockEnv(options: MockEnvOptions = {}): MockEnvResult {
           createdAt: '2026-02-22T10:30:00.000Z',
           updatedAt: '2026-02-22T11:30:00.000Z',
         },
+        cognitive: {
+          domainVersion: 3,
+          lastBoundaryId: 'rin:activation-1:3:post_main',
+          updatedAt: '2026-02-22T11:30:00.000Z',
+        },
         runtime: rinRuntime,
         memories: [],
         notes: [],
@@ -129,6 +134,11 @@ function createMockEnv(options: MockEnvOptions = {}): MockEnvResult {
         nextAlarm: null,
         nextWakeAt: null,
         context: null,
+        cognitive: {
+          domainVersion: 0,
+          lastBoundaryId: null,
+          updatedAt: null,
+        },
         runtime: marieRuntime,
         memories: [],
         notes: [],

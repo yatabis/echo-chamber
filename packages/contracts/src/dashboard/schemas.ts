@@ -91,6 +91,15 @@ export const dashboardRuntimeConfigSchema = z
   })
   .strict();
 
+/** Cognitive Module の確定位置を表示するread model。 */
+export const dashboardCognitiveModuleStatusSchema = z
+  .object({
+    domainVersion: z.number().int().nonnegative(),
+    lastBoundaryId: z.string().nullable(),
+    updatedAt: z.string().nullable(),
+  })
+  .strict();
+
 /**
  * Dashboard session log builder が archive から読む Echo event severity。
  */
@@ -288,9 +297,7 @@ export const echoMemorySchema = z
   })
   .strict();
 
-/**
- * Dashboard に返す最新 runtime context snapshot。
- */
+/** Dashboard に返す既存の永続 Context snapshot。 */
 export const dashboardContextSnapshotSchema = z
   .object({
     content: z.string(),
@@ -311,6 +318,7 @@ export const echoStatusSchema = z
     nextAlarm: z.string().nullable(),
     nextWakeAt: z.string().nullable(),
     context: dashboardContextSnapshotSchema.nullable(),
+    cognitive: dashboardCognitiveModuleStatusSchema,
     runtime: dashboardRuntimeConfigSchema,
     memories: z.array(echoMemorySchema),
     notes: z.array(noteSchema),

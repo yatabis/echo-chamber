@@ -1,6 +1,12 @@
-import type { PromptContextSnapshot } from '@echo-chamber/core/agent/prompt-builder';
-import type { Note } from '@echo-chamber/core/echo/types';
+import type { Emotion, Note } from '@echo-chamber/core/echo/types';
 import type { MemoryRecord } from '@echo-chamber/core/ports/memory';
+
+/** Qwen runtime 評価内で session 間の継続性を表す snapshot。 */
+export interface RuntimeContextSnapshot {
+  content: string;
+  emotion: Emotion;
+  createdAt: string;
+}
 
 /** Rapid-MLXで直接起動し、同じ評価条件を適用するローカルモデル。 */
 export interface LocalEvaluationTarget {
@@ -134,8 +140,8 @@ export interface RuntimeSessionTrace {
   usage: RuntimeScenarioResult['usage'];
   calls: TraceCall[];
   events: TraceEvent[];
-  contextBefore: PromptContextSnapshot | null;
-  contextAfter: PromptContextSnapshot | null;
+  contextBefore: RuntimeContextSnapshot | null;
+  contextAfter: RuntimeContextSnapshot | null;
   memoryCountBefore: number;
   memoryCountAfter: number;
 }

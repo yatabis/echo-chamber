@@ -5,6 +5,7 @@ import { mockToolContext } from './mock-tool-context';
 
 import type { Emotion } from '../../echo/types';
 
+// eslint-disable-next-line @typescript-eslint/unbound-method -- Vitest owns this context-free mock function.
 const mockedStoreMemory = vi.mocked(mockToolContext.memory.store);
 const mockedSearchMemory = vi.mocked(mockToolContext.memory.search);
 
@@ -12,14 +13,14 @@ beforeEach(() => {
   vi.resetAllMocks();
 });
 
-const createMockEmotion = (overrides?: Partial<Emotion>): Emotion => {
+function createMockEmotion(overrides?: Partial<Emotion>): Emotion {
   return {
     valence: 0.5,
     arousal: 0.3,
     labels: ['neutral'],
     ...overrides,
   };
-};
+}
 
 describe('Memory Functions', () => {
   describe('storeMemoryTool', () => {
@@ -28,7 +29,7 @@ describe('Memory Functions', () => {
     });
 
     it('description', () => {
-      expect(storeMemoryTool.description).toBeDefined();
+      expect(storeMemoryTool.description).toContain('利用は任意である');
     });
 
     it('parameters', () => {
@@ -37,7 +38,7 @@ describe('Memory Functions', () => {
 
       expect(parameters).toHaveProperty('content');
       expect(parameters).toHaveProperty('type');
-      expect(parameters).toHaveProperty('emotion');
+      expect(parameters).not.toHaveProperty('emotion');
     });
 
     describe('handler', () => {
@@ -45,22 +46,12 @@ describe('Memory Functions', () => {
         const args = {
           content: 'Had a great conversation about AI',
           type: 'episode' as const,
-          emotion: createMockEmotion({
-            valence: 0.7,
-            arousal: 0.5,
-            labels: ['joy', 'interest'],
-          }),
         };
 
         const result = await storeMemoryTool.handler(args, mockToolContext);
 
         expect(mockedStoreMemory).toHaveBeenCalledWith(
           'Had a great conversation about AI',
-          {
-            valence: 0.7,
-            arousal: 0.5,
-            labels: ['joy', 'interest'],
-          },
           'episode'
         );
         expect(result).toEqual({ success: true });
@@ -70,14 +61,12 @@ describe('Memory Functions', () => {
         const args = {
           content: 'General knowledge about AI',
           type: 'semantic' as const,
-          emotion: createMockEmotion(),
         };
 
         const result = await storeMemoryTool.handler(args, mockToolContext);
 
         expect(mockedStoreMemory).toHaveBeenCalledWith(
           'General knowledge about AI',
-          createMockEmotion(),
           'semantic'
         );
         expect(result).toEqual({ success: true });
@@ -89,7 +78,6 @@ describe('Memory Functions', () => {
         const args = {
           content: 'Memory that will fail',
           type: 'episode' as const,
-          emotion: createMockEmotion(),
         };
 
         const result = await storeMemoryTool.handler(args, mockToolContext);
@@ -111,7 +99,7 @@ describe('Memory Functions', () => {
     });
 
     it('description', () => {
-      expect(searchMemoryTool.description).toBeDefined();
+      expect(searchMemoryTool.description).toContain('利用は任意である');
     });
 
     it('parameters', () => {

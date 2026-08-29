@@ -165,12 +165,12 @@ alarm が思考 session を実行する場合。skip path の固定コストに�
 
 追加 request / storage の概算:
 
-| 項目           | 追加コスト                                                                                                                                               |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Model API      | `T` calls                                                                                                                                                |
-| Discord API    | startup `check_notifications` でさらに約 6 calls。`read_chat_messages` / `send_chat_message` / reaction tool は tool 使用分だけ追加                      |
-| Storage reads  | usage / schedule / cognitive domain、Memory recall source 最大500 rows、`search_memory`使用時は追加の最大500 rows、notes tool使用時は最大200 notes       |
-| Storage writes | state Running / Idling、session / model / tool event、usage、next wake、cognitive domain / compatibility context / Memory commit、`store_memory`使用分等 |
+| 項目           | 追加コスト                                                                                                                                         |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Model API      | `T` calls                                                                                                                                          |
+| Discord API    | startup `check_notifications` でさらに約 6 calls。`read_chat_messages` / `send_chat_message` / reaction tool は tool 使用分だけ追加                |
+| Storage reads  | usage / schedule / cognitive domain、Memory recall source 最大500 rows、`search_memory`使用時は追加の最大500 rows、notes tool使用時は最大200 notes |
+| Storage writes | state Running / Idling、session / model / tool event、usage、next wake、cognitive domain / Memory commit、`store_memory`使用分等                   |
 
 event rows written の目安:
 
@@ -197,26 +197,26 @@ Cognitive phaseのmodel callとstorage操作は、各thinking sessionのrun budg
 | -------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | Worker / DO request        | 追加0。同じthinking sessionのDO request内で待機する                                                                         |
 | cognitive model requests   | retry無しで`2 * (T + 1)`。全module requestが1回ずつretryした場合は`4 * (T + 1)`。`T = 10`なら22〜44件                       |
-| external request hard gate | alarm / manual run全体で40件。Main、Cognitive、Discord、Web、Zenn、embedding、rerankが共有する                              |
+| external request hard gate | alarm / manual run全体で40件。Main、Cognitive、Discordの状態取得・tool、Web、Zenn、OpenAI embeddingが共有する               |
 | model request timeout      | 30秒                                                                                                                        |
 | Memory recall              | `T`回。各回で最大500 rowsを読み、query embedding 1回、候補があればrerank 1回を行い、最大5件をMainへ渡す                     |
 | Memory update              | `post_main`で1件。Memory Moduleの`content` / `type`と同phaseのEmotionを1 SQLite transactionで保存する                       |
 | Event archive writes       | phase / model / commit event分。Cognitive model eventにはMainと同じpayload policyを適用する                                 |
 | main model calls / input   | Mainのcall数`T`は変わらないが、各turn前の`search_memory` / `update_emotion` exchangeによりMain requestのinput tokenが増える |
 
-任意toolを1回使う場合、`search_memory`はquery embedding 1回、候補があればrerank 1回、embedding BLOBを含む最大500 rowsのreadを追加し得る。`store_memory`はembedding 1回とMemory rowのinsert / eviction、関連event writeを追加し得る。いずれも`C`に含まれ、embedding / rerank requestは40件のexternal request hard gateを共有する。
+任意toolを1回使う場合、`search_memory`はquery embedding 1回、候補があればrerank 1回、embedding BLOBを含む最大500 rowsのreadを追加し得る。`store_memory`はembedding 1回とMemory rowのinsert / eviction、関連event writeを追加し得る。OpenAI embeddingを使用する構成ではembedding requestも40件のexternal request hard gateを共有する。既定構成のembeddingとrerankはWorkers AI bindingを使うため、この外部request gateには含めない。
 
-外部requestは送信直前に1件ずつ数える。40件を使い切った場合は追加requestを送らず、現在のsessionを失敗させる。
+外部requestは送信直前に1件ずつ数える。40件を使い切った場合は追加requestを送らず、現在のsessionを失敗させる。session lifecycleと失敗通知のDiscord eventはこのapplication gateに含めず、Cloudflare上限50件までの残り10件を退避枠として使う。これにより、通常処理の上限到達が失敗ログやusage保存を妨げないようにする。
 
-`T = 10`ではretryがなくても、Main 10件、Cognitive 22件、recall query embedding 10件だけで42件になる。Discord APIやrerank、終了時のMemory embeddingも加わるため、現行hard gateのまま10 turn完走を保証することはできない。最大turn数またはrequest budgetを変更する場合は、Cloudflare上限とstaging計測を基にproduction投入前に決定する。
+既定のWorkers AI embedding構成でも、run判定と起動時通知確認でDiscord APIを約12件使う。`T = 10`かつretry・任意toolなしの場合はMain 10件、Cognitive 22件と合わせて約44件になるため、現行hard gateのまま10 turn完走は保証しない。`T = 8`なら同条件で約38件となる。OpenAI embedding構成では、さらに各recallと終了時保存のembedding requestが加わる。
 
-この40件は、Free planの通常subrequest上限50件に対して10件の余裕を持たせるためのrun単位の上限である。
+この40件は、Free planのexternal subrequest上限50件に対して10件の余裕を持たせるためのrun単位の上限である。
 
 `pre_main`では検索結果とEmotionを確定し、`post_main`では1件のMemoryとEmotionを1回のtransactionで保存する。片方のmoduleまたはMemory操作が失敗した場合、そのphaseのstate更新は行わない。
 
 `memory.search` は検索候補として embedding BLOB を含む memory rows を読む。現行の上限は memory 保持上限と同じ 500 rows で、同一 request 内では cache する。Dashboard 表示では embedding BLOB を読まない。
 
-current embedding model と異なる memory row は、異なるベクトル空間や次元が混ざることを避けるため検索対象にしない。日次 sleep maintenance はstale候補を最大500件読むが、共有external request budget到達時は残りを反復せず停止し、後続の日次runへ繰り越す。これによりmodel変更後も既存memoryが検索対象へ戻る機会を維持しつつ、1 invocationでplatform上限を超えない。
+current embedding model と異なる memory row は、異なるベクトル空間や次元が混ざることを避けるため検索対象にしない。日次 sleep maintenance はstale候補を最大500件読む。OpenAI embedding構成で共有external request budgetへ達した場合は、残りを反復せず後続の日次runへ繰り越す。既定のWorkers AI embeddingは内部serviceの上限に従う。
 
 ### Public Web page reader
 

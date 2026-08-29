@@ -5,7 +5,6 @@ import { getErrorMessage } from '../utils/error';
 import {
   finishThinkingInputSchema,
   type FinishThinkingInput,
-  type FinishThinkingSessionRecord,
 } from './tools/thinking';
 import {
   READ_WEB_PAGE_BUDGET_ERROR_MESSAGE,
@@ -19,6 +18,7 @@ import type {
   ModelInputItem,
   ModelMessage,
   ModelMessageContentPart,
+  ModelOutputItem,
   ModelPort,
   ModelResponse,
   ModelToolCall,
@@ -46,6 +46,32 @@ export interface AgentSessionTool {
   execute(input: string): Promise<string>;
 }
 
+/** A terminal reason visible at the final resolved model-turn boundary. */
+export type AgentSessionTerminationReason = 'finish_thinking' | 'max_turns';
+
+/**
+ * One model turn after every requested tool has produced its model-visible
+ * result.
+ *
+ * `responseOutput` preserves the assistant output and tool calls, while
+ * `resolvedInput` is the exact input that the main model would receive next.
+ * A terminal boundary is still emitted so higher-level orchestration can run
+ * end-of-session work; any input it returns at that boundary is intentionally
+ * not sent to another main-model turn.
+ */
+export interface AgentSessionTurnBoundary {
+  turnIndex: number;
+  responseOutput: readonly ModelOutputItem[];
+  toolCalls: readonly ModelToolCall[];
+  resolvedInput: readonly ModelInputItem[];
+  terminationReason: AgentSessionTerminationReason | null;
+}
+
+/** Higher-level work that can enrich the next main-model turn at a boundary. */
+export type AgentSessionTurnBoundaryHandler = (
+  boundary: AgentSessionTurnBoundary
+) => Promise<readonly ModelInputItem[]>;
+
 /**
  * provider 非依存 session を実行するための入力。
  */
@@ -55,19 +81,38 @@ export interface RunAgentSessionInput {
   initialInput: ModelInputItem[];
   events?: EchoEventPort;
   maxTurns?: number;
+  onTurnBoundary?: AgentSessionTurnBoundaryHandler;
 }
 
 /**
  * session 全体の実行結果。
- * usage 集計に加えて、`finish_thinking` が返した session record と
- * 次回起動時刻、provider 側の継続 token、終了理由を返す。
+ * usage 集計に加えて、次回起動時刻、provider 側の継続 token、終了理由を返す。
  */
 export interface AgentSessionResult {
   usage: ModelUsage;
-  context?: FinishThinkingSessionRecord;
   nextWakeAt: string | null;
   responseToken?: string;
-  terminationReason: 'finish_thinking' | 'max_turns';
+  terminationReason: AgentSessionTerminationReason;
+}
+
+/**
+ * Session の途中失敗でも、provider が既に計上した usage を呼び出し元へ返す。
+ *
+ * `cause` は制御判断用に保持し、usage は成功済み model response のみを含む。
+ */
+export class AgentSessionExecutionError extends Error {
+  override readonly name = 'AgentSessionExecutionError';
+  readonly cause: unknown;
+
+  /** @param cause session を停止させた元の失敗 */
+  constructor(
+    cause: unknown,
+    readonly usage: ModelUsage,
+    readonly responseToken: string | undefined
+  ) {
+    super(`Agent session failed: ${getErrorMessage(cause)}`);
+    this.cause = cause;
+  }
 }
 
 /**
@@ -567,6 +612,32 @@ function parseFinishThinkingInput(
   return null;
 }
 
+/** 現在 turn の明示終了または max-turn 終了を正規化する。 */
+function getSessionTerminationReason(
+  finishThinking: FinishThinkingInput | null,
+  turn: number,
+  maxTurns: number
+): AgentSessionTerminationReason | null {
+  if (finishThinking !== null) {
+    return 'finish_thinking';
+  }
+  if (turn === maxTurns) {
+    return 'max_turns';
+  }
+  return null;
+}
+
+/** Optional boundary handler の未指定時を空 input に正規化する。 */
+async function createBoundaryAdditionalInput(
+  handler: AgentSessionTurnBoundaryHandler | undefined,
+  boundary: AgentSessionTurnBoundary
+): Promise<readonly ModelInputItem[]> {
+  if (handler === undefined) {
+    return [];
+  }
+  return await handler(boundary);
+}
+
 /**
  * 現在ターンの tool call 群を、次ターンへ渡す tool_result input 列へ変換する。
  * tool が 1 件も無い場合は空配列を返し、そのまま次ターンを継続できるようにする。
@@ -835,80 +906,109 @@ export async function runAgentSession(
   let previousResponseToken: string | undefined;
   let totalUsage = ZERO_MODEL_USAGE;
 
-  for (let turn = 1; turn <= maxTurns; turn += 1) {
-    // Agent turns are sequential; event emission belongs to the same turn.
-    // eslint-disable-next-line no-await-in-loop
-    await emitEchoEvent(input.events, {
-      type: 'model.turn.started',
-      severity: 'debug',
-      summary: `model turn ${turn} started`,
-      payload: {
+  try {
+    for (let turn = 1; turn <= maxTurns; turn += 1) {
+      // Agent turns are sequential; event emission belongs to the same turn.
+      // eslint-disable-next-line no-await-in-loop
+      await emitEchoEvent(input.events, {
+        type: 'model.turn.started',
+        severity: 'debug',
+        summary: `model turn ${turn} started`,
+        payload: {
+          turnIndex: turn,
+          inputItemCount: currentInput.length,
+        },
+      });
+
+      const turnStartedAt = Date.now();
+      // Agent turns are inherently sequential because each model response
+      // depends on the previous turn's tool outputs.
+      // eslint-disable-next-line no-await-in-loop
+      const response = await input.model.generate({
+        input: currentInput,
+        tools: getToolContracts(sessionTools),
+        previousResponseToken,
         turnIndex: turn,
-        inputItemCount: currentInput.length,
-      },
-    });
+      });
 
-    const turnStartedAt = Date.now();
-    // Agent turns are inherently sequential because each model response
-    // depends on the previous turn's tool outputs.
-    // eslint-disable-next-line no-await-in-loop
-    const response = await input.model.generate({
-      input: currentInput,
-      tools: getToolContracts(sessionTools),
-      previousResponseToken,
-      turnIndex: turn,
-    });
+      totalUsage = accumulateModelUsage(totalUsage, response.usage);
+      previousResponseToken = response.responseToken;
 
-    totalUsage = accumulateModelUsage(totalUsage, response.usage);
-    previousResponseToken = response.responseToken;
+      const toolCalls = getToolCalls(response);
+      const warnings = toolCalls.length === 0 ? ['no_tool_calls'] : [];
+      // Agent turns are sequential; event emission belongs to the same turn.
+      // eslint-disable-next-line no-await-in-loop
+      await emitEchoEvent(input.events, {
+        type: 'model.turn.completed',
+        severity: warnings.length > 0 ? 'warn' : 'debug',
+        summary: `model turn ${turn} completed`,
+        payload: {
+          turnIndex: turn,
+          durationMs: Date.now() - turnStartedAt,
+          outputItemCount: response.output.length,
+          toolCallCount: toolCalls.length,
+          warnings,
+          usage: response.usage,
+        },
+      });
 
-    const toolCalls = getToolCalls(response);
-    const warnings = toolCalls.length === 0 ? ['no_tool_calls'] : [];
-    // Agent turns are sequential; event emission belongs to the same turn.
-    // eslint-disable-next-line no-await-in-loop
-    await emitEchoEvent(input.events, {
-      type: 'model.turn.completed',
-      severity: warnings.length > 0 ? 'warn' : 'debug',
-      summary: `model turn ${turn} completed`,
-      payload: {
-        turnIndex: turn,
-        durationMs: Date.now() - turnStartedAt,
-        outputItemCount: response.output.length,
-        toolCallCount: toolCalls.length,
-        warnings,
-        usage: response.usage,
-      },
-    });
+      // The loop stays alive until finish_thinking appears explicitly,
+      // even when the model returned no tool calls in this turn.
 
-    // The loop stays alive until finish_thinking appears explicitly,
-    // even when the model returned no tool calls in this turn.
+      const finishThinking = parseFinishThinkingInput(toolCalls);
 
-    const finishThinking = parseFinishThinkingInput(toolCalls);
-
-    // Tool results, or an empty carry-over when no tools were used,
-    // become the next model input for the following turn.
-    // eslint-disable-next-line no-await-in-loop
-    currentInput = await createNextInput(
-      toolCalls,
-      sessionTools,
-      input.events,
-      turn
-    );
-    if (finishThinking !== null) {
-      return {
-        context: finishThinking.session_record,
-        nextWakeAt: finishThinking.next_wake_at ?? null,
-        usage: totalUsage,
-        responseToken: previousResponseToken,
-        terminationReason: 'finish_thinking',
-      };
+      // Tool results, or an empty carry-over when no tools were used, become
+      // the resolved boundary before higher-level orchestration may add input.
+      // eslint-disable-next-line no-await-in-loop
+      const resolvedInput = await createNextInput(
+        toolCalls,
+        sessionTools,
+        input.events,
+        turn
+      );
+      const terminationReason = getSessionTerminationReason(
+        finishThinking,
+        turn,
+        maxTurns
+      );
+      // The boundary handler is sequential because its output may become the
+      // next main-model input and terminal work must finish before returning.
+      // eslint-disable-next-line no-await-in-loop
+      const additionalInput = await createBoundaryAdditionalInput(
+        input.onTurnBoundary,
+        {
+          turnIndex: turn,
+          responseOutput: response.output,
+          toolCalls,
+          resolvedInput,
+          terminationReason,
+        }
+      );
+      currentInput = [...resolvedInput, ...additionalInput];
+      if (finishThinking !== null) {
+        return {
+          nextWakeAt: finishThinking.next_wake_at ?? null,
+          usage: totalUsage,
+          responseToken: previousResponseToken,
+          terminationReason: 'finish_thinking',
+        };
+      }
     }
-  }
 
-  return {
-    nextWakeAt: null,
-    usage: totalUsage,
-    responseToken: previousResponseToken,
-    terminationReason: 'max_turns',
-  };
+    return {
+      nextWakeAt: null,
+      usage: totalUsage,
+      responseToken: previousResponseToken,
+      terminationReason: 'max_turns',
+    };
+  } catch (error) {
+    if (error instanceof AgentSessionExecutionError) {
+      throw error;
+    }
+    throw new AgentSessionExecutionError(
+      error,
+      totalUsage,
+      previousResponseToken
+    );
+  }
 }

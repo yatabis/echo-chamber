@@ -1,48 +1,31 @@
 import { formatJapaneseDatetime } from '../utils/datetime';
 
-import type { Emotion, MemoryType } from '../echo/types';
+import type { CognitiveModulePhase } from './cognitive-module-orchestrator';
 import type { ModelToolContract } from '../ports/model';
 
 /**
- * 起動時に prompt へ注入する最新 context の要約。
- * 直前セッションの要点だけを表し、長期記憶とは別枠で扱う。
- */
-export interface PromptContextSnapshot {
-  content: string;
-  createdAt: string;
-  emotion: Emotion;
-}
-
-/**
- * 起動時の context から引いた関連メモリの最小表現。
- * memory record 全体ではなく、再開判断に必要な要点だけを prompt に渡す。
- */
-export interface PromptRelatedMemorySnapshot {
-  content: string;
-  type: MemoryType;
-  createdAt: string;
-  emotion: Emotion;
-}
-
-/**
  * Agent の初期 developer prompt を組み立てるための入力。
- * static prompt、本時刻、直近 context、利用可能ツール一覧をまとめて受け取る。
+ * static prompt、本時刻、利用可能ツール一覧をまとめて受け取る。
  */
 export interface BuildAgentPromptInput {
   systemPrompt: string;
   currentDatetime: Date;
-  latestContext: PromptContextSnapshot | null;
-  relatedMemories?: readonly PromptRelatedMemorySnapshot[];
   toolContracts: readonly ModelToolContract[];
 }
 
 /**
  * prompt builder が返す developer message。
- * 現在は OpenAI Responses API の入力に変換する前段の中間表現として使う。
+ * E.C.H.O. Chamber の model protocol に渡す中間表現として使う。
  */
 export interface AgentPromptMessage {
   role: 'developer';
   content: string;
+}
+
+/** Main専用指示と各modelが共有するruntime context。 */
+export interface AgentPromptMessages {
+  mainSystemPrompt: AgentPromptMessage;
+  sharedRuntimeContext: AgentPromptMessage;
 }
 
 /**
@@ -61,12 +44,12 @@ function buildToolParameterDescriptions(inputSchema: unknown): string[] {
   );
 
   return Object.entries(properties).map(([name, property]) => {
-    const requiredLabel = required.has(name) ? 'required' : 'optional';
+    const requiredLabel = required.has(name) ? '必須' : '任意';
     const propertySchema = getRecord(property);
     const description =
       typeof propertySchema?.description === 'string'
         ? propertySchema.description
-        : 'No description provided.';
+        : '説明なし。';
 
     return `  - ${name} (${requiredLabel}): ${description}`;
   });
@@ -95,114 +78,76 @@ export function buildToolCatalogPrompt(
 
     return [
       `- ${tool.name}: ${tool.description}`,
-      ...(parameterLines.length > 0 ? parameterLines : ['  - arguments: none']),
+      ...(parameterLines.length > 0 ? parameterLines : ['  - 引数: なし']),
     ];
   });
 
   return [
     '<available_tools>',
-    'You have access to the following tools:',
+    '利用可能なツールは次のとおりです。',
     ...lines,
     '</available_tools>',
   ].join('\n');
 }
 
 /**
- * latest context を prompt に埋め込む JSON ブロックへ整形する。
- *
- * @param latestContext 起動時に再注入する最新 context
- * @returns `Latest context:` 見出し付きの整形済みブロック
- */
-function formatLatestContextBlock(
-  latestContext: PromptContextSnapshot
-): string {
-  return `Latest context:\n${JSON.stringify(
-    {
-      content: latestContext.content,
-      created_at: latestContext.createdAt,
-      emotion: {
-        valence: latestContext.emotion.valence,
-        arousal: latestContext.emotion.arousal,
-        labels: latestContext.emotion.labels,
-      },
-    },
-    null,
-    2
-  )}`;
-}
-
-/**
- * 最新 context から検索した関連メモリを prompt 用ブロックへ整形する。
- */
-function formatRelatedMemoriesBlock(
-  relatedMemories: readonly PromptRelatedMemorySnapshot[]
-): string {
-  return `Related memories:\n${JSON.stringify(
-    relatedMemories.map((memory) => ({
-      content: memory.content,
-      type: memory.type,
-      created_at: memory.createdAt,
-      emotion: {
-        valence: memory.emotion.valence,
-        arousal: memory.emotion.arousal,
-        labels: memory.emotion.labels,
-      },
-    })),
-    null,
-    2
-  )}`;
-}
-
-/**
  * 起動時の runtime context を表す `<runtime_context>` ブロックを生成する。
- * 直近 context と現在時刻をひとまとめにし、
- * 思考再開時の足掛かりとして prompt に差し込む。
+ * Domain continuity は Cognitive Module のsystem-owned tool exchangeから受け取り、
+ * ここでは時刻だけを渡す。
  */
-export function buildRuntimeContextPrompt(
-  currentDatetime: Date,
-  latestContext: PromptContextSnapshot | null,
-  relatedMemories: readonly PromptRelatedMemorySnapshot[] = []
-): string {
+export function buildRuntimeContextPrompt(currentDatetime: Date): string {
   const currentDatetimeText = formatJapaneseDatetime(currentDatetime);
-  const persistedContextBlock =
-    latestContext === null
-      ? 'No persisted context loaded.'
-      : [
-          formatLatestContextBlock(latestContext),
-          formatRelatedMemoriesBlock(relatedMemories),
-        ].join('\n');
 
   return [
     '<runtime_context>',
-    persistedContextBlock,
-    `Current datetime: ${currentDatetimeText}`,
+    `現在日時: ${currentDatetimeText}`,
     '</runtime_context>',
   ].join('\n');
 }
 
 /**
- * Agent 起動時に渡す developer messages を組み立てる。
- * 1通目に static prompt と generated tool catalog、
- * 2通目に runtime context block を載せる構成にしている。
+ * Memory Cognitive Moduleが現在phaseで担う役割をsystem promptにする。
+ */
+export function buildMemoryCognitiveModuleSystemPrompt(
+  instanceName: string,
+  phase: CognitiveModulePhase
+): string {
+  const identity = `あなたはE.C.H.O. Chamberで動作する「${instanceName}」の記憶モジュールです。記憶の想起と記銘を担います。`;
+  return phase === 'pre_main'
+    ? `${identity}共有コンテキストから、「${instanceName}」が次の思考で必要とする可能性のある記憶を想起してください。その記憶を検索するためのクエリを1つ返してください。`
+    : `${identity}完了した思考セッションの共有コンテキストから、「${instanceName}」が記憶しておく内容を選んでください。記憶の本文と種類を返してください。`;
+}
+
+/**
+ * Emotion Cognitive Moduleが現在の感情状態を更新するsystem promptを作る。
+ */
+export function buildEmotionCognitiveModuleSystemPrompt(
+  instanceName: string
+): string {
+  return `あなたはE.C.H.O. Chamberで動作する「${instanceName}」の感情モジュールです。「${instanceName}」の感情状態を管理します。共有コンテキストに基づいて現在の感情状態を更新してください。感情価（valence）、覚醒度（arousal）、ラベル（labels）を返してください。`;
+}
+
+/**
+ * Main専用system promptと共有runtime contextを組み立てる。
  */
 export function buildAgentPromptMessages(
   input: BuildAgentPromptInput
-): AgentPromptMessage[] {
+): AgentPromptMessages {
   const toolCatalog = buildToolCatalogPrompt(input.toolContracts);
-  const runtimeContext = buildRuntimeContextPrompt(
-    input.currentDatetime,
-    input.latestContext,
-    input.relatedMemories ?? []
-  );
+  const runtimeContext = buildRuntimeContextPrompt(input.currentDatetime);
 
-  return [
-    {
+  return {
+    mainSystemPrompt: {
       role: 'developer',
-      content: `${input.systemPrompt}\n\n${toolCatalog}`,
+      content: [
+        input.systemPrompt,
+        toolCatalog,
+        '各メインモデルターンの前にシステムが追加する search_memory と update_emotion のツール往復によって、思考の継続に必要な記憶と感情状態が渡されます。',
+      ].join('\n\n'),
     },
-    {
+    sharedRuntimeContext: {
       role: 'developer',
       content: runtimeContext,
     },
-  ];
+  };
 }

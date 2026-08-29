@@ -12,7 +12,11 @@
 
 ## 責務とインターフェース
 
-Memory Module と Emotion Module には、その時点までに確定した Main の入力、出力、tool call / result、Memory の検索結果、Emotion の状態を渡す。同じタイミングで実行する両 Module は、同一の確定済み入力から並列に動作する。
+Main、Memory Module、Emotion Module は、現在日時、Main の出力、tool call / result、および確定済みの system-owned tool exchange からなる時系列 context を共有する。Memory Module と Emotion Module は、実行ごとにこの共有 context 全体を受け取り、その先頭へ自身専用の system prompt を1件だけ置く。Main の system prompt と tool catalog は Cognitive Module に渡さず、Cognitive Module の system prompt も共有 context へ保存しない。
+
+Main の出力は、その直前に Main の出力であることを示す注記を置いて共有 context へ追加する。Memory Module と Emotion Module の model 出力自体は共有 context へ追加しない。runtime が結果を確定した後、Main に渡したものと同じ system-owned tool exchange を共有 context へ追加する。
+
+前の思考 session から継続する Emotion は、Memory Module と Emotion Module が読む初期状態として context へ戻す。Main へは、最初の `pre_main` で更新・確定した Emotion だけを `update_emotion` の system-owned tool exchange として渡す。
 
 Memory Module の出力は実行タイミングによって異なる。
 

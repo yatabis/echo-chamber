@@ -1302,6 +1302,14 @@ function InstanceSnapshot(props: {
           <strong>{formatMainLlmLabel(status.runtime)}</strong>
         </div>
         <div className="summary-metric">
+          <span>Cognitive state</span>
+          <strong>
+            {status.cognitive.domainVersion === 0
+              ? 'No committed phase'
+              : `Committed · v${status.cognitive.domainVersion}`}
+          </strong>
+        </div>
+        <div className="summary-metric">
           <span>Daily limit</span>
           <strong>{formatDailyTokenLimit(status.runtime)}</strong>
         </div>
@@ -2099,9 +2107,7 @@ function KnowledgeInventory(props: { status: EchoStatus }): JSX.Element {
   );
 }
 
-/**
- * 次回起動へ引き継ぐ runtime context を表示する。
- */
+/** 保存済み Context snapshot を履歴情報として表示する。 */
 function RuntimeContextPanel(props: {
   context: EchoStatus['context'];
 }): JSX.Element {
@@ -2111,8 +2117,8 @@ function RuntimeContextPanel(props: {
     <section className="card">
       <div className="section-header">
         <div>
-          <h2>Runtime Context</h2>
-          <p>Persisted context for the next thinking session</p>
+          <h2>Stored Context</h2>
+          <p>Last persisted context snapshot</p>
         </div>
       </div>
 

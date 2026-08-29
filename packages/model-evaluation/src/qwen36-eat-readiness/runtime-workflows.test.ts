@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import type { PromptContextSnapshot } from '@echo-chamber/core/agent/prompt-builder';
 import { ZERO_MODEL_USAGE } from '@echo-chamber/core/agent/session';
 import type { Note } from '@echo-chamber/core/echo/types';
+import type { ModelResponse } from '@echo-chamber/core/ports/model';
 
+import { CONTROLLED_GREEDY_PROFILE } from './runtime-profiles';
+import { runRuntimeWorkflow } from './runtime-workflow-harness';
 import { RUNTIME_WORKFLOWS } from './runtime-workflows';
 import { summarizeChecks } from './scoring';
 
@@ -11,9 +13,14 @@ import type {
   RuntimeWorkflowFixture,
   RuntimeWorkflowObservation,
 } from './runtime-workflows';
-import type { RuntimeSessionTrace, TraceCall, TraceEvent } from './types';
+import type {
+  RuntimeContextSnapshot,
+  RuntimeSessionTrace,
+  TraceCall,
+  TraceEvent,
+} from './types';
 
-const CONTEXT: PromptContextSnapshot = {
+const CONTEXT: RuntimeContextSnapshot = {
   content: '次回に継続する要点',
   createdAt: '2026-07-19T05:00:00.000Z',
   emotion: { valence: 0, arousal: 0.2, labels: ['test'] },
@@ -37,7 +44,7 @@ function session(
   sessionId: string,
   calls: TraceCall[],
   input: {
-    contextAfter?: PromptContextSnapshot | null;
+    contextAfter?: RuntimeContextSnapshot | null;
     events?: TraceEvent[];
   } = {}
 ): RuntimeSessionTrace {
@@ -65,6 +72,85 @@ function requireWorkflow(id: string): RuntimeWorkflowFixture {
 }
 
 describe('runtime workflow scoring fixtures', () => {
+  it('finish_thinkingで記録した評価用contextを次のsessionへ渡す', async () => {
+    let modelCallIndex = 0;
+    const fixture: RuntimeWorkflowFixture = {
+      id: 'session-context-continuity',
+      title: 'session context continuity',
+      instructionMode: 'explicit',
+      initialContext: null,
+      initialMemories: [],
+      initialNotes: [],
+      sessions: [
+        {
+          id: 'first',
+          title: 'first',
+          currentDatetime: new Date('2026-07-19T05:00:00.000Z'),
+          notifications: [],
+          incomingMessages: {},
+        },
+        {
+          id: 'second',
+          title: 'second',
+          currentDatetime: new Date('2026-07-19T06:00:00.000Z'),
+          notifications: [],
+          incomingMessages: {},
+        },
+      ],
+      injectedFaults: [],
+      evaluate: () => [],
+    };
+
+    const result = await runRuntimeWorkflow(fixture, {
+      createModel: () => ({
+        // In-memory model fixture implements the asynchronous production port.
+        // eslint-disable-next-line @typescript-eslint/require-await
+        generate: async (): Promise<ModelResponse> => {
+          modelCallIndex += 1;
+          return {
+            output: [
+              {
+                type: 'tool_call',
+                callId: `finish-${modelCallIndex}`,
+                toolName: 'finish_thinking',
+                input: JSON.stringify({
+                  reason: '評価セッション完了',
+                  session_record: {
+                    content: `継続情報${modelCallIndex}`,
+                    emotion: {
+                      valence: 0.1 * modelCallIndex,
+                      arousal: 0.2,
+                      labels: ['評価'],
+                    },
+                  },
+                }),
+              },
+            ],
+            usage: ZERO_MODEL_USAGE,
+          };
+        },
+      }),
+      maxTurns: 1,
+      systemPrompt: '評価用システムプロンプト',
+      generationProfile: CONTROLLED_GREEDY_PROFILE,
+      repetition: 1,
+    });
+
+    expect(result.sessions[0]?.contextAfter).toEqual({
+      content: '継続情報1',
+      emotion: { valence: 0.1, arousal: 0.2, labels: ['評価'] },
+      createdAt: '2026-07-19T05:00:00.000Z',
+    });
+    expect(result.sessions[1]?.contextBefore).toEqual(
+      result.sessions[0]?.contextAfter
+    );
+    expect(result.sessions[1]?.contextAfter).toEqual({
+      content: '継続情報2',
+      emotion: { valence: 0.2, arousal: 0.2, labels: ['評価'] },
+      createdAt: '2026-07-19T06:00:00.000Z',
+    });
+  });
+
   it('fully scores a latest-state recovery trace', () => {
     const observation: RuntimeWorkflowObservation = {
       sessions: [

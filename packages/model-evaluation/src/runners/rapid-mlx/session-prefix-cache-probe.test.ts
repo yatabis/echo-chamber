@@ -88,11 +88,12 @@ function createBaseMessages(): ChatCompletionMessageParam[] {
   const promptMessages = buildAgentPromptMessages({
     systemPrompt: systemPromptRin,
     currentDatetime: new Date('2026-07-19T06:00:00.000Z'),
-    latestContext: null,
-    relatedMemories: [],
     toolContracts: canonicalRuntimeTools.map((tool) => tool.contract),
   });
-  const convertedPrompt = promptMessages.map((message) => ({
+  const convertedPrompt = [
+    promptMessages.mainSystemPrompt,
+    promptMessages.sharedRuntimeContext,
+  ].map((message) => ({
     role: 'user' as const,
     content: message.content,
   }));

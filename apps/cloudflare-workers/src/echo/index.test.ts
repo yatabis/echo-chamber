@@ -10,6 +10,10 @@ import {
 import type { DashboardEchoEvent } from '@echo-chamber/contracts/dashboard/types';
 import { canonicalRuntimeTools } from '@echo-chamber/core/agent/runtime-tools/catalog';
 import { bindRuntimeTools } from '@echo-chamber/core/agent/runtime-tools/tool';
+import {
+  ThinkingEngineExecutionError,
+  type ThinkingEngineResult,
+} from '@echo-chamber/core/agent/thinking-engine';
 import { TOKEN_LIMITS } from '@echo-chamber/core/echo/constants';
 import { getEchoInstanceDefinition } from '@echo-chamber/core/echo/instance-definitions';
 import type { Usage } from '@echo-chamber/core/echo/types';
@@ -19,6 +23,7 @@ import type {
   EchoEvent,
   EchoEventType,
 } from '@echo-chamber/core/ports/echo-event';
+import type { ModelUsage } from '@echo-chamber/core/ports/model';
 
 import { resolveEchoRuntimeBindings } from '../config/echo-runtime-bindings';
 import { createEmbeddingService } from '../embedding/create-embedding-service';
@@ -41,7 +46,10 @@ const {
   mockRuntimeBindings,
   mockToolContext,
 } = vi.hoisted(() => ({
-  mockEmbeddingService: { provider: 'test-embedding' },
+  mockEmbeddingService: {
+    modelIdentifier: 'test-embedding',
+    embed: vi.fn(async () => Promise.resolve([0.1])),
+  },
   mockExecutableTools: [{ name: 'tool-1' }],
   mockEvents: {
     emit: vi.fn(async (_event: unknown) => Promise.resolve()),
@@ -53,6 +61,10 @@ const {
     mainLlm: {
       provider: 'openai' as const,
       model: 'gpt-5.5',
+    },
+    cognitiveModules: {
+      model: 'test-cognitive-model',
+      reasoningEffort: 'medium' as const,
     },
     tokenLimits: {
       dailyHardLimit: 500_000,
@@ -71,7 +83,10 @@ const {
       })
     ),
   },
-  mockRerankingService: { provider: 'test-reranker' },
+  mockRerankingService: {
+    modelIdentifier: 'test-reranker',
+    rerank: vi.fn(async () => Promise.resolve([])),
+  },
   mockRuntimeBindings: {
     discordBotToken: 'discord-token',
     chatChannels: [
@@ -231,6 +246,34 @@ function createUsage(totalTokens: number): Usage {
   };
 }
 
+function createModelUsage(totalTokens: number): ModelUsage {
+  return {
+    cachedInputTokens: 0,
+    cacheWriteInputTokens: 0,
+    uncachedInputTokens: 0,
+    totalInputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    totalTokens,
+  };
+}
+
+function createSuccessfulThinkingResult(
+  nextWakeAt: string | null
+): ThinkingEngineResult {
+  const mainUsage = createModelUsage(42);
+  return {
+    nextWakeAt,
+    usage: mainUsage,
+    mainUsage,
+    cognitiveModules: {
+      activationId: 'rin:test-activation',
+      phases: [],
+      usage: createModelUsage(0),
+    },
+  };
+}
+
 function getEventArchive(echo: Echo): {
   getRecentActionAnalysisEventRanges(input: {
     now?: Date;
@@ -329,12 +372,20 @@ describe('Echo.ensureInitialized', () => {
     );
     expect(embeddingServiceCalls[0]?.[2]).toBe(mockEvents);
     expect(createRerankingService).toHaveBeenCalledWith(env);
-    expect(MemorySystem).toHaveBeenCalledWith({
-      sql: storage.sql,
-      embeddingService: mockEmbeddingService,
-      rerankingService: mockRerankingService,
-      events: mockEvents,
-    });
+    const memorySystemInput = vi.mocked(MemorySystem).mock.calls[0]?.[0];
+    if (memorySystemInput === undefined) {
+      throw new Error('Expected MemorySystem construction');
+    }
+    expect(memorySystemInput.sql).toBe(storage.sql);
+    expect(memorySystemInput.embeddingService.modelIdentifier).toBe(
+      'test-embedding'
+    );
+    expect(memorySystemInput.embeddingService).toBe(mockEmbeddingService);
+    expect(memorySystemInput.rerankingService.modelIdentifier).toBe(
+      'test-reranker'
+    );
+    expect(memorySystemInput.rerankingService).toBe(mockRerankingService);
+    expect(memorySystemInput.events).toBe(mockEvents);
     const toolContextCalls = vi.mocked(createToolExecutionContext).mock.calls;
     expect(toolContextCalls).toHaveLength(1);
     expect(toolContextCalls[0]?.[0]).toMatchObject({
@@ -370,6 +421,123 @@ describe('Echo.ensureInitialized', () => {
     expect(createToolExecutionContext).not.toHaveBeenCalled();
     expect(bindRuntimeTools).not.toHaveBeenCalled();
     expect(mockMemorySystem.reEmbedStaleMemories).not.toHaveBeenCalled();
+  });
+
+  it('外部 provider の embedding だけを external request budget に接続する', async () => {
+    const env = createMockEnv();
+    const { storage } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+    vi.mocked(resolveEchoRuntimeBindings).mockResolvedValueOnce({
+      ...mockRuntimeBindings,
+      embeddingConfig: { provider: 'openai' },
+    });
+    const reserveExternalRequest = vi.spyOn(
+      echo as unknown as { reserveExternalRequest(): void },
+      'reserveExternalRequest'
+    );
+
+    await ensureInitialized(echo, 'rin');
+
+    const memorySystemInput = vi.mocked(MemorySystem).mock.calls[0]?.[0];
+    if (memorySystemInput === undefined) {
+      throw new Error('Expected MemorySystem construction');
+    }
+    expect(memorySystemInput.embeddingService).not.toBe(mockEmbeddingService);
+    expect(memorySystemInput.rerankingService).toBe(mockRerankingService);
+
+    await memorySystemInput.embeddingService.embed('query');
+    await memorySystemInput.rerankingService.rerank('query', [], 5);
+
+    expect(reserveExternalRequest).toHaveBeenCalledTimes(1);
+    expect(mockEmbeddingService.embed).toHaveBeenCalledWith('query');
+    expect(mockRerankingService.rerank).toHaveBeenCalledWith('query', [], 5);
+  });
+});
+
+describe('Echo.createThinkingEngine', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('enable flag 無しで cognitive modules を ThinkingEngine の必須経路へ接続する', async () => {
+    const env = {
+      ...createMockEnv(),
+      OPENAI_API_KEY: 'test-openai-key',
+    } as unknown as Env;
+    const { storage } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+    await ensureInitialized(echo, 'rin');
+
+    const thinkingEngine = (
+      echo as unknown as {
+        createThinkingEngine(): unknown;
+      }
+    ).createThinkingEngine();
+    const engineInput = (
+      thinkingEngine as {
+        input: { cognitiveModules: unknown };
+      }
+    ).input;
+
+    expect(engineInput.cognitiveModules).toBeDefined();
+  });
+
+  it('main と cognitive module の usage を別 model bucket に記録する', () => {
+    const env = {
+      ...createMockEnv(),
+      OPENAI_API_KEY: 'test-openai-key',
+    } as unknown as Env;
+    const { storage } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+    setInitializedDefinition(echo);
+
+    const recordedUsage = (
+      echo as unknown as {
+        createRecordedSessionUsage(result: {
+          usage: ModelUsage;
+          mainUsage: ModelUsage;
+          cognitiveModules: {
+            activationId: string;
+            phases: [];
+            usage: ModelUsage;
+          };
+        }): Usage;
+      }
+    ).createRecordedSessionUsage({
+      usage: createModelUsage(16),
+      mainUsage: createModelUsage(10),
+      cognitiveModules: {
+        activationId: 'rin:activation-1',
+        phases: [],
+        usage: createModelUsage(6),
+      },
+    });
+
+    expect(recordedUsage.total_tokens).toBe(16);
+    expect(recordedUsage.by_model).toEqual([
+      {
+        provider: 'openai',
+        model: 'gpt-5.5',
+        cached_input_tokens: 0,
+        cache_write_input_tokens: 0,
+        uncached_input_tokens: 0,
+        total_input_tokens: 0,
+        output_tokens: 0,
+        reasoning_tokens: 0,
+        total_tokens: 10,
+      },
+      {
+        provider: 'openai',
+        model: 'test-cognitive-model',
+        cached_input_tokens: 0,
+        cache_write_input_tokens: 0,
+        uncached_input_tokens: 0,
+        total_input_tokens: 0,
+        output_tokens: 0,
+        reasoning_tokens: 0,
+        total_tokens: 6,
+      },
+    ]);
   });
 });
 
@@ -616,6 +784,11 @@ describe('Echo dashboard status payload', () => {
         nextAlarm: null,
         nextWakeAt: null,
         context: null,
+        cognitive: {
+          domainVersion: 0,
+          lastBoundaryId: null,
+          updatedAt: null,
+        },
         runtime: {
           mainLlm: {
             provider: 'openai',
@@ -664,6 +837,11 @@ describe('Echo dashboard status payload', () => {
           nextAlarm: null,
           nextWakeAt: null,
           context: null,
+          cognitive: {
+            domainVersion: 0,
+            lastBoundaryId: null,
+            updatedAt: null,
+          },
           runtime: {
             mainLlm: {
               provider: 'openai',
@@ -688,6 +866,11 @@ describe('Echo dashboard status payload', () => {
           nextAlarm: null,
           nextWakeAt: null,
           context: null,
+          cognitive: {
+            domainVersion: 1,
+            lastBoundaryId: 'rin:activation-1:1:pre_main',
+            updatedAt: '2026-03-19T12:00:00.000Z',
+          },
           runtime: {
             mainLlm: {
               provider: 'openai',
@@ -800,6 +983,25 @@ describe('Echo dashboard status payload', () => {
     ).mockReturnValue({
       getDashboardMemories: () => [],
     });
+    vi.spyOn(
+      echo as unknown as {
+        getCognitiveDomainStoreOrThrow(): {
+          getDashboardState(): Promise<{
+            domainVersion: number;
+            lastBoundaryId: null;
+            updatedAt: null;
+          }>;
+        };
+      },
+      'getCognitiveDomainStoreOrThrow'
+    ).mockReturnValue({
+      getDashboardState: async () =>
+        await Promise.resolve({
+          domainVersion: 0,
+          lastBoundaryId: null,
+          updatedAt: null,
+        }),
+    });
     vi.spyOn(echo, 'getNextAlarm').mockResolvedValue(null);
     vi.spyOn(echo, 'getNotes').mockResolvedValue([]);
     vi.spyOn(echo, 'getAllUsage').mockResolvedValue({});
@@ -808,6 +1010,11 @@ describe('Echo dashboard status payload', () => {
 
     expect(status.context).toEqual(context);
     expect(status.nextWakeAt).toBe(nextWakeAt);
+    expect(status.cognitive).toEqual({
+      domainVersion: 0,
+      lastBoundaryId: null,
+      updatedAt: null,
+    });
   });
 
   it('保存済み next_wake_at を一覧 summary に含める', async () => {
@@ -883,33 +1090,17 @@ describe('Echo context storage', () => {
     expect(result).toEqual(context);
   });
 
-  it('run 時に返却された context を DO storage へ保存する', async () => {
-    const env = createMockEnv();
+  it('run の継続状態は Cognitive commit 層へ一元化する', async () => {
+    const env = {
+      ...createMockEnv(),
+      OPENAI_API_KEY: 'test-openai-key',
+    } as unknown as Env;
     const { storage, putFn } = createMockStorage();
     const echo = new Echo(createMockState(storage), env);
     setInitializedDefinition(echo);
-    const context: ContextSnapshot = {
-      content: 'Summarized the session for the next cycle.',
-      createdAt: '2025-01-25T15:00:00.000Z',
-      updatedAt: '2025-01-25T15:00:00.000Z',
-      emotion: {
-        valence: 0.4,
-        arousal: 0.2,
-        labels: ['calm', 'satisfied'],
-      },
-    };
-    const think = vi.fn().mockResolvedValue({
-      context,
-      usage: {
-        cachedInputTokens: 0,
-        cacheWriteInputTokens: 0,
-        uncachedInputTokens: 0,
-        totalInputTokens: 0,
-        outputTokens: 0,
-        reasoningTokens: 0,
-        totalTokens: 42,
-      },
-    });
+    const think = vi
+      .fn()
+      .mockResolvedValue(createSuccessfulThinkingResult(null));
     vi.spyOn(
       echo as unknown as { setState(state: string): Promise<void> },
       'setState'
@@ -945,11 +1136,75 @@ describe('Echo context storage', () => {
     const result = await echo.run();
 
     expect(think).toHaveBeenCalledTimes(1);
-    expect(putFn).toHaveBeenCalledWith('context', context);
+    expect(putFn).not.toHaveBeenCalledWith('context', expect.anything());
     expect(result).toMatchObject({
       unreadCheckMs: 12,
     });
     expect(typeof result.thinkMs).toBe('number');
+  });
+
+  it('失敗した session でも課金済み Main / Cognitive usage を保存する', async () => {
+    const env = {
+      ...createMockEnv(),
+      OPENAI_API_KEY: 'test-openai-key',
+    } as unknown as Env;
+    const { storage } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+    setInitializedDefinition(echo);
+    const executionError = new ThinkingEngineExecutionError(
+      new Error('cognitive boundary failed'),
+      createModelUsage(7),
+      createModelUsage(3)
+    );
+
+    vi.spyOn(
+      echo as unknown as { setState(state: string): Promise<void> },
+      'setState'
+    ).mockResolvedValue(undefined);
+    vi.spyOn(
+      echo as unknown as {
+        resolveRunDecision(): Promise<{
+          shouldRun: boolean;
+          unreadCheckMs: number;
+        }>;
+      },
+      'resolveRunDecision'
+    ).mockResolvedValue({ shouldRun: true, unreadCheckMs: 4 });
+    vi.spyOn(
+      echo as unknown as {
+        createThinkingEngine(): { think(): Promise<never> };
+      },
+      'createThinkingEngine'
+    ).mockReturnValue({
+      think: vi.fn().mockRejectedValue(executionError),
+    });
+    const updateUsage = vi
+      .spyOn(
+        echo as unknown as { updateUsage(usage: Usage): Promise<Usage> },
+        'updateUsage'
+      )
+      .mockResolvedValue(createUsage(10));
+
+    await echo.run();
+
+    expect(updateUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        total_tokens: 10,
+        by_model: [
+          expect.objectContaining({ model: 'gpt-5.5', total_tokens: 7 }),
+          expect.objectContaining({
+            model: 'test-cognitive-model',
+            total_tokens: 3,
+          }),
+        ],
+      })
+    );
+    expect(findEmittedEvent('usage.recorded')).toMatchObject({
+      payload: {
+        status: 'failed',
+        usage: createModelUsage(10),
+      },
+    });
   });
 });
 
@@ -977,24 +1232,17 @@ describe('Echo next_wake_at storage', () => {
   });
 
   it('run 時に返却された next_wake_at を DO storage へ保存する', async () => {
-    const env = createMockEnv();
+    const env = {
+      ...createMockEnv(),
+      OPENAI_API_KEY: 'test-openai-key',
+    } as unknown as Env;
     const { storage, putFn } = createMockStorage();
     const echo = new Echo(createMockState(storage), env);
     setInitializedDefinition(echo);
     const nextWakeAt = '2026-03-23T00:00:00.000Z';
-    const think = vi.fn().mockResolvedValue({
-      context: null,
-      nextWakeAt,
-      usage: {
-        cachedInputTokens: 0,
-        cacheWriteInputTokens: 0,
-        uncachedInputTokens: 0,
-        totalInputTokens: 0,
-        outputTokens: 0,
-        reasoningTokens: 0,
-        totalTokens: 42,
-      },
-    });
+    const think = vi
+      .fn()
+      .mockResolvedValue(createSuccessfulThinkingResult(nextWakeAt));
 
     vi.spyOn(
       echo as unknown as { setState(state: string): Promise<void> },
@@ -1039,23 +1287,16 @@ describe('Echo next_wake_at storage', () => {
   });
 
   it('run 時に next_wake_at が無ければ保存済み値をクリアする', async () => {
-    const env = createMockEnv();
+    const env = {
+      ...createMockEnv(),
+      OPENAI_API_KEY: 'test-openai-key',
+    } as unknown as Env;
     const { storage, deleteFn } = createMockStorage();
     const echo = new Echo(createMockState(storage), env);
     setInitializedDefinition(echo);
-    const think = vi.fn().mockResolvedValue({
-      context: null,
-      nextWakeAt: null,
-      usage: {
-        cachedInputTokens: 0,
-        cacheWriteInputTokens: 0,
-        uncachedInputTokens: 0,
-        totalInputTokens: 0,
-        outputTokens: 0,
-        reasoningTokens: 0,
-        totalTokens: 42,
-      },
-    });
+    const think = vi
+      .fn()
+      .mockResolvedValue(createSuccessfulThinkingResult(null));
 
     vi.spyOn(
       echo as unknown as { setState(state: string): Promise<void> },
