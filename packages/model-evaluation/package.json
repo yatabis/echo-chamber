@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "eval": "ECHO_LOCAL_MODEL_EVAL=1 vitest run src/runners/rapid-mlx/live-eval.test.ts",
+    "eval:cognitive-hosted": "ECHO_COGNITIVE_HOSTED_EVAL=1 vitest run src/cognitive-module-hosted-live-eval.test.ts",
     "eval:check": "vitest run src/qwen36-eat-readiness --exclude src/qwen36-eat-readiness/rescore-result.test.ts",
     "eval:session-prefix-cache": "ECHO_LOCAL_SESSION_PREFIX_CACHE_PROBE=1 vitest run src/runners/rapid-mlx/session-prefix-cache-probe.test.ts",
     "eval:rescore": "ECHO_EVAL_RESCORE_RESULT=1 vitest run src/qwen36-eat-readiness/rescore-result.test.ts",

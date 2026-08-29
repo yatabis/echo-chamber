@@ -18,6 +18,7 @@
     "test:run": "pnpm --filter @echo-chamber/core test:run && pnpm --filter @echo-chamber/contracts test:run && pnpm --filter @echo-chamber/openai-adapter test:run && pnpm --filter @echo-chamber/discord-adapter test:run && pnpm --filter @echo-chamber/cloudflare-runtime test:run && pnpm --filter @echo-chamber/cloudflare-workers test:run",
     "test:coverage": "pnpm --filter @echo-chamber/core test:coverage && pnpm --filter @echo-chamber/contracts test:coverage && pnpm --filter @echo-chamber/openai-adapter test:coverage && pnpm --filter @echo-chamber/discord-adapter test:coverage && pnpm --filter @echo-chamber/cloudflare-runtime test:coverage && pnpm --filter @echo-chamber/cloudflare-workers test:coverage",
     "eval": "pnpm --filter @echo-chamber/model-evaluation eval",
+    "eval:cognitive-hosted": "pnpm --filter @echo-chamber/model-evaluation eval:cognitive-hosted",
     "eval:check": "pnpm --filter @echo-chamber/model-evaluation eval:check",
     "eval:session-prefix-cache": "pnpm --filter @echo-chamber/model-evaluation eval:session-prefix-cache",
     "eval:rescore": "pnpm --filter @echo-chamber/model-evaluation eval:rescore",
