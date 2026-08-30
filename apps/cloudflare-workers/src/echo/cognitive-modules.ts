@@ -269,9 +269,9 @@ function formatInitialCognitiveModuleContext(
 
   return [
     {
-      role: 'developer',
+      role: 'user',
       content: [
-        '前回の思考セッション終了時に確定した状態です。',
+        '前回の思考セッション終了時の状態です。',
         JSON.stringify({
           memory: committed.previousSessionMemory,
           emotion: committed.emotion,

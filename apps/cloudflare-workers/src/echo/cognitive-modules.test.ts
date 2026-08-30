@@ -242,8 +242,11 @@ describe('createCognitiveModuleOrchestrator', () => {
       vi.mocked(emotionGenerate).mock.calls[0]?.[0],
       'initial Emotion request'
     );
-    expect(memoryRequest.input.slice(1)).toEqual(sharedContext);
-    expect(emotionRequest.input.slice(1)).toEqual(sharedContext);
+    const expectedSharedContext = [
+      { role: 'user' as const, content: '現在日時: 2026年08月24日' },
+    ];
+    expect(memoryRequest.input.slice(1)).toEqual(expectedSharedContext);
+    expect(emotionRequest.input.slice(1)).toEqual(expectedSharedContext);
     expect(memoryRequest.previousResponseToken).toBeUndefined();
     expect(emotionRequest.previousResponseToken).toBeUndefined();
     expect(memoryRequest.responseFormat?.name).toBe('cognitive_memory_recall');
@@ -322,9 +325,9 @@ describe('createCognitiveModuleOrchestrator', () => {
 
     const restoredSessionContext = [
       {
-        role: 'developer' as const,
+        role: 'user' as const,
         content: [
-          '前回の思考セッション終了時に確定した状態です。',
+          '前回の思考セッション終了時の状態です。',
           JSON.stringify({
             memory: previousSessionMemory,
             emotion: persistedEmotion,
@@ -344,8 +347,8 @@ describe('createCognitiveModuleOrchestrator', () => {
     expect(handoff).not.toContainEqual(restoredSessionContext[0]);
     for (const generate of generateFunctions) {
       expect(vi.mocked(generate).mock.calls[0]?.[0].input.slice(1)).toEqual([
-        ...sharedContext,
         ...restoredSessionContext,
+        { role: 'user', content: '現在日時: 2026年08月24日' },
       ]);
     }
   });
@@ -398,29 +401,13 @@ describe('createCognitiveModuleOrchestrator', () => {
     expect(memoryRequest.previousResponseToken).toBeUndefined();
     expect(emotionRequest.previousResponseToken).toBeUndefined();
     expect(memoryRequest.input.slice(1)).toEqual([
-      ...initialContext,
+      { role: 'user', content: '現在日時: 2026年08月24日' },
       ...preMainHandoff,
-      {
-        role: 'developer',
-        content: [
-          '<main_output turn="1">',
-          '次に続くassistant messageとtool callはMainの出力です。tool resultはその実行結果です。',
-          '</main_output>',
-        ].join('\n'),
-      },
       finishCall,
     ]);
     expect(emotionRequest.input.slice(1)).toEqual([
-      ...initialContext,
+      { role: 'user', content: '現在日時: 2026年08月24日' },
       ...preMainHandoff,
-      {
-        role: 'developer',
-        content: [
-          '<main_output turn="1">',
-          '次に続くassistant messageとtool callはMainの出力です。tool resultはその実行結果です。',
-          '</main_output>',
-        ].join('\n'),
-      },
       finishCall,
     ]);
     const committed = getRequired(

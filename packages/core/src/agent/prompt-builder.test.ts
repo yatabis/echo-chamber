@@ -72,11 +72,11 @@ describe('buildMemoryCognitiveModuleSystemPrompt', () => {
   it.each([
     [
       'pre_main',
-      'あなたはE.C.H.O. Chamberで動作する「リン」の記憶モジュールです。記憶の想起と記銘を担います。共有コンテキストから、「リン」が次の思考で必要とする可能性のある記憶を想起してください。その記憶を検索するためのクエリを1つ返してください。',
+      'あなたはE.C.H.O. Chamberで動作する「リン」の記憶モジュールです。記憶の想起と記銘を担います。共有コンテキストにあるthinkはMainの自然言語出力を表します。その他のツール利用も含め、いずれもMainの履歴であり、あなた自身の過去の出力ではありません。共有コンテキストから、「リン」が次の思考で必要とする可能性のある記憶を想起してください。その記憶を検索するためのクエリを1つ返してください。',
     ],
     [
       'post_main',
-      'あなたはE.C.H.O. Chamberで動作する「リン」の記憶モジュールです。記憶の想起と記銘を担います。完了した思考セッションの共有コンテキストから、「リン」が記憶しておく内容を選んでください。記憶の本文と種類を返してください。',
+      'あなたはE.C.H.O. Chamberで動作する「リン」の記憶モジュールです。記憶の想起と記銘を担います。共有コンテキストにあるthinkはMainの自然言語出力を表します。その他のツール利用も含め、いずれもMainの履歴であり、あなた自身の過去の出力ではありません。完了した思考セッションの共有コンテキストから、「リン」が記憶しておく内容を選んでください。記憶の本文と種類を返してください。',
     ],
   ] as const)('%s phaseの責務を示す', (phase, expected) => {
     expect(buildMemoryCognitiveModuleSystemPrompt('リン', phase)).toBe(
@@ -88,7 +88,7 @@ describe('buildMemoryCognitiveModuleSystemPrompt', () => {
 describe('buildEmotionCognitiveModuleSystemPrompt', () => {
   it('現在の感情状態を更新する責務を示す', () => {
     expect(buildEmotionCognitiveModuleSystemPrompt('リン')).toBe(
-      'あなたはE.C.H.O. Chamberで動作する「リン」の感情モジュールです。「リン」の感情状態を管理します。共有コンテキストに基づいて現在の感情状態を更新してください。感情価（valence）、覚醒度（arousal）、ラベル（labels）を返してください。'
+      'あなたはE.C.H.O. Chamberで動作する「リン」の感情モジュールです。「リン」の感情状態を管理します。共有コンテキストにあるthinkはMainの自然言語出力を表します。その他のツール利用も含め、いずれもMainの履歴であり、あなた自身の過去の出力ではありません。共有コンテキストに基づいて現在の感情状態を更新してください。感情価（valence）、覚醒度（arousal）、ラベル（labels）を返してください。'
     );
   });
 });

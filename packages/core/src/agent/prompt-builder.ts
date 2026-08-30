@@ -105,6 +105,9 @@ export function buildRuntimeContextPrompt(currentDatetime: Date): string {
   ].join('\n');
 }
 
+const COGNITIVE_SHARED_CONTEXT_INSTRUCTION =
+  '共有コンテキストにあるthinkはMainの自然言語出力を表します。その他のツール利用も含め、いずれもMainの履歴であり、あなた自身の過去の出力ではありません。';
+
 /**
  * Memory Cognitive Moduleが現在phaseで担う役割をsystem promptにする。
  */
@@ -112,7 +115,7 @@ export function buildMemoryCognitiveModuleSystemPrompt(
   instanceName: string,
   phase: CognitiveModulePhase
 ): string {
-  const identity = `あなたはE.C.H.O. Chamberで動作する「${instanceName}」の記憶モジュールです。記憶の想起と記銘を担います。`;
+  const identity = `あなたはE.C.H.O. Chamberで動作する「${instanceName}」の記憶モジュールです。記憶の想起と記銘を担います。${COGNITIVE_SHARED_CONTEXT_INSTRUCTION}`;
   return phase === 'pre_main'
     ? `${identity}共有コンテキストから、「${instanceName}」が次の思考で必要とする可能性のある記憶を想起してください。その記憶を検索するためのクエリを1つ返してください。`
     : `${identity}完了した思考セッションの共有コンテキストから、「${instanceName}」が記憶しておく内容を選んでください。記憶の本文と種類を返してください。`;
@@ -124,7 +127,7 @@ export function buildMemoryCognitiveModuleSystemPrompt(
 export function buildEmotionCognitiveModuleSystemPrompt(
   instanceName: string
 ): string {
-  return `あなたはE.C.H.O. Chamberで動作する「${instanceName}」の感情モジュールです。「${instanceName}」の感情状態を管理します。共有コンテキストに基づいて現在の感情状態を更新してください。感情価（valence）、覚醒度（arousal）、ラベル（labels）を返してください。`;
+  return `あなたはE.C.H.O. Chamberで動作する「${instanceName}」の感情モジュールです。「${instanceName}」の感情状態を管理します。${COGNITIVE_SHARED_CONTEXT_INSTRUCTION}共有コンテキストに基づいて現在の感情状態を更新してください。感情価（valence）、覚醒度（arousal）、ラベル（labels）を返してください。`;
 }
 
 /**

@@ -161,21 +161,23 @@ Mainへは前session終了時のMemoryとEmotionを直接渡しません。保�
 
 MemoryとEmotionは同じphaseで同一のimmutable snapshotを読みます。一方のmodel出力をもう一方へ渡すことはなく、両方の検証成功後にruntimeが結果をまとめてcommitします。
 
+Cognitive Moduleの各requestは、先頭にmodule専用の`developer` promptを1件置き、その後へ時系列のMain履歴を接続します。前sessionの状態と現在日時は`user` roleで渡します。Mainの自然言語出力は、`{ thought }`を入力とする`think` callと成功resultへ変換します。実際のtool call、tool result、画像入力は元のmodel input itemのまま共有します。`think`はCognitive共有contextだけの表現であり、実行可能なtoolとしては登録しません。
+
 ### Cognitive共有contextの増え方
 
 ```mermaid
 flowchart TD
-  start([思考session開始]) --> runtime[現在日時]
+  start([思考session開始]) --> restored[前session終了時のMemory / Emotionが<br/>存在すれば追加]
+  restored --> runtime[現在日時]
   runtime --> startup[check_notifications call / result]
-  startup --> restored[前session終了時のMemory / Emotionが<br/>存在すれば追加]
-  restored --> pre1[[最初のMemory / Emotion request]]
+  startup --> pre1[[最初のMemory / Emotion request]]
   pre1 --> handoff1[確定済みhandoffを履歴へ追加]
-  handoff1 --> main1[Main turn 1の出力を追加]
-  main1 --> result1[実tool resultと画像入力を追加]
+  handoff1 --> main1[Mainの自然言語出力を<br/>think call / resultへ変換]
+  main1 --> result1[実際のtool call / resultと<br/>画像入力を追加]
   result1 --> continue{Main sessionを継続する?}
   continue -->|Yes| preNext[[次のMemory / Emotion request]]
   preNext --> handoffNext[新しい確定済みhandoffを追加]
-  handoffNext --> mainNext[次のMain出力とtool resultを追加]
+  handoffNext --> mainNext[次のMain出力とtool履歴を追加]
   mainNext --> continue
   continue -->|No| post[[終了時Memory / Emotion request]]
   post --> finish([Memory保存とEmotion更新をcommit])
@@ -183,11 +185,11 @@ flowchart TD
 
 Cognitive共有contextに入るもの:
 
-- 思考session開始時の現在日時
+- 前sessionの`post_main`で確定したMemory 1件とEmotion。保持されている場合だけ初期状態として追加する
+- 思考session開始時の現在日時を表す`<runtime_context>`観測
 - startup `check_notifications`の擬似tool callとsanitise済みresult
-- 前sessionの`post_main`で確定したMemory 1件とEmotion。保持されている場合だけ追加し、Cognitive Moduleだけが読む
 - それ以前の`pre_main`で確定し、Mainへ渡したsystem-owned tool exchange
-- 各Main turnのassistant出力、tool call、sanitise済みtool result
+- 各Main turnの自然言語出力を表す`think` call / result、実際のtool call、sanitise済みtool result
 - `read_chat_messages`が返した画像のうち、上限内でvision inputへ変換したもの
 
 Cognitive共有contextに入らないもの:

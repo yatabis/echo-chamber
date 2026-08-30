@@ -132,15 +132,25 @@ function moduleResult<T>(
   };
 }
 
-function mainOutputMarker(turnIndex: number): ModelInputItem {
-  return {
-    role: 'developer',
-    content: [
-      `<main_output turn="${turnIndex}">`,
-      '次に続くassistant messageとtool callはMainの出力です。tool resultはその実行結果です。',
-      '</main_output>',
-    ].join('\n'),
-  };
+function mainThinkExchange(
+  turnIndex: number,
+  outputIndex: number,
+  thought: string
+): ModelInputItem[] {
+  const callId = `cognitive:main:${turnIndex}:think:${outputIndex}`;
+  return [
+    {
+      type: 'tool_call',
+      callId,
+      toolName: 'think',
+      input: JSON.stringify({ thought }),
+    },
+    {
+      type: 'tool_result',
+      callId,
+      output: '{"success":true}',
+    },
+  ];
 }
 
 function boundary(
@@ -280,9 +290,9 @@ describe('ParallelCognitiveModuleOrchestrator', () => {
     });
     const restoredSessionContext: ModelInputItem[] = [
       {
-        role: 'developer',
+        role: 'user',
         content: [
-          '前回の思考セッション終了時に確定した状態です。',
+          '前回の思考セッション終了時の状態です。',
           JSON.stringify({
             memory: previousSessionMemory,
             emotion: persistedEmotion,
@@ -308,14 +318,14 @@ describe('ParallelCognitiveModuleOrchestrator', () => {
 
     await expect(activation.beforeMain(initialInput)).resolves.toEqual([]);
 
-    const expectedContext = [...initialInput, ...restoredSessionContext];
+    const expectedContext = [...restoredSessionContext, ...initialInput];
     expect(memoryRun.mock.calls[0]?.[1].sharedContext).toEqual(expectedContext);
     expect(emotionRun.mock.calls[0]?.[1].sharedContext).toEqual(
       expectedContext
     );
   });
 
-  it('Main出力を明示し、module生出力ではなく確定済みhandoffを次phaseへ渡す', async () => {
+  it('Mainの自然言語をthinkへ変換し、実tool履歴と確定済みhandoffを次phaseへ渡す', async () => {
     const memoryRun = vi
       .fn<MemoryRun>()
       .mockResolvedValueOnce(moduleResult(recallOutput('memory-1')))
@@ -391,8 +401,7 @@ describe('ParallelCognitiveModuleOrchestrator', () => {
         callId: 'activation-1:1:pre_main',
         output: '{"success":true}',
       },
-      mainOutputMarker(1),
-      { type: 'message', role: 'assistant', content: 'still thinking' },
+      ...mainThinkExchange(1, 1, 'still thinking'),
     ]);
     expect(memoryRun.mock.calls[1]?.[1].sharedContext).toBe(
       emotionRun.mock.calls[1]?.[1].sharedContext
@@ -410,8 +419,7 @@ describe('ParallelCognitiveModuleOrchestrator', () => {
         callId: 'activation-1:1:pre_main',
         output: '{"success":true}',
       },
-      mainOutputMarker(1),
-      { type: 'message', role: 'assistant', content: 'still thinking' },
+      ...mainThinkExchange(1, 1, 'still thinking'),
       {
         type: 'tool_call',
         callId: 'activation-1:2:pre_main',
@@ -423,7 +431,6 @@ describe('ParallelCognitiveModuleOrchestrator', () => {
         callId: 'activation-1:2:pre_main',
         output: '{"success":true}',
       },
-      mainOutputMarker(2),
       {
         type: 'tool_call',
         callId: 'call-1',
@@ -436,6 +443,56 @@ describe('ParallelCognitiveModuleOrchestrator', () => {
         output: '{"success":true}',
       },
     ]);
+  });
+
+  it('Main turnの出力・tool result・画像をnativeな履歴として保持する', async () => {
+    const memoryRun = vi
+      .fn<MemoryRun>()
+      .mockResolvedValue(moduleResult(recallOutput()));
+    const emotionRun = vi
+      .fn<EmotionRun>()
+      .mockResolvedValue(moduleResult(emotionOutput()));
+    const activation = createOrchestrator({
+      memoryRun,
+      emotionRun,
+    }).beginActivation();
+    const toolCall = {
+      type: 'tool_call' as const,
+      callId: 'read-1',
+      toolName: 'read_chat_messages',
+      input: '{"channelKey":"general","limit":10}',
+    };
+    const toolResult = {
+      type: 'tool_result' as const,
+      callId: 'read-1',
+      output: '{"success":true}',
+    };
+    const imageContext = [
+      { type: 'text' as const, text: 'チャットに添付された画像です。' },
+      {
+        type: 'image' as const,
+        imageUrl: 'https://example.com/image.png',
+        detail: 'auto' as const,
+      },
+    ];
+
+    await activation.beforeMain([]);
+    await activation.onMainTurnBoundary({
+      turnIndex: 1,
+      responseOutput: [toolCall],
+      toolCalls: [toolCall],
+      resolvedInput: [toolResult, { role: 'user', content: imageContext }],
+      terminationReason: null,
+    });
+
+    expect(memoryRun.mock.calls[1]?.[1].sharedContext).toEqual([
+      toolCall,
+      toolResult,
+      { role: 'user', content: imageContext },
+    ]);
+    expect(emotionRun.mock.calls[1]?.[1].sharedContext).toEqual(
+      memoryRun.mock.calls[1]?.[1].sharedContext
+    );
   });
 
   it('post_mainではstore入力とEmotionを一度確定しMain handoffを返さない', async () => {
@@ -464,7 +521,6 @@ describe('ParallelCognitiveModuleOrchestrator', () => {
     });
     expect(memoryRun.mock.calls[1]?.[1].sharedContext).toEqual([
       { role: 'developer', content: 'initial' },
-      mainOutputMarker(1),
       {
         type: 'tool_call',
         callId: 'call-1',

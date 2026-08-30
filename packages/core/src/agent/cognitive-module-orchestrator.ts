@@ -3,6 +3,7 @@ import { getErrorMessage } from '../utils/error';
 import {
   ZERO_MODEL_USAGE,
   accumulateModelUsage,
+  type AgentSessionTurnBoundary,
   type AgentSessionTurnBoundaryHandler,
 } from './session';
 
@@ -255,16 +256,41 @@ type ModuleExecutionResult<T> =
   | ModuleReadyExecutionResult<T>
   | ModuleFailedExecutionResult;
 
-/** Cognitive Moduleの共有contextで直後のMain turnを識別する。 */
-function createMainOutputContextMarker(turnIndex: number): ModelInputItem {
-  return {
-    role: 'developer',
-    content: [
-      `<main_output turn="${turnIndex}">`,
-      '次に続くassistant messageとtool callはMainの出力です。tool resultはその実行結果です。',
-      '</main_output>',
-    ].join('\n'),
-  };
+const MAIN_THINK_TOOL_NAME = 'think';
+const MAIN_THINK_SUCCESS_OUTPUT = '{"success":true}';
+
+/**
+ * Mainの自然言語出力を、Cognitive共有履歴だけで使うthink exchangeへ変換する。
+ * 実際のtool callはproviderが生成した形を保ち、出力順も変更しない。
+ */
+function formatMainOutputForCognitiveContext(
+  boundary: AgentSessionTurnBoundary
+): ModelInputItem[] {
+  const context: ModelInputItem[] = [];
+
+  boundary.responseOutput.forEach((item, index) => {
+    if (item.type !== 'message') {
+      context.push(item);
+      return;
+    }
+
+    const callId = `cognitive:main:${boundary.turnIndex}:think:${index + 1}`;
+    context.push(
+      {
+        type: 'tool_call',
+        callId,
+        toolName: MAIN_THINK_TOOL_NAME,
+        input: JSON.stringify({ thought: item.content }),
+      },
+      {
+        type: 'tool_result',
+        callId,
+        output: MAIN_THINK_SUCCESS_OUTPUT,
+      }
+    );
+  });
+
+  return context;
 }
 
 /** Provider後validation errorから失敗metadataを作る。 */
@@ -361,7 +387,7 @@ class ParallelCognitiveModuleActivation implements CognitiveModuleActivation {
     const initialContext = await this.options.formatInitialContext(
       this.committed
     );
-    this.sharedContext.push(...sharedInitialContext, ...initialContext);
+    this.sharedContext.push(...initialContext, ...sharedInitialContext);
 
     return await this.runPhase('pre_main');
   }
@@ -379,8 +405,7 @@ class ParallelCognitiveModuleActivation implements CognitiveModuleActivation {
     const phase =
       boundary.terminationReason === null ? 'pre_main' : 'post_main';
     this.sharedContext.push(
-      createMainOutputContextMarker(boundary.turnIndex),
-      ...boundary.responseOutput,
+      ...formatMainOutputForCognitiveContext(boundary),
       ...boundary.resolvedInput
     );
     const handoff = await this.runPhase(phase);

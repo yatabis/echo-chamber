@@ -71,7 +71,7 @@ function createMemoryRunner(
 }
 
 describe('ModelCognitiveModuleRunner', () => {
-  it('専用system promptを共有contextの先頭へ1件だけ置く', async () => {
+  it('専用system promptだけをdeveloper roleにして共有contextを観測として渡す', async () => {
     const usage = createUsage(12);
     const generate = vi.fn<ModelPort['generate']>().mockResolvedValue({
       output: [
@@ -106,7 +106,13 @@ describe('ModelCognitiveModuleRunner', () => {
           content:
             'あなたは記憶モジュールです。次のメインターンに役立つ記憶を想起してください。',
         },
-        ...sharedContext,
+        { role: 'user', content: '現在日時: 2026年08月24日' },
+        { role: 'user', content: '現在の会話' },
+        {
+          type: 'tool_result',
+          callId: 'check_notifications',
+          output: '{"success":true}',
+        },
       ],
       tools: [],
       turnIndex: 1,
@@ -155,7 +161,18 @@ describe('ModelCognitiveModuleRunner', () => {
           content:
             'あなたは記憶モジュールです。完了した思考セッションから記憶を記銘してください。',
         },
-        ...sharedContext,
+        { role: 'user', content: '現在日時: 2026年08月24日' },
+        {
+          type: 'tool_call',
+          callId: 'finish-1',
+          toolName: 'finish_thinking',
+          input: '{"reason":"done"}',
+        },
+        {
+          type: 'tool_result',
+          callId: 'finish-1',
+          output: '{"success":true}',
+        },
       ],
       tools: [],
       turnIndex: 2,

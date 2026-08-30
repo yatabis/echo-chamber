@@ -16,6 +16,14 @@ import type {
 
 const DEFAULT_MAX_OUTPUT_TOKENS = 2048;
 
+/** 共有context内のdeveloper messageをmoduleへの観測へ変換する。 */
+function toCognitiveModuleObservation(item: ModelInputItem): ModelInputItem {
+  if ('role' in item && item.role === 'developer') {
+    return { ...item, role: 'user' };
+  }
+  return item;
+}
+
 /** 1 phaseで使用するstructured output contract。 */
 export interface ModelCognitiveModuleOutputContract<TOutput> {
   format: ModelStructuredOutputFormat;
@@ -148,7 +156,7 @@ export class ModelCognitiveModuleRunner<TOutput>
         role: 'developer',
         content: systemPrompt,
       },
-      ...context.sharedContext,
+      ...context.sharedContext.map(toCognitiveModuleObservation),
     ];
   }
 }
