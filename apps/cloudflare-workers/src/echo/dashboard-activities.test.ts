@@ -22,6 +22,36 @@ function createEvent(
 }
 
 describe('buildDashboardSessionLogsResponse', () => {
+  it('session 完了時に commit 済み Cognitive phase 数を返す', () => {
+    const response = buildDashboardSessionLogsResponse({
+      archiveDay: '2026-06-01',
+      events: [
+        createEvent({
+          id: 'session-completed',
+          type: 'session.completed',
+          category: 'session',
+          payload: {
+            committedCognitivePhases: 4,
+            nextWakeAt: null,
+            terminationReason: 'finish_thinking',
+            totalTokens: 120,
+          },
+          streams: ['thought', 'system', 'analysis'],
+        }),
+      ],
+    });
+
+    expect(response.sessionLogs[0]?.activities[0]).toMatchObject({
+      id: 'session-completed',
+      details: {
+        committedCognitivePhases: 4,
+        terminationReason: 'finish_thinking',
+        totalTokens: 120,
+      },
+      title: 'Finished thinking',
+    });
+  });
+
   it('tool called / completed を dashboard 上の 1 activity に畳む', () => {
     const response = buildDashboardSessionLogsResponse({
       archiveDay: '2026-06-01',

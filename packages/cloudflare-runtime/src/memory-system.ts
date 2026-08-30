@@ -721,6 +721,7 @@ export class MemorySystem {
           currentModel,
           row.id
         );
+        this.searchableMemoryRows = null;
       } catch (error) {
         if (isExternalRequestBudgetError(error)) {
           throw error;
@@ -739,8 +740,6 @@ export class MemorySystem {
         });
       }
     }
-    this.searchableMemoryRows = null;
-
     await emitEchoEvent(this.events, {
       type: 'memory.reembedding.completed',
       severity: failedCount > 0 ? 'warn' : 'info',

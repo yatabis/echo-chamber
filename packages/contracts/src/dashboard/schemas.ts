@@ -6,6 +6,13 @@ import { ECHO_INSTANCE_IDS } from '@echo-chamber/core/types/echo-config';
 
 const finiteNumber = z.number();
 
+/** 現行出力制約の導入前に保存された Emotion を読むためのschema。 */
+const persistedEmotionSchema = coreEmotionSchema
+  .extend({
+    labels: z.array(z.string()),
+  })
+  .strict();
+
 /**
  * Echo 本体の state 文字列。
  */
@@ -290,7 +297,7 @@ export const echoMemorySchema = z
   .object({
     content: z.string(),
     type: z.enum(MEMORY_TYPES),
-    emotion: coreEmotionSchema.strict(),
+    emotion: persistedEmotionSchema,
     embedding_model: z.string(),
     createdAt: z.string(),
     updatedAt: z.string(),
@@ -301,7 +308,7 @@ export const echoMemorySchema = z
 export const dashboardContextSnapshotSchema = z
   .object({
     content: z.string(),
-    emotion: coreEmotionSchema.strict(),
+    emotion: persistedEmotionSchema,
     createdAt: z.string(),
     updatedAt: z.string(),
   })

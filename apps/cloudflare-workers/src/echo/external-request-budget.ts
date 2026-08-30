@@ -1,6 +1,9 @@
 /** Cloudflare platform 上限へ達する前に application が停止する既定値。 */
 export const DEFAULT_EXTERNAL_REQUEST_BUDGET = 40;
 
+/** application request と分離した Discord event 通知の既定上限。 */
+export const DEFAULT_NOTIFICATION_REQUEST_BUDGET = 10;
+
 /** 外部 request 予算の読み取り専用 snapshot。 */
 export interface ExternalRequestBudgetSnapshot {
   limit: number;

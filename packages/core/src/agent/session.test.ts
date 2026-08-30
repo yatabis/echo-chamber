@@ -1092,6 +1092,75 @@ describe('runAgentSession', () => {
     });
   });
 
+  it('入力が有効でも finish_thinking の実行に失敗した場合は継続する', async () => {
+    const generate = vi
+      .fn<ModelPort['generate']>()
+      .mockResolvedValueOnce({
+        output: [
+          {
+            type: 'tool_call',
+            callId: 'call-finish-failed',
+            toolName: 'finish_thinking',
+            input: createFinishThinkingInput('not ready'),
+          },
+        ],
+        usage: createUsage({ totalTokens: 10 }),
+        responseToken: 'resp-1',
+      })
+      .mockResolvedValueOnce({
+        output: [
+          {
+            type: 'tool_call',
+            callId: 'call-finish-succeeded',
+            toolName: 'finish_thinking',
+            input: createFinishThinkingInput('done for real'),
+          },
+        ],
+        usage: createUsage({ totalTokens: 5 }),
+        responseToken: 'resp-2',
+      });
+    const executeFinish = vi
+      .fn()
+      .mockResolvedValueOnce('{"success":false,"error":"completion rejected"}')
+      .mockResolvedValueOnce('{"success":true}');
+
+    const result = await runAgentSession({
+      model: { generate },
+      tools: [
+        {
+          name: 'finish_thinking',
+          contract: createToolContract('finish_thinking'),
+          execute: executeFinish,
+        },
+      ],
+      initialInput: [
+        {
+          role: 'developer',
+          content: 'test',
+        },
+      ],
+    });
+
+    expect(generate).toHaveBeenNthCalledWith(2, {
+      input: [
+        {
+          type: 'tool_result',
+          callId: 'call-finish-failed',
+          output: '{"success":false,"error":"completion rejected"}',
+        },
+      ],
+      tools: [createToolContract('finish_thinking')],
+      previousResponseToken: 'resp-1',
+      turnIndex: 2,
+    });
+    expect(result).toEqual({
+      nextWakeAt: null,
+      usage: createUsage({ totalTokens: 15 }),
+      responseToken: 'resp-2',
+      terminationReason: 'finish_thinking',
+    });
+  });
+
   it('boundary failure でも課金済み Main usage と response token を保持する', async () => {
     const boundaryFailure = new Error('cognitive boundary failed');
     const generate = vi.fn<ModelPort['generate']>().mockResolvedValue({

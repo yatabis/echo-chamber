@@ -389,7 +389,10 @@ function createSessionCompletedActivity(
       .join(' '),
     createdAt: event.createdAt,
     details: compactDetails({
-      hasContext: getPayloadBoolean(payload, 'hasContext'),
+      committedCognitivePhases: getPayloadNumber(
+        payload,
+        'committedCognitivePhases'
+      ),
       nextWakeAt,
       terminationReason,
       totalTokens,

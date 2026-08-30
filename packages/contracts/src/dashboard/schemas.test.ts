@@ -299,7 +299,7 @@ describe('dashboard contract schemas', () => {
         emotion: {
           valence: 0.3,
           arousal: 0.4,
-          labels: ['focused'],
+          labels: ['intellectual-engagement'],
         },
         createdAt: '2026-03-19T11:00:00.000Z',
         updatedAt: '2026-03-19T12:00:00.000Z',
@@ -327,7 +327,7 @@ describe('dashboard contract schemas', () => {
           emotion: {
             valence: 0.4,
             arousal: 0.2,
-            labels: ['focus'],
+            labels: ['focus', 'curious', 'engaged', 'calm', 'alert', 'steady'],
           },
           embedding_model: 'text-embedding-3-small',
           createdAt: '2026-03-19T12:00:00.000Z',
@@ -374,6 +374,10 @@ describe('dashboard contract schemas', () => {
     expect(payload.context?.content).toBe(
       'Continue from the latest dashboard work.'
     );
+    expect(payload.context?.emotion.labels).toEqual([
+      'intellectual-engagement',
+    ]);
+    expect(payload.memories[0]?.emotion.labels).toHaveLength(6);
     expect(payload.cognitive.domainVersion).toBe(3);
   });
 

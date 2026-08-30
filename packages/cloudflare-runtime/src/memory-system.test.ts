@@ -1220,5 +1220,39 @@ describe('MemorySystem', () => {
       );
       expect(mockEmbeddingService.embed).toHaveBeenCalledTimes(1); // eslint-disable-line @typescript-eslint/unbound-method
     });
+
+    it('途中で external request budget が枯渇しても成功済みの再 embedding を直後の検索に反映する', async () => {
+      const budgetError = Object.assign(new Error('budget exhausted'), {
+        code: 'external_request_budget_exceeded',
+      });
+      const embedding = new Array<number>(1536).fill(0.5);
+      mockSql._tables.memories = [
+        createMockMemoryRow({
+          content: 'Memory A',
+          embedding_model: 'openai/text-embedding-3-small',
+          updated_at: '2025-01-25T10:00:00.000Z',
+        }),
+        createMockMemoryRow({
+          content: 'Memory B',
+          embedding_model: 'openai/text-embedding-3-small',
+          updated_at: '2025-01-25T11:00:00.000Z',
+        }),
+      ];
+
+      expect(await memorySystem.searchMemory('before re-embedding')).toEqual(
+        []
+      );
+      vi.mocked(mockEmbeddingService.embed) // eslint-disable-line @typescript-eslint/unbound-method
+        .mockResolvedValueOnce(embedding)
+        .mockRejectedValueOnce(budgetError)
+        .mockResolvedValueOnce(embedding);
+
+      await expect(memorySystem.reEmbedStaleMemories()).rejects.toBe(
+        budgetError
+      );
+      const results = await memorySystem.searchMemory('Memory A');
+
+      expect(results.map((result) => result.content)).toEqual(['Memory A']);
+    });
   });
 });

@@ -206,7 +206,7 @@ Cognitive phaseのmodel callとstorage操作は、各thinking sessionのrun budg
 
 任意toolを1回使う場合、`search_memory`はquery embedding 1回、候補があればrerank 1回、embedding BLOBを含む最大500 rowsのreadを追加し得る。`store_memory`はembedding 1回とMemory rowのinsert / eviction、関連event writeを追加し得る。OpenAI embeddingを使用する構成ではembedding requestも40件のexternal request hard gateを共有する。既定構成のembeddingとrerankはWorkers AI bindingを使うため、この外部request gateには含めない。
 
-外部requestは送信直前に1件ずつ数える。40件を使い切った場合は追加requestを送らず、現在のsessionを失敗させる。session lifecycleと失敗通知のDiscord eventはこのapplication gateに含めず、Cloudflare上限50件までの残り10件を退避枠として使う。これにより、通常処理の上限到達が失敗ログやusage保存を妨げないようにする。
+外部requestは送信直前に1件ずつ数える。40件を使い切った場合は追加requestを送らず、現在のsessionを失敗させる。session lifecycleと失敗通知のDiscord eventはこのapplication gateに含めず、別の通知用gateで最大10件に制限する。これにより、Cloudflare上限50件の範囲で通知枠を保ち、通常処理の上限到達が失敗ログやusage保存を妨げないようにする。
 
 既定のWorkers AI embedding構成でも、run判定と起動時通知確認でDiscord APIを約12件使う。`T = 10`かつretry・任意toolなしの場合はMain 10件、Cognitive 22件と合わせて約44件になるため、現行hard gateのまま10 turn完走は保証しない。`T = 8`なら同条件で約38件となる。OpenAI embedding構成では、さらに各recallと終了時保存のembedding requestが加わる。
 

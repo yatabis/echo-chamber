@@ -28,6 +28,7 @@ import type { ModelUsage } from '@echo-chamber/core/ports/model';
 import { resolveEchoRuntimeBindings } from '../config/echo-runtime-bindings';
 import { createEmbeddingService } from '../embedding/create-embedding-service';
 import { createRerankingService } from '../reranking/create-reranking-service';
+import { createCloudflareEchoEventPort } from '../utils/echo-event';
 
 import { createToolExecutionContext } from './tool-context';
 
@@ -344,6 +345,53 @@ async function resolveRunDecision(echo: Echo): Promise<{
     }
   ).resolveRunDecision();
 }
+
+describe('Echo external request budgets', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('application budget を使い切っても Discord event 通知用の10件を別枠で保つ', async () => {
+    const env = createMockEnv();
+    const { storage } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+    const beginExternalRequestBudget = (
+      echo as unknown as {
+        beginExternalRequestBudget(): boolean;
+      }
+    ).beginExternalRequestBudget.bind(echo);
+    const reserveExternalRequest = (
+      echo as unknown as {
+        reserveExternalRequest(): void;
+      }
+    ).reserveExternalRequest.bind(echo);
+
+    expect(beginExternalRequestBudget()).toBe(true);
+    for (let index = 0; index < 40; index += 1) {
+      reserveExternalRequest();
+    }
+
+    const eventPortOptions = vi.mocked(createCloudflareEchoEventPort).mock
+      .calls[0]?.[0];
+    if (eventPortOptions?.beforeRequest === undefined) {
+      throw new Error('Expected Discord event request admission hook');
+    }
+    const beforeNotificationRequest = async (): Promise<void> => {
+      await eventPortOptions.beforeRequest?.();
+    };
+    await Promise.all(
+      Array.from({ length: 10 }, async () => {
+        await beforeNotificationRequest();
+      })
+    );
+
+    await expect(
+      Promise.resolve().then(async () => {
+        await beforeNotificationRequest();
+      })
+    ).rejects.toThrow('External request budget exceeded');
+  });
+});
 
 describe('Echo.ensureInitialized', () => {
   beforeEach(() => {

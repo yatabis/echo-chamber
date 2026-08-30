@@ -23,6 +23,7 @@ import type {
   ModelResponse,
   ModelToolCall,
   ModelToolContract,
+  ModelToolResult,
   ModelUsage,
 } from '../ports/model';
 
@@ -583,17 +584,32 @@ function getToolCalls(response: ModelResponse): ModelToolCall[] {
 }
 
 /**
- * `finish_thinking` 呼び出し列から、有効な入力 payload を抜き出す。
- * tool 名だけでは終了扱いにせず、schema に合致した入力を持つ場合だけ完了とみなす。
+ * `finish_thinking` 呼び出し列から、実行に成功した有効な入力 payload を抜き出す。
+ * tool 名だけでは終了扱いにせず、schema に合致した入力と成功結果の両方がある場合だけ完了とみなす。
  *
  * @param toolCalls 現在ターンでモデルが返した tool call 一覧
- * @returns 正常終了に使える finish_thinking 入力。見つからない、または不正なら `null`
+ * @param resolvedInput tool 実行後の model-visible input
+ * @returns 正常終了に使える finish_thinking 入力。見つからない、不正、または実行失敗なら `null`
  */
 function parseFinishThinkingInput(
-  toolCalls: readonly ModelToolCall[]
+  toolCalls: readonly ModelToolCall[],
+  resolvedInput: readonly ModelInputItem[]
 ): FinishThinkingInput | null {
   for (const toolCall of toolCalls) {
     if (toolCall.toolName !== 'finish_thinking') {
+      continue;
+    }
+
+    const toolResult = resolvedInput.find(
+      (item): item is ModelToolResult =>
+        'type' in item &&
+        item.type === 'tool_result' &&
+        item.callId === toolCall.callId
+    );
+    if (
+      toolResult === undefined ||
+      parseToolOutput(toolResult.output).success !== true
+    ) {
       continue;
     }
 
@@ -955,8 +971,6 @@ export async function runAgentSession(
       // The loop stays alive until finish_thinking appears explicitly,
       // even when the model returned no tool calls in this turn.
 
-      const finishThinking = parseFinishThinkingInput(toolCalls);
-
       // Tool results, or an empty carry-over when no tools were used, become
       // the resolved boundary before higher-level orchestration may add input.
       // eslint-disable-next-line no-await-in-loop
@@ -966,6 +980,7 @@ export async function runAgentSession(
         input.events,
         turn
       );
+      const finishThinking = parseFinishThinkingInput(toolCalls, resolvedInput);
       const terminationReason = getSessionTerminationReason(
         finishThinking,
         turn,

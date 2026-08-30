@@ -95,6 +95,7 @@ import {
 import { buildDashboardSessionLogsResponse } from './dashboard-activities';
 import { SqliteEchoEventArchive, getEventArchiveDay } from './event-archive';
 import {
+  DEFAULT_NOTIFICATION_REQUEST_BUDGET,
   ExternalRequestBudget,
   type ExternalRequestBudgetSnapshot,
 } from './external-request-budget';
@@ -194,6 +195,7 @@ export class Echo extends DurableObject<Env> {
   private readonly noteSystem: NoteSystem;
   private currentSessionId: string | null = null;
   private activeExternalRequestBudget: ExternalRequestBudget | null = null;
+  private activeNotificationRequestBudget: ExternalRequestBudget | null = null;
   private dashboardActionAnalysisCache: DashboardReadCacheEntry<DashboardActionAnalysisResponse> | null =
     null;
   private dashboardSessionLogsCache: DashboardReadCacheEntry<DashboardSessionLogsResponse> | null =
@@ -237,6 +239,9 @@ export class Echo extends DurableObject<Env> {
       getInstanceId: (): string | null => this.instanceDefinition?.id ?? null,
       getSessionId: (): string | null => this.currentSessionId,
       eventArchive: this.eventArchive,
+      beforeRequest: (): void => {
+        this.reserveNotificationRequest();
+      },
       getDiscordConfig: (): { token: string; channelId: string } | null => {
         if (this.runtimeBindings === null) {
           return null;
@@ -302,6 +307,9 @@ export class Echo extends DurableObject<Env> {
       return false;
     }
     this.activeExternalRequestBudget = new ExternalRequestBudget();
+    this.activeNotificationRequestBudget = new ExternalRequestBudget(
+      DEFAULT_NOTIFICATION_REQUEST_BUDGET
+    );
     return true;
   }
 
@@ -309,12 +317,18 @@ export class Echo extends DurableObject<Env> {
   private endExternalRequestBudget(ownsBudget: boolean): void {
     if (ownsBudget) {
       this.activeExternalRequestBudget = null;
+      this.activeNotificationRequestBudget = null;
     }
   }
 
   /** provider の実 request 直前に active invocation の予算を消費する。 */
   private reserveExternalRequest(): void {
     this.activeExternalRequestBudget?.reserve();
+  }
+
+  /** Discord event 通知のために分離した予約枠を消費する。 */
+  private reserveNotificationRequest(): void {
+    this.activeNotificationRequestBudget?.reserve();
   }
 
   /** active invocation の外部 request 使用量を event 用に複製する。 */
