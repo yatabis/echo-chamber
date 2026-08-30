@@ -72,6 +72,7 @@ function createDomain(
   initialState: CognitiveModuleCommittedState = {
     version: 0,
     emotion: null,
+    previousSessionMemory: null,
     recalledMemories: [],
   }
 ): MockCognitiveModuleDomain {
@@ -86,6 +87,7 @@ function createDomain(
         state = {
           version: state.version + 1,
           emotion: emotion.value,
+          previousSessionMemory: state.previousSessionMemory,
           recalledMemories:
             phase.phase === 'pre_main'
               ? [
@@ -287,11 +289,17 @@ describe('createCognitiveModuleOrchestrator', () => {
     ).toBe(true);
   });
 
-  it('保存済みEmotionをmoduleだけの初期状態として復元する', async () => {
+  it('前sessionのMemoryとEmotionをmoduleだけの初期状態として復元する', async () => {
     const persistedEmotion = {
       valence: -0.2,
       arousal: 0.3,
       labels: ['resting'],
+    };
+    const previousSessionMemory = {
+      content: '前回はCognitive Moduleの責務を整理した。',
+      type: 'episode' as const,
+      emotion: persistedEmotion,
+      createdAt: '2026-08-23T00:00:00.000Z',
     };
     const { createModel, generateFunctions } = createModelFactory();
     const activation = createCognitiveModuleOrchestrator({
@@ -300,6 +308,7 @@ describe('createCognitiveModuleOrchestrator', () => {
       domain: createDomain({
         version: 3,
         emotion: persistedEmotion,
+        previousSessionMemory,
         recalledMemories: [],
       }),
       createActivationId: () => 'rin:activation-restored',
@@ -311,12 +320,15 @@ describe('createCognitiveModuleOrchestrator', () => {
 
     const handoff = await activation.beforeMain(sharedContext);
 
-    const restoredEmotionContext = [
+    const restoredSessionContext = [
       {
         role: 'developer' as const,
         content: [
-          '現在の感情状態です。前回の思考セッション終了時に確定しました。',
-          JSON.stringify(persistedEmotion),
+          '前回の思考セッション終了時に確定した状態です。',
+          JSON.stringify({
+            memory: previousSessionMemory,
+            emotion: persistedEmotion,
+          }),
         ].join('\n'),
       },
     ];
@@ -329,11 +341,11 @@ describe('createCognitiveModuleOrchestrator', () => {
           item.toolName === 'update_emotion'
       )
     ).toHaveLength(1);
-    expect(handoff).not.toContainEqual(restoredEmotionContext[0]);
+    expect(handoff).not.toContainEqual(restoredSessionContext[0]);
     for (const generate of generateFunctions) {
       expect(vi.mocked(generate).mock.calls[0]?.[0].input.slice(1)).toEqual([
         ...sharedContext,
-        ...restoredEmotionContext,
+        ...restoredSessionContext,
       ]);
     }
   });

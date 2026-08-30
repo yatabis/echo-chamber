@@ -9,6 +9,7 @@ import type {
   CognitiveModuleOutcome,
   CognitiveModulePhaseInput,
   CognitiveModulePhaseResult,
+  CognitiveModulePreviousSessionMemory,
   CognitiveModuleRecalledMemory,
 } from '@echo-chamber/core/agent/cognitive-module-orchestrator';
 import type {
@@ -35,19 +36,24 @@ const MAX_RECALLED_MEMORIES = 5;
 interface StoredDomainState {
   version: number;
   emotion: EmotionCognitiveModuleOutput | null;
+  previousSessionMemory?: CognitiveModulePreviousSessionMemory | null;
   recalledMemories?: readonly CognitiveModuleRecalledMemory[];
   lastBoundaryId: string | null;
   updatedAt: string;
 }
 
 interface PreparedPhaseOperation {
+  previousSessionMemory: CognitiveModulePreviousSessionMemory | null;
   recalledMemories: readonly CognitiveModuleRecalledMemory[];
   memoryWrites: readonly PreparedMemoryWrite[];
 }
 
-/** DashboardがCognitive Moduleの確定済み状態だけを表示するread model。 */
+/** Dashboardが表示する確定済みCognitive Domain state。 */
 export interface CognitiveModuleDashboardState {
   domainVersion: number;
+  emotion: EmotionCognitiveModuleOutput | null;
+  previousSessionMemory: CognitiveModulePreviousSessionMemory | null;
+  recalledMemories: readonly CognitiveModuleRecalledMemory[];
   lastBoundaryId: string | null;
   updatedAt: string | null;
 }
@@ -60,6 +66,7 @@ export interface CognitiveModuleDomainStoreOptions {
   now?(): Date;
   isRetryable?(error: unknown): boolean;
   maxAttempts?: number;
+  onStateChanged?(): void;
 }
 
 /**
@@ -79,7 +86,7 @@ export class CognitiveModuleDomainStore implements CognitiveModuleDomainPort {
     }
   }
 
-  /** 保存済みEmotionを読み、新しいsessionでは検索結果を空にする。 */
+  /** 前sessionのMemoryとEmotionを読み、新しいsessionでは検索結果を空にする。 */
   async beginActivation(
     _activationId: string
   ): Promise<CognitiveModuleCommittedState> {
@@ -128,6 +135,7 @@ export class CognitiveModuleDomainStore implements CognitiveModuleDomainPort {
     const nextStored: StoredDomainState = {
       version: storedVersion + 1,
       emotion: input.emotion.value,
+      previousSessionMemory: operation.previousSessionMemory,
       recalledMemories: operation.recalledMemories,
       lastBoundaryId: input.phase.boundaryId,
       updatedAt: now,
@@ -158,6 +166,7 @@ export class CognitiveModuleDomainStore implements CognitiveModuleDomainPort {
         return receipt;
       }
     );
+    this.options.onStateChanged?.();
 
     if (operation.memoryWrites.length > 0) {
       await this.options.memory.emitMemoryCommitEvents(memoryReceipt);
@@ -195,15 +204,11 @@ export class CognitiveModuleDomainStore implements CognitiveModuleDomainPort {
     });
   }
 
-  /** Dashboard用に確定済みdomain stateの位置だけを返す。 */
+  /** Dashboard用に確定済みCognitive Domain stateを返す。 */
   async getDashboardState(): Promise<CognitiveModuleDashboardState> {
     const state =
       await this.options.storage.get<StoredDomainState>(DOMAIN_STATE_KEY);
-    return {
-      domainVersion: state?.version ?? 0,
-      lastBoundaryId: state?.lastBoundaryId ?? null,
-      updatedAt: state?.updatedAt ?? null,
-    };
+    return toDashboardState(state);
   }
 
   /** Phaseに対応するMemory操作を検証し、transaction外で準備する。 */
@@ -213,6 +218,7 @@ export class CognitiveModuleDomainStore implements CognitiveModuleDomainPort {
     if (input.phase.phase === 'pre_main') {
       const recall = getRecallOutput(input.memory.value);
       return {
+        previousSessionMemory: input.phase.committed.previousSessionMemory,
         recalledMemories: await this.loadRecall(recall.query),
         memoryWrites: [],
       };
@@ -225,6 +231,15 @@ export class CognitiveModuleDomainStore implements CognitiveModuleDomainPort {
       input.emotion.value
     );
     return {
+      previousSessionMemory: {
+        content: memory.content,
+        type: memory.type,
+        emotion: input.emotion.value,
+        createdAt:
+          write.status === 'prepared'
+            ? write.createdAt
+            : this.now().toISOString(),
+      },
       recalledMemories: [],
       memoryWrites: [write],
     };
@@ -320,7 +335,33 @@ function toRuntimeState(
   return {
     version: stored?.version ?? 0,
     emotion: stored?.emotion ?? null,
+    previousSessionMemory: stored?.previousSessionMemory ?? null,
     recalledMemories: [...recalledMemories],
+  };
+}
+
+/** Stored stateをDashboard用の全状態または空状態へ変換する。 */
+function toDashboardState(
+  stored: StoredDomainState | undefined
+): CognitiveModuleDashboardState {
+  if (stored === undefined) {
+    return {
+      domainVersion: 0,
+      emotion: null,
+      previousSessionMemory: null,
+      recalledMemories: [],
+      lastBoundaryId: null,
+      updatedAt: null,
+    };
+  }
+
+  return {
+    domainVersion: stored.version,
+    emotion: stored.emotion,
+    previousSessionMemory: stored.previousSessionMemory ?? null,
+    recalledMemories: [...(stored.recalledMemories ?? [])],
+    lastBoundaryId: stored.lastBoundaryId,
+    updatedAt: stored.updatedAt,
   };
 }
 

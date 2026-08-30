@@ -89,18 +89,24 @@ function createMockEnv(options: MockEnvOptions = {}): MockEnvResult {
         state: 'Idling',
         nextAlarm: '2026-02-22T12:00:00.000Z',
         nextWakeAt: '2026-02-22T13:00:00.000Z',
-        context: {
-          content: 'Keep following up on dashboard changes.',
+        cognitive: {
+          domainVersion: 3,
           emotion: {
             valence: 0.2,
             arousal: 0.3,
             labels: ['focused'],
           },
-          createdAt: '2026-02-22T10:30:00.000Z',
-          updatedAt: '2026-02-22T11:30:00.000Z',
-        },
-        cognitive: {
-          domainVersion: 3,
+          previousSessionMemory: {
+            content: 'Keep following up on dashboard changes.',
+            type: 'episode',
+            emotion: {
+              valence: 0.2,
+              arousal: 0.3,
+              labels: ['focused'],
+            },
+            createdAt: '2026-02-22T10:30:00.000Z',
+          },
+          recalledMemories: [],
           lastBoundaryId: 'rin:activation-1:3:post_main',
           updatedAt: '2026-02-22T11:30:00.000Z',
         },
@@ -133,9 +139,11 @@ function createMockEnv(options: MockEnvOptions = {}): MockEnvResult {
         state: 'Sleeping',
         nextAlarm: null,
         nextWakeAt: null,
-        context: null,
         cognitive: {
           domainVersion: 0,
+          emotion: null,
+          previousSessionMemory: null,
+          recalledMemories: [],
           lastBoundaryId: null,
           updatedAt: null,
         },

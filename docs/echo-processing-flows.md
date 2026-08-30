@@ -131,7 +131,7 @@ flowchart TD
   runtime --> base[初期共有context]
   startup[check_notificationsのcallとresult] --> base
 
-  storedEmotion[(保存済みEmotion<br/>存在する場合)] --> cognitiveContext[Cognitive用共有context]
+  storedState[(前session終了時の<br/>Memory / Emotion<br/>存在する場合)] --> cognitiveContext[Cognitive用共有context]
   base --> cognitiveContext
 
   cognitiveContext --> memoryRequest[[Memory pre_main request<br/>専用prompt + Recall schema]]
@@ -146,18 +146,18 @@ flowchart TD
   handoff --> mainRequest
 ```
 
-Mainへは前sessionのEmotionを直接渡しません。MemoryとEmotionがそれを初期状態として読み、最初の`pre_main`で更新・確定した結果だけをsystem-owned tool exchangeとしてMainへ渡します。
+Mainへは前session終了時のMemoryとEmotionを直接渡しません。保持されている場合はMemory ModuleとEmotion Moduleがそれらを初期状態として読み、最初の`pre_main`で新たに検索・更新した結果だけをsystem-owned tool exchangeとしてMainへ渡します。初期状態のMemoryは、前の`post_main`でMemory Moduleが生成して保存した1件です。
 
 ### 各LLM requestの内容
 
-| Request             | `input`の構成                                                                                   | 会話の継続方法                                                          | `tools`                   | 出力契約                                           |
-| ------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | ------------------------- | -------------------------------------------------- |
-| Main turn 1         | Main専用prompt → 現在日時 → startup `check_notifications` call/result → 最初のCognitive handoff | 初回なので過去のprovider応答なし                                        | 実行可能な全tool contract | 自然言語、tool call                                |
-| Main turn 2以降     | 直前turnのtool result、必要ならDiscord画像、そのturn用のCognitive handoff                       | Responses APIまたはChat Completions adapterが前turnまでのMain履歴を接続 | 実行可能な全tool contract | 自然言語、tool call                                |
-| Memory `pre_main`   | Recall専用prompt → その時点のCognitive共有context全体                                           | 毎回、共有contextの完全なsnapshotを新規requestとして渡す                | なし                      | `{ query }`のstrict JSON Schema                    |
-| Emotion `pre_main`  | Emotion専用prompt → Memoryと同一のCognitive共有context snapshot                                 | 毎回、共有contextの完全なsnapshotを新規requestとして渡す                | なし                      | `{ valence, arousal, labels }`のstrict JSON Schema |
-| Memory `post_main`  | Store専用prompt → 終了turnまでを含むCognitive共有context全体                                    | 独立した新規request                                                     | なし                      | `{ content, type }`のstrict JSON Schema            |
-| Emotion `post_main` | Emotion専用prompt → Memoryと同一の終了時snapshot                                                | 独立した新規request                                                     | なし                      | `{ valence, arousal, labels }`のstrict JSON Schema |
+| Request             | `input`の構成                                                                                        | 会話の継続方法                                                          | `tools`                   | 出力契約                                           |
+| ------------------- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | ------------------------- | -------------------------------------------------- |
+| Main turn 1         | Main専用prompt → 現在日時 → startup `check_notifications` call/result → 最初のCognitive handoff      | 初回なので過去のprovider応答なし                                        | 実行可能な全tool contract | 自然言語、tool call                                |
+| Main turn 2以降     | 直前turnのtool result、必要ならDiscord画像、そのturn用のCognitive handoff                            | Responses APIまたはChat Completions adapterが前turnまでのMain履歴を接続 | 実行可能な全tool contract | 自然言語、tool call                                |
+| Memory `pre_main`   | Recall専用prompt → その時点のCognitive共有context全体。初回は前session終了時のMemory / Emotionを含む | 毎回、共有contextの完全なsnapshotを新規requestとして渡す                | なし                      | `{ query }`のstrict JSON Schema                    |
+| Emotion `pre_main`  | Emotion専用prompt → Memoryと同一のCognitive共有context snapshot                                      | 毎回、共有contextの完全なsnapshotを新規requestとして渡す                | なし                      | `{ valence, arousal, labels }`のstrict JSON Schema |
+| Memory `post_main`  | Store専用prompt → 終了turnまでを含むCognitive共有context全体                                         | 独立した新規request                                                     | なし                      | `{ content, type }`のstrict JSON Schema            |
+| Emotion `post_main` | Emotion専用prompt → Memoryと同一の終了時snapshot                                                     | 独立した新規request                                                     | なし                      | `{ valence, arousal, labels }`のstrict JSON Schema |
 
 MemoryとEmotionは同じphaseで同一のimmutable snapshotを読みます。一方のmodel出力をもう一方へ渡すことはなく、両方の検証成功後にruntimeが結果をまとめてcommitします。
 
@@ -167,7 +167,7 @@ MemoryとEmotionは同じphaseで同一のimmutable snapshotを読みます。�
 flowchart TD
   start([思考session開始]) --> runtime[現在日時]
   runtime --> startup[check_notifications call / result]
-  startup --> restored[保存済みEmotionがあれば追加<br/>Cognitive Moduleだけが読む]
+  startup --> restored[前session終了時のMemory / Emotionが<br/>存在すれば追加]
   restored --> pre1[[最初のMemory / Emotion request]]
   pre1 --> handoff1[確定済みhandoffを履歴へ追加]
   handoff1 --> main1[Main turn 1の出力を追加]
@@ -185,7 +185,7 @@ Cognitive共有contextに入るもの:
 
 - 思考session開始時の現在日時
 - startup `check_notifications`の擬似tool callとsanitise済みresult
-- 前sessionで最後に確定したEmotion。ただしCognitive Module専用
+- 前sessionの`post_main`で確定したMemory 1件とEmotion。保持されている場合だけ追加し、Cognitive Moduleだけが読む
 - それ以前の`pre_main`で確定し、Mainへ渡したsystem-owned tool exchange
 - 各Main turnのassistant出力、tool call、sanitise済みtool result
 - `read_chat_messages`が返した画像のうち、上限内でvision inputへ変換したもの
@@ -301,7 +301,7 @@ flowchart TD
   bounded --> contracts
   contracts --> ui[Dashboard UI]
   assets --> ui
-  ui --> finish([Fleet / usage / sessions / actions])
+  ui --> finish([Fleet / Cognitive state / usage / sessions / actions])
 ```
 
 主な実装: `apps/cloudflare-workers/src/index.ts`、`packages/contracts/src/dashboard/`、`apps/dashboard/src/App.tsx`

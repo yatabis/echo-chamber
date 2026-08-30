@@ -40,6 +40,7 @@ function createPhaseInput(
     committed: {
       version: sequence - 1,
       emotion: null,
+      previousSessionMemory: null,
       recalledMemories: [],
     },
   };

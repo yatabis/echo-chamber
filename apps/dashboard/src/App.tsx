@@ -1274,6 +1274,7 @@ function InstanceSnapshot(props: {
   const latestActivityAt = findLatestDateTime([
     ...status.notes.map((note) => note.updatedAt),
     ...status.memories.map((memory) => memory.updatedAt),
+    status.cognitive.updatedAt,
   ]);
 
   return (
@@ -2107,55 +2108,128 @@ function KnowledgeInventory(props: { status: EchoStatus }): JSX.Element {
   );
 }
 
-/** 保存済み Context snapshot を履歴情報として表示する。 */
-function RuntimeContextPanel(props: {
-  context: EchoStatus['context'];
+/** Cognitive Domainが保持するMemory 1件を表示する。 */
+function CognitiveMemoryCard(props: {
+  memory: EchoStatus['cognitive']['recalledMemories'][number];
+  title: string;
 }): JSX.Element {
-  const { context } = props;
+  const { memory } = props;
+
+  return (
+    <article className="item-card">
+      <h3>{props.title}</h3>
+      <div className="item-meta">
+        <span>{memory.type}</span>
+        <span>{formatRelativeDateTime(memory.createdAt)}</span>
+        <span>
+          Valence {formatNumber(memory.emotion.valence)} · Arousal{' '}
+          {formatNumber(memory.emotion.arousal)}
+        </span>
+      </div>
+      {memory.emotion.labels.length === 0 ? null : (
+        <div className="tag-list">
+          {memory.emotion.labels.map((label, index) => {
+            return (
+              <span key={`${label}:${index}`} className="tag">
+                {label}
+              </span>
+            );
+          })}
+        </div>
+      )}
+      <p className="item-content">{memory.content}</p>
+    </article>
+  );
+}
+
+/** 確定済みCognitive Domain stateを表示する。 */
+function CognitiveStatePanel(props: {
+  cognitive: EchoStatus['cognitive'];
+}): JSX.Element {
+  const { cognitive } = props;
 
   return (
     <section className="card">
       <div className="section-header">
         <div>
-          <h2>Stored Context</h2>
-          <p>Last persisted context snapshot</p>
+          <h2>Cognitive State</h2>
+          <p>Committed Memory and Emotion domain state</p>
         </div>
       </div>
 
-      {context === null ? (
-        <p className="muted">No persisted context.</p>
+      {cognitive.domainVersion === 0 ? (
+        <p className="muted">No committed cognitive state.</p>
       ) : (
         <>
           <div className="summary-grid">
             <div className="summary-metric">
-              <span>Updated</span>
-              <strong>{formatRelativeDateTime(context.updatedAt)}</strong>
+              <span>Version</span>
+              <strong>{formatNumber(cognitive.domainVersion)}</strong>
             </div>
             <div className="summary-metric">
-              <span>Created</span>
-              <strong>{formatRelativeDateTime(context.createdAt)}</strong>
+              <span>Updated</span>
+              <strong>{formatRelativeDateTime(cognitive.updatedAt)}</strong>
+            </div>
+            <div className="summary-metric">
+              <span>Recalled memories</span>
+              <strong>{formatNumber(cognitive.recalledMemories.length)}</strong>
             </div>
             <div className="summary-metric">
               <span>Valence</span>
-              <strong>{formatNumber(context.emotion.valence)}</strong>
+              <strong>
+                {cognitive.emotion === null
+                  ? '-'
+                  : formatNumber(cognitive.emotion.valence)}
+              </strong>
             </div>
             <div className="summary-metric">
               <span>Arousal</span>
-              <strong>{formatNumber(context.emotion.arousal)}</strong>
+              <strong>
+                {cognitive.emotion === null
+                  ? '-'
+                  : formatNumber(cognitive.emotion.arousal)}
+              </strong>
             </div>
           </div>
-          {context.emotion.labels.length === 0 ? null : (
+          {cognitive.emotion === null ||
+          cognitive.emotion.labels.length === 0 ? null : (
             <div className="tag-list">
-              {context.emotion.labels.map((label) => {
+              {cognitive.emotion.labels.map((label, index) => {
                 return (
-                  <span key={label} className="tag">
+                  <span key={`${label}:${index}`} className="tag">
                     {label}
                   </span>
                 );
               })}
             </div>
           )}
-          <p className="context-content">{context.content}</p>
+          <article className="item-card">
+            <h3>Last boundary</h3>
+            <p className="item-content">{cognitive.lastBoundaryId ?? '-'}</p>
+          </article>
+          {cognitive.previousSessionMemory === null ? (
+            <p className="muted">No previous session memory.</p>
+          ) : (
+            <CognitiveMemoryCard
+              title="Previous session memory"
+              memory={cognitive.previousSessionMemory}
+            />
+          )}
+          <div className="item-list">
+            {cognitive.recalledMemories.length === 0 ? (
+              <p className="muted">No recalled memories in this state.</p>
+            ) : (
+              cognitive.recalledMemories.map((memory, index) => {
+                return (
+                  <CognitiveMemoryCard
+                    key={`${memory.createdAt}:${memory.type}:${index}`}
+                    title={`Recalled memory ${index + 1}`}
+                    memory={memory}
+                  />
+                );
+              })
+            )}
+          </div>
         </>
       )}
     </section>
@@ -2292,7 +2366,7 @@ function DetailTabPanel(props: {
             }}
           />
           <KnowledgeInventory status={props.status} />
-          <RuntimeContextPanel context={props.status.context} />
+          <CognitiveStatePanel cognitive={props.status.cognitive} />
         </div>
       );
     case 'analysis':

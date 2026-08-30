@@ -28,6 +28,7 @@ function createEvaluationDomain(): CognitiveModuleDomainPort {
   let state: CognitiveState = {
     version: 0,
     emotion: null,
+    previousSessionMemory: null,
     recalledMemories: [],
   };
 

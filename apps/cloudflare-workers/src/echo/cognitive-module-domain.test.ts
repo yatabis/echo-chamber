@@ -111,6 +111,7 @@ function phaseInput(
     committed: {
       version: committedVersion,
       emotion: committedVersion === 0 ? null : emotionOutput('previous'),
+      previousSessionMemory: null,
       recalledMemories: [],
     },
   };
@@ -150,12 +151,19 @@ function createUsage(): ModelUsage {
 }
 
 describe('CognitiveModuleDomainStore', () => {
-  it('activation開始時は保存済みEmotionだけを読み、検索queryを代行生成しない', async () => {
+  it('activation開始時は前sessionのMemoryとEmotionを読み、検索結果は引き継がない', async () => {
     const storedEmotion = emotionOutput('persisted');
+    const previousSessionMemory = {
+      content: 'The previous session settled the implementation boundary.',
+      type: 'episode' as const,
+      emotion: storedEmotion,
+      createdAt: '2026-08-22T00:00:00.000Z',
+    };
     const { storage } = createStorage({
       'cognitive:domain-state': {
         version: 2,
         emotion: storedEmotion,
+        previousSessionMemory,
         recalledMemories: [
           {
             content: 'stale recall',
@@ -174,13 +182,29 @@ describe('CognitiveModuleDomainStore', () => {
     await expect(domain.beginActivation('activation-1')).resolves.toEqual({
       version: 2,
       emotion: storedEmotion,
+      previousSessionMemory,
       recalledMemories: [],
     });
     expect(memory.searchMemory).not.toHaveBeenCalled();
   });
 
   it('pre_mainではMemory Moduleのqueryで検索し、Emotionと検索結果を一度確定する', async () => {
-    const { data, storage, transaction } = createStorage();
+    const previousSessionMemory = {
+      content: 'The previous session established the initial context.',
+      type: 'episode' as const,
+      emotion: emotionOutput('previous'),
+      createdAt: '2026-08-21T00:00:00.000Z',
+    };
+    const { data, storage, transaction } = createStorage({
+      'cognitive:domain-state': {
+        version: 1,
+        emotion: emotionOutput('previous'),
+        previousSessionMemory,
+        recalledMemories: [],
+        lastBoundaryId: 'previous:post_main',
+        updatedAt: '2026-08-21T00:00:00.000Z',
+      },
+    });
     const memory = createMemoryRuntime();
     memory.searchMemory.mockResolvedValue([
       {
@@ -197,11 +221,13 @@ describe('CognitiveModuleDomainStore', () => {
       memory,
       now: (): Date => new Date('2026-08-23T00:00:00.000Z'),
     });
-    const input = commitInput('pre_main');
+    const input = commitInput('pre_main', 1);
+    input.phase.committed.previousSessionMemory = previousSessionMemory;
 
     await expect(domain.commitPhase(input)).resolves.toEqual({
-      version: 1,
+      version: 2,
       emotion: emotionOutput(),
+      previousSessionMemory,
       recalledMemories: [
         {
           content: 'Existing memory',
@@ -222,8 +248,9 @@ describe('CognitiveModuleDomainStore', () => {
     expect(memory.emitMemoryCommitEvents).not.toHaveBeenCalled();
     expect(transaction).toHaveBeenCalledTimes(1);
     expect(data.get('cognitive:domain-state')).toMatchObject({
-      version: 1,
+      version: 2,
       emotion: emotionOutput(),
+      previousSessionMemory,
       lastBoundaryId: 'activation-1:1:pre_main',
     });
   });
@@ -274,6 +301,12 @@ describe('CognitiveModuleDomainStore', () => {
     const previous = {
       version: 1,
       emotion: emotionOutput('previous'),
+      previousSessionMemory: {
+        content: 'Older session memory',
+        type: 'episode' as const,
+        emotion: emotionOutput('previous'),
+        createdAt: '2026-08-22T00:00:00.000Z',
+      },
       recalledMemories: [],
       lastBoundaryId: 'activation-1:1:pre_main',
       updatedAt: '2026-08-23T00:00:00.000Z',
@@ -288,6 +321,12 @@ describe('CognitiveModuleDomainStore', () => {
     await expect(domain.commitPhase(input)).resolves.toMatchObject({
       version: 2,
       emotion: emotionOutput(),
+      previousSessionMemory: {
+        content: 'The session established phase-specific interfaces.',
+        type: 'semantic',
+        emotion: emotionOutput(),
+        createdAt: '2026-08-23T00:00:00.000Z',
+      },
       recalledMemories: [],
     });
     await domain.commitPhase(input);
@@ -303,6 +342,12 @@ describe('CognitiveModuleDomainStore', () => {
     expect(transaction).toHaveBeenCalledTimes(1);
     expect(data.get('cognitive:domain-state')).toMatchObject({
       version: 2,
+      previousSessionMemory: {
+        content: 'The session established phase-specific interfaces.',
+        type: 'semantic',
+        emotion: emotionOutput(),
+        createdAt: '2026-08-23T00:00:00.000Z',
+      },
       lastBoundaryId: 'activation-1:2:post_main',
     });
   });
@@ -437,24 +482,47 @@ describe('CognitiveModuleDomainStore', () => {
     expect(data.size).toBe(0);
   });
 
-  it('dashboard stateは最後に確定したversionとboundaryだけを返す', async () => {
+  it('dashboard stateは確定済みのMemoryとEmotionを返す', async () => {
     const { storage } = createStorage();
+    const onStateChanged = vi.fn();
     const domain = new CognitiveModuleDomainStore({
       storage,
       memory: createMemoryRuntime(),
       now: (): Date => new Date('2026-08-23T00:00:00.000Z'),
+      onStateChanged,
     });
 
     await expect(domain.getDashboardState()).resolves.toEqual({
       domainVersion: 0,
+      emotion: null,
+      previousSessionMemory: null,
+      recalledMemories: [],
       lastBoundaryId: null,
       updatedAt: null,
     });
     await domain.commitPhase(commitInput('pre_main'));
     await expect(domain.getDashboardState()).resolves.toEqual({
       domainVersion: 1,
+      emotion: emotionOutput(),
+      previousSessionMemory: null,
+      recalledMemories: [],
       lastBoundaryId: 'activation-1:1:pre_main',
       updatedAt: '2026-08-23T00:00:00.000Z',
     });
+    await domain.commitPhase(commitInput('post_main', 1));
+    await expect(domain.getDashboardState()).resolves.toEqual({
+      domainVersion: 2,
+      emotion: emotionOutput(),
+      previousSessionMemory: {
+        content: 'The session established phase-specific interfaces.',
+        type: 'semantic',
+        emotion: emotionOutput(),
+        createdAt: '2026-08-23T00:00:00.000Z',
+      },
+      recalledMemories: [],
+      lastBoundaryId: 'activation-1:2:post_main',
+      updatedAt: '2026-08-23T00:00:00.000Z',
+    });
+    expect(onStateChanged).toHaveBeenCalledTimes(2);
   });
 });

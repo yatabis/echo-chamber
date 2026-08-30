@@ -87,7 +87,7 @@ Dashboard 一覧画面を開く、または一覧で Refresh する操作。
 
 `/:id/summary` は raw event を読まない。note は最大 200 件、memory は summary query のみを使う。
 
-`/:id/summary` は Durable Object instance 内で 30 秒だけ in-memory cache する。cache hit 時も DO request は発生するが、storage read は発生しない。state / usage / context / next wake / alarm などの更新時は cache を破棄する。
+`/:id/summary` は Durable Object instance 内で 30 秒だけ in-memory cache する。cache hit 時も DO request は発生するが、storage read は発生しない。state / usage / cognitive domain / next wake / alarm などの更新時は cache を破棄する。
 
 ### Instance detail
 
@@ -102,11 +102,11 @@ Dashboard 一覧画面を開く、または一覧で Refresh する操作。
 
 endpoint ごとの storage read:
 
-| Endpoint                   | Storage read shape                                                                                      |
-| -------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `GET /:id`                 | state、alarm、next wake、context、usage、notes 最大 200 件、embedding BLOB なし memory 最大 500 件      |
-| `GET /:id/session-logs`    | 現在 archive day の session 付き `echo_events` を partial index 経由で `LIMIT 200` まで読む             |
-| `GET /:id/action-analysis` | 日次 action-analysis stats と tool stats だけを最大 30 archive day 分読む。raw `echo_events` は読まない |
+| Endpoint                   | Storage read shape                                                                                          |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `GET /:id`                 | state、alarm、next wake、cognitive domain、usage、notes 最大 200 件、embedding BLOB なし memory 最大 500 件 |
+| `GET /:id/session-logs`    | 現在 archive day の session 付き `echo_events` を partial index 経由で `LIMIT 200` まで読む                 |
+| `GET /:id/action-analysis` | 日次 action-analysis stats と tool stats だけを最大 30 archive day 分読む。raw `echo_events` は読まない     |
 
 `GET /:id/action-analysis` は raw `echo_events` を読まない。1 / 7 / 30 day の period summary は、最大 30 日分の daily stats と tool stats から組み立てる。
 
@@ -118,11 +118,11 @@ Dashboard detail の GET DTO は Durable Object instance 内で短時間だけ i
 
 Dashboard からではなく API として存在する操作。
 
-| 操作         | API request       | DO requests | Storage reads              | Storage writes                                                                 |
-| ------------ | ----------------- | ----------- | -------------------------- | ------------------------------------------------------------------------------ |
-| manual wake  | `POST /:id/wake`  | 1           | state                      | `setAlarm()`、state、`alarm_scheduled` event、state change event               |
-| manual sleep | `POST /:id/sleep` | 1           | state                      | state、alarm delete、state change event。delete は rows written として扱われる |
-| local run    | `POST /:id/run`   | 1           | `alarm()` の run path 相当 | local environment のみ。production では not found                              |
+| 操作         | API request       | DO requests | Storage reads              | Storage writes                                                                  |
+| ------------ | ----------------- | ----------- | -------------------------- | ------------------------------------------------------------------------------- |
+| manual wake  | `POST /:id/wake`  | 1           | state                      | `setAlarm()`、state、`alarm_scheduled` event、state change event                |
+| manual sleep | `POST /:id/sleep` | 1           | state                      | state、alarm delete、state change event。delete は rows written として扱われる  |
+| local run    | `POST /:id/run`   | 1           | state 検証後の思考 session | local environment のみ。alarm 用の未読、token limit、next wake 判定は適用しない |
 
 ## Echo alarm の budget
 
@@ -193,16 +193,16 @@ Cognitive phaseのmodel callとstorage操作は、各thinking sessionのrun budg
 
 一時エラーでは失敗したmoduleだけを1回再試行する。Cognitive Module用のOpenAI SDK retryは0とし、1 application attemptを1 HTTP attemptとして数える。
 
-| 項目                       | 上限 / 挙動                                                                                                                 |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Worker / DO request        | 追加0。同じthinking sessionのDO request内で待機する                                                                         |
-| cognitive model requests   | retry無しで`2 * (T + 1)`。全module requestが1回ずつretryした場合は`4 * (T + 1)`。`T = 10`なら22〜44件                       |
-| external request hard gate | alarm / manual run全体で40件。Main、Cognitive、Discordの状態取得・tool、Web、Zenn、OpenAI embeddingが共有する               |
-| model request timeout      | 30秒                                                                                                                        |
-| Memory recall              | `T`回。各回で最大500 rowsを読み、query embedding 1回、候補があればrerank 1回を行い、最大5件をMainへ渡す                     |
-| Memory update              | `post_main`で1件。Memory Moduleの`content` / `type`と同phaseのEmotionを1 SQLite transactionで保存する                       |
-| Event archive writes       | phase / model / commit event分。Cognitive model eventにはMainと同じpayload policyを適用する                                 |
-| main model calls / input   | Mainのcall数`T`は変わらないが、各turn前の`search_memory` / `update_emotion` exchangeによりMain requestのinput tokenが増える |
+| 項目                       | 上限 / 挙動                                                                                                                        |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Worker / DO request        | 追加0。同じthinking sessionのDO request内で待機する                                                                                |
+| cognitive model requests   | retry無しで`2 * (T + 1)`。全module requestが1回ずつretryした場合は`4 * (T + 1)`。`T = 10`なら22〜44件                              |
+| external request hard gate | alarm / manual run全体で40件。Main、Cognitive、Discordの状態取得・tool、Web、Zenn、OpenAI embeddingが共有する                      |
+| model request timeout      | 30秒                                                                                                                               |
+| Memory recall              | `T`回。各回で最大500 rowsを読み、query embedding 1回、候補があればrerank 1回を行い、最大5件をMainへ渡す                            |
+| Memory update              | `post_main`で1件。Memory Moduleの`content` / `type`と同phaseのEmotionを1 SQLite transactionで保存し、次session用の状態にも保持する |
+| Event archive writes       | phase / model / commit event分。Cognitive model eventにはMainと同じpayload policyを適用する                                        |
+| main model calls / input   | Mainのcall数`T`は変わらないが、各turn前の`search_memory` / `update_emotion` exchangeによりMain requestのinput tokenが増える        |
 
 任意toolを1回使う場合、`search_memory`はquery embedding 1回、候補があればrerank 1回、embedding BLOBを含む最大500 rowsのreadを追加し得る。`store_memory`はembedding 1回とMemory rowのinsert / eviction、関連event writeを追加し得る。OpenAI embeddingを使用する構成ではembedding requestも40件のexternal request hard gateを共有する。既定構成のembeddingとrerankはWorkers AI bindingを使うため、この外部request gateには含めない。
 
@@ -213,6 +213,8 @@ Cognitive phaseのmodel callとstorage操作は、各thinking sessionのrun budg
 この40件は、Free planのexternal subrequest上限50件に対して10件の余裕を持たせるためのrun単位の上限である。
 
 `pre_main`では検索結果とEmotionを確定し、`post_main`では1件のMemoryとEmotionを1回のtransactionで保存する。片方のmoduleまたはMemory操作が失敗した場合、そのphaseのstate更新は行わない。
+
+次sessionのMemory / Emotion初期状態は既存のcognitive domain stateから復元する。Memory tableの追加scan、DO request、外部requestは発生しない。
 
 `memory.search` は検索候補として embedding BLOB を含む memory rows を読む。現行の上限は memory 保持上限と同じ 500 rows で、同一 request 内では cache する。Dashboard 表示では embedding BLOB を読まない。
 

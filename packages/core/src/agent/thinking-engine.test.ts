@@ -265,6 +265,7 @@ describe('ThinkingEngine', () => {
       committed: {
         version: 0,
         emotion: null,
+        previousSessionMemory: null,
         recalledMemories: [],
       },
       memory: {

@@ -61,6 +61,7 @@ function createDomain(
   initialState: CognitiveModuleCommittedState = {
     version: 0,
     emotion: null,
+    previousSessionMemory: null,
     recalledMemories: [],
   }
 ): MockCognitiveModuleDomain {
@@ -76,6 +77,7 @@ function createDomain(
         state = {
           version: state.version + 1,
           emotion: emotion.value,
+          previousSessionMemory: state.previousSessionMemory,
           recalledMemories:
             phase.phase === 'pre_main'
               ? [
@@ -240,6 +242,7 @@ describe('ParallelCognitiveModuleOrchestrator', () => {
       committed: {
         version: 0,
         emotion: null,
+        previousSessionMemory: null,
         recalledMemories: [],
       },
     });
@@ -261,19 +264,29 @@ describe('ParallelCognitiveModuleOrchestrator', () => {
     );
   });
 
-  it('保存済みEmotionを両moduleだけの初期contextへ載せる', async () => {
+  it('前sessionのMemoryとEmotionを両moduleだけの初期contextへ載せる', async () => {
     const persistedEmotion = emotionOutput('persisted');
+    const previousSessionMemory = {
+      content: 'previous session memory',
+      type: 'episode' as const,
+      emotion: persistedEmotion,
+      createdAt: '2026-08-23T00:00:00.000Z',
+    };
     const domain = createDomain({
       version: 4,
       emotion: persistedEmotion,
+      previousSessionMemory,
       recalledMemories: [],
     });
-    const restoredEmotionContext: ModelInputItem[] = [
+    const restoredSessionContext: ModelInputItem[] = [
       {
         role: 'developer',
         content: [
-          '現在の感情状態です。前回の思考セッション終了時に確定しました。',
-          JSON.stringify(persistedEmotion),
+          '前回の思考セッション終了時に確定した状態です。',
+          JSON.stringify({
+            memory: previousSessionMemory,
+            emotion: persistedEmotion,
+          }),
         ].join('\n'),
       },
     ];
@@ -287,7 +300,7 @@ describe('ParallelCognitiveModuleOrchestrator', () => {
       memoryRun,
       emotionRun,
       domain,
-      formatInitialContext: () => restoredEmotionContext,
+      formatInitialContext: () => restoredSessionContext,
     }).beginActivation();
     const initialInput: ModelInputItem[] = [
       { role: 'developer', content: 'initial' },
@@ -295,7 +308,7 @@ describe('ParallelCognitiveModuleOrchestrator', () => {
 
     await expect(activation.beforeMain(initialInput)).resolves.toEqual([]);
 
-    const expectedContext = [...initialInput, ...restoredEmotionContext];
+    const expectedContext = [...initialInput, ...restoredSessionContext];
     expect(memoryRun.mock.calls[0]?.[1].sharedContext).toEqual(expectedContext);
     expect(emotionRun.mock.calls[0]?.[1].sharedContext).toEqual(
       expectedContext

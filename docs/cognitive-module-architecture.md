@@ -16,7 +16,7 @@ Main、Memory Module、Emotion Module は、現在日時、Main の出力、tool
 
 Main の出力は、その直前に Main の出力であることを示す注記を置いて共有 context へ追加する。Memory Module と Emotion Module の model 出力自体は共有 context へ追加しない。runtime が結果を確定した後、Main に渡したものと同じ system-owned tool exchange を共有 context へ追加する。
 
-前の思考 session から継続する Emotion は、Memory Module と Emotion Module が読む初期状態として context へ戻す。Main へは、最初の `pre_main` で更新・確定した Emotion だけを `update_emotion` の system-owned tool exchange として渡す。
+前の思考 session の `post_main` で確定した Memory 1件と Emotion が保持されている場合は、Memory Module と Emotion Module が読む初期状態として context へ戻す。この Memory は、前の思考 session の終了時に Memory Module が生成して保存したものを指す。Main へはこの初期状態を直接渡さず、最初の `pre_main` で新たに確定した検索結果と Emotion だけを system-owned tool exchange として渡す。
 
 Memory Module の出力は実行タイミングによって異なる。
 
@@ -61,7 +61,7 @@ Main は検索された Memory と現在の Emotion を、この tool exchange �
 
 ### 思考 session の終了時
 
-Memory Module と Emotion Module を最後に1回ずつ実行する。runtime は Memory Module の `{ content, type }` に同じタイミングの Emotion を関連付けて Memory を保存し、Emotion の現在状態も更新する。この処理は終了境界につき1回だけ commit する。
+Memory Module と Emotion Module を最後に1回ずつ実行する。runtime は Memory Module の `{ content, type }` に同じタイミングの Emotion を関連付けて Memory を保存し、Emotion の現在状態も更新する。この Memory と Emotion は次の思考 session の初期状態にもなり、終了境界につき1回だけ commit する。
 
 ## Main からの Memory 利用
 

@@ -27,10 +27,15 @@ export interface CognitiveModuleRecalledMemory {
   createdAt: string;
 }
 
-/** 確定済みEmotionと直前のMemory検索結果。 */
+/** 直前の思考session終了時にMemory Moduleが確定したMemory。 */
+export type CognitiveModulePreviousSessionMemory =
+  CognitiveModuleRecalledMemory;
+
+/** 確定済みEmotion、前sessionのMemory、および直前のMemory検索結果。 */
 export interface CognitiveModuleCommittedState {
   version: number;
   emotion: EmotionCognitiveModuleOutput | null;
+  previousSessionMemory: CognitiveModulePreviousSessionMemory | null;
   recalledMemories: readonly CognitiveModuleRecalledMemory[];
 }
 

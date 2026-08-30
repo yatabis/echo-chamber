@@ -18,7 +18,6 @@ import { TOKEN_LIMITS } from '@echo-chamber/core/echo/constants';
 import { getEchoInstanceDefinition } from '@echo-chamber/core/echo/instance-definitions';
 import type { Usage } from '@echo-chamber/core/echo/types';
 import { calculateDynamicTokenLimit } from '@echo-chamber/core/echo/usage';
-import type { ContextSnapshot } from '@echo-chamber/core/ports/context';
 import type {
   EchoEvent,
   EchoEventType,
@@ -331,19 +330,22 @@ function setInitializedDefinition(
   ).instanceDefinition = getEchoInstanceDefinition(id);
 }
 
-async function resolveRunDecision(echo: Echo): Promise<{
+async function resolveRunDecision(
+  echo: Echo,
+  trigger: 'scheduled' | 'manual' = 'scheduled'
+): Promise<{
   shouldRun: boolean;
   unreadCheckMs: number;
 }> {
   setInitializedDefinition(echo);
   return await (
     echo as unknown as {
-      resolveRunDecision(): Promise<{
+      resolveRunDecision(trigger: 'scheduled' | 'manual'): Promise<{
         shouldRun: boolean;
         unreadCheckMs: number;
       }>;
     }
-  ).resolveRunDecision();
+  ).resolveRunDecision(trigger);
 }
 
 describe('Echo external request budgets', () => {
@@ -831,9 +833,11 @@ describe('Echo dashboard status payload', () => {
         state: 'Idling',
         nextAlarm: null,
         nextWakeAt: null,
-        context: null,
         cognitive: {
           domainVersion: 0,
+          emotion: null,
+          previousSessionMemory: null,
+          recalledMemories: [],
           lastBoundaryId: null,
           updatedAt: null,
         },
@@ -884,9 +888,11 @@ describe('Echo dashboard status payload', () => {
           state: 'Idling',
           nextAlarm: null,
           nextWakeAt: null,
-          context: null,
           cognitive: {
             domainVersion: 0,
+            emotion: null,
+            previousSessionMemory: null,
+            recalledMemories: [],
             lastBoundaryId: null,
             updatedAt: null,
           },
@@ -913,9 +919,15 @@ describe('Echo dashboard status payload', () => {
           state: 'Running',
           nextAlarm: null,
           nextWakeAt: null,
-          context: null,
           cognitive: {
             domainVersion: 1,
+            emotion: {
+              valence: 0.2,
+              arousal: 0.3,
+              labels: ['focused'],
+            },
+            previousSessionMemory: null,
+            recalledMemories: [],
             lastBoundaryId: 'rin:activation-1:1:pre_main',
             updatedAt: '2026-03-19T12:00:00.000Z',
           },
@@ -997,27 +1009,46 @@ describe('Echo dashboard status payload', () => {
     expect(getSummary).toHaveBeenCalledTimes(1);
   });
 
-  it('保存済み context と next_wake_at を詳細 status に含める', async () => {
+  it('Cognitive domain stateとnext_wake_atを詳細statusに含める', async () => {
     const env = createMockEnv();
     const { storage, getFn } = createMockStorage();
     const echo = new Echo(createMockState(storage), env);
-    const context: ContextSnapshot = {
-      content: 'Latest context for dashboard display.',
-      createdAt: '2026-03-22T10:00:00.000Z',
-      updatedAt: '2026-03-22T11:00:00.000Z',
+    const cognitive = {
+      domainVersion: 4,
       emotion: {
         valence: 0.4,
         arousal: 0.3,
         labels: ['focused'],
       },
+      previousSessionMemory: {
+        content: 'Latest cognitive memory for dashboard display.',
+        type: 'episode' as const,
+        emotion: {
+          valence: 0.3,
+          arousal: 0.2,
+          labels: ['settled'],
+        },
+        createdAt: '2026-03-22T10:00:00.000Z',
+      },
+      recalledMemories: [
+        {
+          content: 'Related memory recalled before Main.',
+          type: 'semantic' as const,
+          emotion: {
+            valence: 0.1,
+            arousal: 0.2,
+            labels: ['calm'],
+          },
+          createdAt: '2026-03-21T10:00:00.000Z',
+        },
+      ],
+      lastBoundaryId: 'rin:activation-4:2:post_main',
+      updatedAt: '2026-03-22T11:00:00.000Z',
     };
     const nextWakeAt = '2026-03-22T12:00:00.000Z';
     setInitializedDefinition(echo);
     getFn.mockImplementation(async (key: unknown) => {
       await Promise.resolve();
-      if (key === 'context') {
-        return context;
-      }
       if (key === 'next_wake_at') {
         return nextWakeAt;
       }
@@ -1036,19 +1067,17 @@ describe('Echo dashboard status payload', () => {
         getCognitiveDomainStoreOrThrow(): {
           getDashboardState(): Promise<{
             domainVersion: number;
-            lastBoundaryId: null;
-            updatedAt: null;
+            emotion: typeof cognitive.emotion;
+            previousSessionMemory: typeof cognitive.previousSessionMemory;
+            recalledMemories: typeof cognitive.recalledMemories;
+            lastBoundaryId: string;
+            updatedAt: string;
           }>;
         };
       },
       'getCognitiveDomainStoreOrThrow'
     ).mockReturnValue({
-      getDashboardState: async () =>
-        await Promise.resolve({
-          domainVersion: 0,
-          lastBoundaryId: null,
-          updatedAt: null,
-        }),
+      getDashboardState: async () => await Promise.resolve(cognitive),
     });
     vi.spyOn(echo, 'getNextAlarm').mockResolvedValue(null);
     vi.spyOn(echo, 'getNotes').mockResolvedValue([]);
@@ -1056,13 +1085,9 @@ describe('Echo dashboard status payload', () => {
 
     const status = await echo.getStatus();
 
-    expect(status.context).toEqual(context);
+    expect(status).not.toHaveProperty('context');
     expect(status.nextWakeAt).toBe(nextWakeAt);
-    expect(status.cognitive).toEqual({
-      domainVersion: 0,
-      lastBoundaryId: null,
-      updatedAt: null,
-    });
+    expect(status.cognitive).toEqual(cognitive);
   });
 
   it('保存済み next_wake_at を一覧 summary に含める', async () => {
@@ -1107,88 +1132,49 @@ describe('Echo dashboard status payload', () => {
   });
 });
 
-describe('Echo context storage', () => {
+describe('Echo local run route', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('DO storage から context を読み出せる', async () => {
-    const env = createMockEnv();
-    const { storage, getFn } = createMockStorage();
-    const echo = new Echo(createMockState(storage), env);
-    const context: ContextSnapshot = {
-      content: 'Latest context for the next wake.',
-      createdAt: '2025-01-25T15:00:00.000Z',
-      updatedAt: '2025-01-25T15:00:00.000Z',
-      emotion: {
-        valence: 0.4,
-        arousal: 0.2,
-        labels: ['calm'],
-      },
-    };
-    getFn.mockResolvedValue(context);
-
-    const result = await (
-      echo as unknown as {
-        loadContext(): Promise<ContextSnapshot | null>;
-      }
-    ).loadContext();
-
-    expect(getFn).toHaveBeenCalledWith('context');
-    expect(result).toEqual(context);
-  });
-
-  it('run の継続状態は Cognitive commit 層へ一元化する', async () => {
+  it('ローカルのrun endpointは手動実行として起動する', async () => {
     const env = {
       ...createMockEnv(),
-      OPENAI_API_KEY: 'test-openai-key',
-    } as unknown as Env;
-    const { storage, putFn } = createMockStorage();
+      ENVIRONMENT: 'local',
+    } as Env;
+    const { storage } = createMockStorage();
     const echo = new Echo(createMockState(storage), env);
-    setInitializedDefinition(echo);
-    const think = vi
-      .fn()
-      .mockResolvedValue(createSuccessfulThinkingResult(null));
     vi.spyOn(
-      echo as unknown as { setState(state: string): Promise<void> },
-      'setState'
+      echo as unknown as {
+        ensureInitialized(instanceId: 'rin' | 'marie'): Promise<void>;
+      },
+      'ensureInitialized'
     ).mockResolvedValue(undefined);
-    vi.spyOn(
-      echo as unknown as { getName(): Promise<string> },
-      'getName'
-    ).mockResolvedValue('リン');
-    vi.spyOn(
-      echo as unknown as {
-        resolveRunDecision(): Promise<{
-          shouldRun: boolean;
-          unreadCheckMs: number;
-        }>;
-      },
-      'resolveRunDecision'
-    ).mockResolvedValue({
-      shouldRun: true,
-      unreadCheckMs: 12,
-    });
-    vi.spyOn(
-      echo as unknown as {
-        createThinkingEngine(): { think(): Promise<unknown> };
-      },
-      'createThinkingEngine'
-    ).mockReturnValue({
-      think,
-    });
-    vi.spyOn(
-      echo as unknown as { updateUsage(): Promise<{ total_tokens: number }> },
-      'updateUsage'
-    ).mockResolvedValue({ total_tokens: 42 });
-    const result = await echo.run();
+    const run = vi
+      .spyOn(
+        echo as unknown as {
+          run(trigger?: 'scheduled' | 'manual'): Promise<{
+            unreadCheckMs: number;
+            thinkMs: number;
+          }>;
+        },
+        'run'
+      )
+      .mockResolvedValue({ unreadCheckMs: 0, thinkMs: 1 });
 
-    expect(think).toHaveBeenCalledTimes(1);
-    expect(putFn).not.toHaveBeenCalledWith('context', expect.anything());
-    expect(result).toMatchObject({
-      unreadCheckMs: 12,
-    });
-    expect(typeof result.thinkMs).toBe('number');
+    const response = await echo.fetch(
+      new Request('http://example.com/rin/run', { method: 'POST' })
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toBe('OK.');
+    expect(run).toHaveBeenCalledWith('manual');
+  });
+});
+
+describe('Echo run usage storage', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
   it('失敗した session でも課金済み Main / Cognitive usage を保存する', async () => {
@@ -1393,6 +1379,42 @@ describe('Echo run preconditions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useRealTimers();
+  });
+
+  it('ローカル手動実行はstate以外の自動起動条件を適用しない', async () => {
+    const env = createMockEnv();
+    const { storage } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+
+    vi.spyOn(
+      echo as unknown as { validateEchoState(): Promise<boolean> },
+      'validateEchoState'
+    ).mockResolvedValue(true);
+    const validateChatMessage = vi.spyOn(
+      echo as unknown as { validateChatMessage(): Promise<boolean> },
+      'validateChatMessage'
+    );
+    const getTodayUsage = vi.spyOn(
+      echo as unknown as { getTodayUsage(): Promise<Usage | null> },
+      'getTodayUsage'
+    );
+    const loadNextWakeAt = vi.spyOn(
+      echo as unknown as { loadNextWakeAt(): Promise<string | null> },
+      'loadNextWakeAt'
+    );
+
+    const result = await resolveRunDecision(echo, 'manual');
+
+    expect(result).toEqual({ shouldRun: true, unreadCheckMs: 0 });
+    expect(validateChatMessage).not.toHaveBeenCalled();
+    expect(getTodayUsage).not.toHaveBeenCalled();
+    expect(loadNextWakeAt).not.toHaveBeenCalled();
+    expect(findEmittedEvent('system.run_decision.evaluated')).toMatchObject({
+      payload: {
+        shouldRun: true,
+        reason: 'manual_run',
+      },
+    });
   });
 
   it('未読メッセージがあれば hard limit より優先して実行する', async () => {

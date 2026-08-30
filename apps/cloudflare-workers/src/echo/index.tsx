@@ -52,7 +52,6 @@ import {
   getTodayUsageKey,
   normalizeUsageRecord,
 } from '@echo-chamber/core/echo/usage';
-import type { ContextSnapshot } from '@echo-chamber/core/ports/context';
 import { emitEchoEvent } from '@echo-chamber/core/ports/echo-event';
 import type { EchoEventPort } from '@echo-chamber/core/ports/echo-event';
 import type { ModelPort, ModelUsage } from '@echo-chamber/core/ports/model';
@@ -125,6 +124,8 @@ interface RunDecision {
   shouldRun: boolean;
   unreadCheckMs: number;
 }
+
+type RunTrigger = 'scheduled' | 'manual';
 
 interface RunExecutionResult {
   unreadCheckMs: number;
@@ -292,7 +293,7 @@ export class Echo extends DurableObject<Env> {
         if (env.ENVIRONMENT !== 'local') {
           return c.notFound();
         }
-        await this.run();
+        await this.run('manual');
         return c.text('OK.');
       });
   }
@@ -389,6 +390,9 @@ export class Echo extends DurableObject<Env> {
       memory: this.memorySystem,
       events: this.events,
       isRetryable: isRetryableCognitiveModuleError,
+      onStateChanged: (): void => {
+        this.clearDashboardReadCache();
+      },
     });
     const toolContext = createToolExecutionContext({
       chatBindings: this.getRuntimeBindingsOrThrow(),
@@ -753,7 +757,6 @@ export class Echo extends DurableObject<Env> {
     const state = await this.getState();
     const nextAlarm = await this.getNextAlarm();
     const nextWakeAt = await this.loadNextWakeAt();
-    const context = await this.loadContext();
     const cognitive =
       await this.getCognitiveDomainStoreOrThrow().getDashboardState();
     const usage = await this.getAllUsage();
@@ -780,7 +783,6 @@ export class Echo extends DurableObject<Env> {
       state,
       nextAlarm,
       nextWakeAt,
-      context,
       cognitive,
       runtime: this.getDashboardRuntimeConfig(),
       memories,
@@ -1003,18 +1005,20 @@ export class Echo extends DurableObject<Env> {
     }
   }
 
-  async run(): Promise<RunExecutionResult> {
+  async run(trigger: RunTrigger = 'scheduled'): Promise<RunExecutionResult> {
     const ownsExternalRequestBudget = this.beginExternalRequestBudget();
     try {
-      return await this.runWithinExternalRequestBudget();
+      return await this.runWithinExternalRequestBudget(trigger);
     } finally {
       this.endExternalRequestBudget(ownsExternalRequestBudget);
     }
   }
 
   /** active 外部 request budget の内側で1回の思考実行を行う。 */
-  private async runWithinExternalRequestBudget(): Promise<RunExecutionResult> {
-    const runDecision = await this.resolveRunDecision();
+  private async runWithinExternalRequestBudget(
+    trigger: RunTrigger
+  ): Promise<RunExecutionResult> {
+    const runDecision = await this.resolveRunDecision(trigger);
     if (!runDecision.shouldRun) {
       return {
         unreadCheckMs: runDecision.unreadCheckMs,
@@ -1105,7 +1109,7 @@ export class Echo extends DurableObject<Env> {
    *
    * @returns 実行可否と未読確認にかかった時間
    */
-  private async resolveRunDecision(): Promise<RunDecision> {
+  private async resolveRunDecision(trigger: RunTrigger): Promise<RunDecision> {
     // Stateチェック
     if (!(await this.validateEchoState())) {
       await this.emitRunDecisionEvaluated({
@@ -1115,6 +1119,18 @@ export class Echo extends DurableObject<Env> {
       });
       return {
         shouldRun: false,
+        unreadCheckMs: 0,
+      };
+    }
+
+    if (trigger === 'manual') {
+      await this.emitRunDecisionEvaluated({
+        shouldRun: true,
+        reason: 'manual_run',
+        unreadCheckMs: 0,
+      });
+      return {
+        shouldRun: true,
         unreadCheckMs: 0,
       };
     }
@@ -1613,15 +1629,6 @@ export class Echo extends DurableObject<Env> {
       this._env,
       this.getInstanceDefinitionOrThrow()
     );
-  }
-
-  /**
-   * Dashboard に表示する保存済み Context snapshot を読み出す。
-   *
-   * @returns 保存済み context。未保存なら `null`
-   */
-  private async loadContext(): Promise<ContextSnapshot | null> {
-    return (await this.storage.get<ContextSnapshot>('context')) ?? null;
   }
 
   /**

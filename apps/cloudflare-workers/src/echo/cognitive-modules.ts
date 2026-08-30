@@ -259,11 +259,11 @@ function formatCognitiveModuleHandoff(
   ];
 }
 
-/** 前sessionで確定したEmotionをmodule専用の初期状態として復元する。 */
+/** 前sessionで確定したMemoryとEmotionをmodule専用の初期状態として復元する。 */
 function formatInitialCognitiveModuleContext(
   committed: CognitiveModuleCommittedState
 ): readonly ModelInputItem[] {
-  if (committed.emotion === null) {
+  if (committed.previousSessionMemory === null && committed.emotion === null) {
     return [];
   }
 
@@ -271,8 +271,11 @@ function formatInitialCognitiveModuleContext(
     {
       role: 'developer',
       content: [
-        '現在の感情状態です。前回の思考セッション終了時に確定しました。',
-        JSON.stringify(committed.emotion),
+        '前回の思考セッション終了時に確定した状態です。',
+        JSON.stringify({
+          memory: committed.previousSessionMemory,
+          emotion: committed.emotion,
+        }),
       ].join('\n'),
     },
   ];

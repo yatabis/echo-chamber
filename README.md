@@ -123,6 +123,7 @@ pnpm --filter @echo-chamber/cloudflare-workers exec wrangler secret put LOG_CHAN
 ```
 
 `ENVIRONMENT=local` のときのみ `POST /{instanceId}/run` が有効です。
+この手動実行は Echo の state を検証したうえで、alarm 用の未読、token limit、`next_wake_at` による起動判定を経ずに 1 session を開始します。
 
 ## Cloudflare Access 認証
 
