@@ -127,6 +127,9 @@ interface RunDecision {
 
 type RunTrigger = 'scheduled' | 'manual';
 
+/** usage 日付キーごとの Main model token 数。 */
+type DailyMainUsageTokenRecord = Record<string, number>;
+
 interface RunExecutionResult {
   unreadCheckMs: number;
   thinkMs: number;
@@ -159,6 +162,31 @@ const DASHBOARD_STATUS_CACHE_TTL_MS = 30_000;
 const DASHBOARD_SUMMARY_CACHE_TTL_MS = 30_000;
 const DASHBOARD_SESSION_LOGS_CACHE_TTL_MS = 30_000;
 const DASHBOARD_ACTION_ANALYSIS_CACHE_TTL_MS = 60_000;
+const USAGE_STORAGE_KEY = 'usage';
+const MAIN_USAGE_TOKENS_STORAGE_KEY = 'main_usage_tokens';
+
+/**
+ * Main token counter の保存値から有限な非負値だけを取り出す。
+ *
+ * @param value Durable Object storage から読んだ未検証値
+ * @returns 正規化済みの日別 Main token record
+ */
+function normalizeDailyMainUsageTokenRecord(
+  value: unknown
+): DailyMainUsageTokenRecord {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      (entry): entry is [string, number] =>
+        typeof entry[1] === 'number' &&
+        Number.isFinite(entry[1]) &&
+        entry[1] >= 0
+    )
+  );
+}
 
 /**
  * 短時間だけ使う in-memory dashboard read cache entry を作る。
@@ -929,7 +957,7 @@ export class Echo extends DurableObject<Env> {
    * 全期間のUsage履歴を取得
    */
   async getAllUsage(): Promise<UsageRecord> {
-    const usage = await this.storage.get('usage');
+    const usage = await this.storage.get(USAGE_STORAGE_KEY);
     return normalizeUsageRecord(usage);
   }
 
@@ -939,6 +967,53 @@ export class Echo extends DurableObject<Env> {
   async getTodayUsage(): Promise<Usage | null> {
     const usageRecord = await this.getAllUsage();
     return usageRecord[getTodayUsageKey()] ?? null;
+  }
+
+  /**
+   * scheduled 起動判定に使う、当日の Main model token 数を返す。
+   *
+   * @returns 当日の Main model token 数
+   */
+  private async getTodayMainUsageTokens(): Promise<number> {
+    const dateKey = getTodayUsageKey();
+    const mainUsageRecord = normalizeDailyMainUsageTokenRecord(
+      await this.storage.get(MAIN_USAGE_TOKENS_STORAGE_KEY)
+    );
+    const storedMainTokens = mainUsageRecord[dateKey];
+    if (storedMainTokens !== undefined) {
+      return storedMainTokens;
+    }
+
+    const usageRecord = await this.getAllUsage();
+    return this.getLegacyMainUsageTokens(usageRecord[dateKey]);
+  }
+
+  /**
+   * Main 専用 counter 導入前の model breakdown から Main token 数を復元する。
+   *
+   * @param usage 当日の合算 usage
+   * @returns 復元した Main model token 数
+   */
+  private getLegacyMainUsageTokens(usage: Usage | undefined): number {
+    if (usage === undefined) {
+      return 0;
+    }
+
+    const mainIdentity = this.getMainLLMUsageIdentity();
+    const matchingBreakdowns = usage.by_model.filter(
+      (breakdown) =>
+        breakdown.provider === mainIdentity.provider &&
+        breakdown.model === mainIdentity.model
+    );
+    if (matchingBreakdowns.length === 0) {
+      // 旧 record や当日中の model 変更は正確に分離できないため、過少計上を避ける。
+      return usage.total_tokens;
+    }
+
+    return matchingBreakdowns.reduce(
+      (total, breakdown) => total + breakdown.total_tokens,
+      0
+    );
   }
 
   async wake(force = false): Promise<void> {
@@ -1042,7 +1117,8 @@ export class Echo extends DurableObject<Env> {
         await this.saveNextWakeAt(nextWakeAt, 'finish_thinking');
       }
       const totalUsage = await this.updateUsage(
-        this.createRecordedSessionUsage(thinkingResult)
+        this.createRecordedSessionUsage(thinkingResult),
+        thinkingResult.mainUsage
       );
       await emitEchoEvent(this.events, {
         type: 'usage.recorded',
@@ -1065,7 +1141,8 @@ export class Echo extends DurableObject<Env> {
       ) {
         try {
           const totalUsage = await this.updateUsage(
-            this.createRecordedFailedSessionUsage(error)
+            this.createRecordedFailedSessionUsage(error),
+            error.mainUsage
           );
           await emitEchoEvent(this.events, {
             type: 'usage.recorded',
@@ -1153,14 +1230,13 @@ export class Echo extends DurableObject<Env> {
       };
     }
 
-    const todayUsage = await this.getTodayUsage();
-    const totalTokens = todayUsage?.total_tokens ?? 0;
+    const mainTokens = await this.getTodayMainUsageTokens();
     const { nextWakeAt, hasReachedNextWakeAt } =
       await this.resolveNextWakeAtStatus();
 
     return await this.resolveScheduledRunDecision({
       unreadCheckMs,
-      totalTokens,
+      mainTokens,
       nextWakeAt,
       hasReachedNextWakeAt,
     });
@@ -1171,13 +1247,13 @@ export class Echo extends DurableObject<Env> {
    */
   private async resolveScheduledRunDecision(input: {
     unreadCheckMs: number;
-    totalTokens: number;
+    mainTokens: number;
     nextWakeAt: Date | null;
     hasReachedNextWakeAt: boolean;
   }): Promise<RunDecision> {
     if (
       !(await this.validateHardTokenLimit(
-        input.totalTokens,
+        input.mainTokens,
         input.nextWakeAt,
         input.hasReachedNextWakeAt
       ))
@@ -1186,7 +1262,7 @@ export class Echo extends DurableObject<Env> {
         shouldRun: false,
         reason: 'hard_token_limit',
         unreadCheckMs: input.unreadCheckMs,
-        totalTokens: input.totalTokens,
+        mainTokens: input.mainTokens,
         nextWakeAt: input.nextWakeAt?.toISOString() ?? null,
       });
       return {
@@ -1200,7 +1276,7 @@ export class Echo extends DurableObject<Env> {
         shouldRun: true,
         reason: 'next_wake_at_reached',
         unreadCheckMs: input.unreadCheckMs,
-        totalTokens: input.totalTokens,
+        mainTokens: input.mainTokens,
         nextWakeAt: input.nextWakeAt.toISOString(),
       });
       return {
@@ -1210,14 +1286,14 @@ export class Echo extends DurableObject<Env> {
     }
 
     const softLimitRun = this.evaluateSoftLimitRun(
-      input.totalTokens,
+      input.mainTokens,
       input.nextWakeAt
     );
     await this.emitRunDecisionEvaluated({
       shouldRun: softLimitRun.shouldRun,
       reason: softLimitRun.reason,
       unreadCheckMs: input.unreadCheckMs,
-      totalTokens: input.totalTokens,
+      mainTokens: input.mainTokens,
       softLimit: softLimitRun.softLimit,
       nextWakeAt: input.nextWakeAt?.toISOString() ?? null,
     });
@@ -1235,7 +1311,7 @@ export class Echo extends DurableObject<Env> {
     shouldRun: boolean;
     reason: string;
     unreadCheckMs: number;
-    totalTokens?: number;
+    mainTokens?: number;
     softLimit?: number;
     nextWakeAt?: string | null;
     unreadTotalCount?: number;
@@ -1304,12 +1380,12 @@ export class Echo extends DurableObject<Env> {
    * soft limit の範囲で通常起動できるかを判定する。
    * next_wake_at が直近にある場合は、soft limit 未満でも次回起動時刻を優先して待機する。
    *
-   * @param totalTokens 今日すでに消費した総トークン数
+   * @param mainTokens 今日 Main model が消費したトークン数
    * @param nextWakeAt 比較可能な next_wake_at。未設定または不正なら `null`
    * @returns soft limit 起動を許可する場合は `true`
    */
   private evaluateSoftLimitRun(
-    totalTokens: number,
+    mainTokens: number,
     nextWakeAt: Date | null
   ): {
     shouldRun: boolean;
@@ -1322,7 +1398,7 @@ export class Echo extends DurableObject<Env> {
     // soft limit 未満なら通常起動。ただし直近の next_wake_at があるときは待機する。
     const tokenLimits = this.getTokenLimitConfig();
     const softLimit = calculateDynamicTokenLimit(tokenLimits.dailySoftLimit);
-    if (totalTokens >= softLimit) {
+    if (mainTokens >= softLimit) {
       return {
         shouldRun: false,
         reason: 'soft_token_limit',
@@ -1352,13 +1428,13 @@ export class Echo extends DurableObject<Env> {
    * 未読メッセージ以外の通常起動で使えるトークン量が残っているかを検証する。
    * hard limit を超えた場合は next_wake_at に到達していても起動しない。
    *
-   * @param totalTokens 今日すでに消費した総トークン数
+   * @param mainTokens 今日 Main model が消費したトークン数
    * @param nextWakeAt 正規化済みの next_wake_at。未設定なら `null`
    * @param shouldWarnOnHardLimit hard limit 到達時に warn と fallback を行うべきなら `true`
    * @returns hard limit 未満なら `true`
    */
   private async validateHardTokenLimit(
-    totalTokens: number,
+    mainTokens: number,
     nextWakeAt: Date | null,
     shouldWarnOnHardLimit: boolean
   ): Promise<boolean> {
@@ -1367,13 +1443,13 @@ export class Echo extends DurableObject<Env> {
       tokenLimits.dailyHardLimit,
       tokenLimits.hardLimitBufferFactor
     );
-    if (totalTokens < hardLimit) {
+    if (mainTokens < hardLimit) {
       return true;
     }
 
     if (shouldWarnOnHardLimit && nextWakeAt !== null) {
       const fallbackNextWakeAt = findNextTokenLimitRecoveryTime(
-        totalTokens,
+        mainTokens,
         tokenLimits.dailyHardLimit,
         tokenLimits.hardLimitBufferFactor
       );
@@ -1381,7 +1457,7 @@ export class Echo extends DurableObject<Env> {
         fallbackNextWakeAt.toISOString(),
         'hard_token_limit_defer',
         {
-          totalTokens,
+          mainTokens,
           hardLimit,
         },
         nextWakeAt.toISOString()
@@ -1516,17 +1592,34 @@ export class Echo extends DurableObject<Env> {
 
   /**
    * Usage情報を日別に累積保存
+   *
+   * @param usage Dashboard 向けの Main / Cognitive 合算 usage
+   * @param mainUsage scheduled 起動判定向けの Main model usage
+   * @returns 更新後の当日合算 usage
    */
-  async updateUsage(usage: Usage): Promise<Usage> {
+  async updateUsage(usage: Usage, mainUsage: ModelUsage): Promise<Usage> {
     const dateKey = getTodayUsageKey();
-    const usageRecord = await this.getAllUsage();
+    const [usageRecord, storedMainUsageRecord] = await Promise.all([
+      this.getAllUsage(),
+      this.storage.get(MAIN_USAGE_TOKENS_STORAGE_KEY),
+    ]);
+    const mainUsageRecord = normalizeDailyMainUsageTokenRecord(
+      storedMainUsageRecord
+    );
+    const previousMainTokens =
+      mainUsageRecord[dateKey] ??
+      this.getLegacyMainUsageTokens(usageRecord[dateKey]);
     const updatedUsageRecord = addUsage(usageRecord, dateKey, usage);
+    mainUsageRecord[dateKey] = previousMainTokens + mainUsage.totalTokens;
     const totalUsage = updatedUsageRecord[dateKey];
     if (totalUsage === undefined) {
       throw new Error(`Usage was not accumulated for ${dateKey}`);
     }
 
-    await this.storage.put('usage', updatedUsageRecord);
+    await this.storage.put({
+      [USAGE_STORAGE_KEY]: updatedUsageRecord,
+      [MAIN_USAGE_TOKENS_STORAGE_KEY]: mainUsageRecord,
+    });
     this.clearDashboardReadCache();
     return totalUsage;
   }

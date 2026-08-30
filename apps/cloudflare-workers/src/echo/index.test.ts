@@ -17,7 +17,10 @@ import {
 import { TOKEN_LIMITS } from '@echo-chamber/core/echo/constants';
 import { getEchoInstanceDefinition } from '@echo-chamber/core/echo/instance-definitions';
 import type { Usage } from '@echo-chamber/core/echo/types';
-import { calculateDynamicTokenLimit } from '@echo-chamber/core/echo/usage';
+import {
+  calculateDynamicTokenLimit,
+  getTodayUsageKey,
+} from '@echo-chamber/core/echo/usage';
 import type {
   EchoEvent,
   EchoEventType,
@@ -172,7 +175,9 @@ function createMockStorage(): {
   putFn: ReturnType<typeof vi.fn>;
 } {
   const deleteFn = vi.fn(async () => Promise.resolve(false));
-  const getFn = vi.fn(async () => Promise.resolve(undefined));
+  const getFn = vi.fn(async (_key?: string | string[]) =>
+    Promise.resolve(undefined)
+  );
   const putFn = vi.fn(async () => Promise.resolve());
 
   return {
@@ -230,19 +235,24 @@ function createUsage(totalTokens: number): Usage {
     output_tokens: 0,
     reasoning_tokens: 0,
     total_tokens: totalTokens,
-    by_model: [
-      {
-        provider: 'openai',
-        model: 'gpt-5.5',
-        cached_input_tokens: 0,
-        cache_write_input_tokens: 0,
-        uncached_input_tokens: 0,
-        total_input_tokens: 0,
-        output_tokens: 0,
-        reasoning_tokens: 0,
-        total_tokens: totalTokens,
-      },
-    ],
+    by_model: [createUsageModelBreakdown(totalTokens)],
+  };
+}
+
+function createUsageModelBreakdown(
+  totalTokens: number,
+  model = 'gpt-5.5'
+): Usage['by_model'][number] {
+  return {
+    provider: 'openai',
+    model,
+    cached_input_tokens: 0,
+    cache_write_input_tokens: 0,
+    uncached_input_tokens: 0,
+    total_input_tokens: 0,
+    output_tokens: 0,
+    reasoning_tokens: 0,
+    total_tokens: totalTokens,
   };
 }
 
@@ -1214,7 +1224,9 @@ describe('Echo run usage storage', () => {
     });
     const updateUsage = vi
       .spyOn(
-        echo as unknown as { updateUsage(usage: Usage): Promise<Usage> },
+        echo as unknown as {
+          updateUsage(usage: Usage, mainUsage: ModelUsage): Promise<Usage>;
+        },
         'updateUsage'
       )
       .mockResolvedValue(createUsage(10));
@@ -1231,7 +1243,8 @@ describe('Echo run usage storage', () => {
             total_tokens: 3,
           }),
         ],
-      })
+      }),
+      createModelUsage(7)
     );
     expect(findEmittedEvent('usage.recorded')).toMatchObject({
       payload: {
@@ -1239,6 +1252,69 @@ describe('Echo run usage storage', () => {
         usage: createModelUsage(10),
       },
     });
+  });
+
+  it('表示用の合算 usage と起動判定用の Main token を同時に保存する', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-30T03:00:00.000Z'));
+
+    const env = createMockEnv();
+    const { storage, getFn, putFn } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+    setInitializedDefinition(echo);
+    getFn.mockResolvedValue(undefined);
+
+    const updateUsage = (
+      echo as unknown as {
+        updateUsage(usage: Usage, mainUsage: ModelUsage): Promise<Usage>;
+      }
+    ).updateUsage.bind(echo);
+    const sessionUsage: Usage = {
+      ...createUsage(16),
+      by_model: [
+        createUsageModelBreakdown(10),
+        createUsageModelBreakdown(6, 'test-cognitive-model'),
+      ],
+    };
+
+    await updateUsage(sessionUsage, createModelUsage(10));
+
+    expect(putFn).toHaveBeenCalledWith({
+      usage: {
+        [getTodayUsageKey()]: sessionUsage,
+      },
+      main_usage_tokens: {
+        [getTodayUsageKey()]: 10,
+      },
+    });
+  });
+
+  it('Main counter 導入前の usage から現在の Main model 分だけを引き継ぐ', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-30T03:00:00.000Z'));
+
+    const env = createMockEnv();
+    const { storage, getFn } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+    setInitializedDefinition(echo);
+    const dateKey = getTodayUsageKey();
+    getFn.mockResolvedValueOnce(undefined).mockResolvedValueOnce({
+      [dateKey]: {
+        ...createUsage(16),
+        by_model: [
+          createUsageModelBreakdown(10),
+          createUsageModelBreakdown(6, 'test-cognitive-model'),
+        ],
+      },
+    });
+
+    const mainTokens = await (
+      echo as unknown as {
+        getTodayMainUsageTokens(): Promise<number>;
+      }
+    ).getTodayMainUsageTokens();
+
+    expect(mainTokens).toBe(10);
   });
 });
 
@@ -1394,9 +1470,9 @@ describe('Echo run preconditions', () => {
       echo as unknown as { validateChatMessage(): Promise<boolean> },
       'validateChatMessage'
     );
-    const getTodayUsage = vi.spyOn(
-      echo as unknown as { getTodayUsage(): Promise<Usage | null> },
-      'getTodayUsage'
+    const getTodayMainUsageTokens = vi.spyOn(
+      echo as unknown as { getTodayMainUsageTokens(): Promise<number> },
+      'getTodayMainUsageTokens'
     );
     const loadNextWakeAt = vi.spyOn(
       echo as unknown as { loadNextWakeAt(): Promise<string | null> },
@@ -1407,7 +1483,7 @@ describe('Echo run preconditions', () => {
 
     expect(result).toEqual({ shouldRun: true, unreadCheckMs: 0 });
     expect(validateChatMessage).not.toHaveBeenCalled();
-    expect(getTodayUsage).not.toHaveBeenCalled();
+    expect(getTodayMainUsageTokens).not.toHaveBeenCalled();
     expect(loadNextWakeAt).not.toHaveBeenCalled();
     expect(findEmittedEvent('system.run_decision.evaluated')).toMatchObject({
       payload: {
@@ -1430,9 +1506,9 @@ describe('Echo run preconditions', () => {
       echo as unknown as { validateChatMessage(): Promise<boolean> },
       'validateChatMessage'
     ).mockResolvedValue(true);
-    const getTodayUsage = vi.spyOn(
-      echo as unknown as { getTodayUsage(): Promise<Usage | null> },
-      'getTodayUsage'
+    const getTodayMainUsageTokens = vi.spyOn(
+      echo as unknown as { getTodayMainUsageTokens(): Promise<number> },
+      'getTodayMainUsageTokens'
     );
     const loadNextWakeAt = vi.spyOn(
       echo as unknown as { loadNextWakeAt(): Promise<string | null> },
@@ -1441,7 +1517,7 @@ describe('Echo run preconditions', () => {
     const result = await resolveRunDecision(echo);
 
     expect(result.shouldRun).toBe(true);
-    expect(getTodayUsage).not.toHaveBeenCalled();
+    expect(getTodayMainUsageTokens).not.toHaveBeenCalled();
     expect(loadNextWakeAt).not.toHaveBeenCalled();
   });
 
@@ -1466,9 +1542,9 @@ describe('Echo run preconditions', () => {
       TOKEN_LIMITS.HARD_LIMIT_BUFFER_FACTOR
     );
     vi.spyOn(
-      echo as unknown as { getTodayUsage(): Promise<Usage | null> },
-      'getTodayUsage'
-    ).mockResolvedValue(createUsage(hardLimit));
+      echo as unknown as { getTodayMainUsageTokens(): Promise<number> },
+      'getTodayMainUsageTokens'
+    ).mockResolvedValue(hardLimit);
     const loadNextWakeAt = vi
       .spyOn(
         echo as unknown as { loadNextWakeAt(): Promise<string | null> },
@@ -1491,7 +1567,7 @@ describe('Echo run preconditions', () => {
         previousValue: '2026-03-22T00:59:00.000Z',
         nextValue: '2026-03-22T01:01:00.000Z',
         reason: 'hard_token_limit_defer',
-        totalTokens: hardLimit,
+        mainTokens: hardLimit,
         hardLimit,
       },
     });
@@ -1518,9 +1594,9 @@ describe('Echo run preconditions', () => {
       TOKEN_LIMITS.HARD_LIMIT_BUFFER_FACTOR
     );
     vi.spyOn(
-      echo as unknown as { getTodayUsage(): Promise<Usage | null> },
-      'getTodayUsage'
-    ).mockResolvedValue(createUsage(hardLimit));
+      echo as unknown as { getTodayMainUsageTokens(): Promise<number> },
+      'getTodayMainUsageTokens'
+    ).mockResolvedValue(hardLimit);
     vi.spyOn(
       echo as unknown as { loadNextWakeAt(): Promise<string | null> },
       'loadNextWakeAt'
@@ -1551,9 +1627,9 @@ describe('Echo run preconditions', () => {
       'validateChatMessage'
     ).mockResolvedValue(false);
     vi.spyOn(
-      echo as unknown as { getTodayUsage(): Promise<Usage | null> },
-      'getTodayUsage'
-    ).mockResolvedValue(createUsage(TOKEN_LIMITS.DAILY_HARD_LIMIT));
+      echo as unknown as { getTodayMainUsageTokens(): Promise<number> },
+      'getTodayMainUsageTokens'
+    ).mockResolvedValue(TOKEN_LIMITS.DAILY_HARD_LIMIT);
     vi.spyOn(
       echo as unknown as { loadNextWakeAt(): Promise<string | null> },
       'loadNextWakeAt'
@@ -1594,9 +1670,9 @@ describe('Echo run preconditions', () => {
       'validateChatMessage'
     ).mockResolvedValue(false);
     vi.spyOn(
-      echo as unknown as { getTodayUsage(): Promise<Usage | null> },
-      'getTodayUsage'
-    ).mockResolvedValue(createUsage(100_000));
+      echo as unknown as { getTodayMainUsageTokens(): Promise<number> },
+      'getTodayMainUsageTokens'
+    ).mockResolvedValue(100_000);
     vi.spyOn(
       echo as unknown as { loadNextWakeAt(): Promise<string | null> },
       'loadNextWakeAt'
@@ -1630,9 +1706,9 @@ describe('Echo run preconditions', () => {
       'validateChatMessage'
     ).mockResolvedValue(false);
     vi.spyOn(
-      echo as unknown as { getTodayUsage(): Promise<Usage | null> },
-      'getTodayUsage'
-    ).mockResolvedValue(createUsage(0));
+      echo as unknown as { getTodayMainUsageTokens(): Promise<number> },
+      'getTodayMainUsageTokens'
+    ).mockResolvedValue(0);
     vi.spyOn(
       echo as unknown as { loadNextWakeAt(): Promise<string | null> },
       'loadNextWakeAt'
@@ -1666,9 +1742,9 @@ describe('Echo run preconditions', () => {
       'validateChatMessage'
     ).mockResolvedValue(false);
     vi.spyOn(
-      echo as unknown as { getTodayUsage(): Promise<Usage | null> },
-      'getTodayUsage'
-    ).mockResolvedValue(createUsage(0));
+      echo as unknown as { getTodayMainUsageTokens(): Promise<number> },
+      'getTodayMainUsageTokens'
+    ).mockResolvedValue(0);
     vi.spyOn(
       echo as unknown as { loadNextWakeAt(): Promise<string | null> },
       'loadNextWakeAt'
@@ -1702,9 +1778,9 @@ describe('Echo run preconditions', () => {
       'validateChatMessage'
     ).mockResolvedValue(false);
     vi.spyOn(
-      echo as unknown as { getTodayUsage(): Promise<Usage | null> },
-      'getTodayUsage'
-    ).mockResolvedValue(createUsage(0));
+      echo as unknown as { getTodayMainUsageTokens(): Promise<number> },
+      'getTodayMainUsageTokens'
+    ).mockResolvedValue(0);
     vi.spyOn(
       echo as unknown as { loadNextWakeAt(): Promise<string | null> },
       'loadNextWakeAt'

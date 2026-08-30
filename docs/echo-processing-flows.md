@@ -62,19 +62,19 @@ flowchart TD
   state -->|Yes| unread[/未読メッセージ確認/]
   unread --> hasUnread{未読あり?}
   hasUnread -->|Yes| thinking[[ThinkingEngine.think]]
-  hasUnread -->|No| limits[(usage / next_wake_at 読み込み)]
-  limits --> gate{token limit / next wake条件を満たす?}
+  hasUnread -->|No| limits[(Main usage / next_wake_at 読み込み)]
+  limits --> gate{Main token limit / next wake条件を満たす?}
 
   gate -->|No| alarm
   gate -->|Yes| thinking
   thinking --> success{ThinkingEngine 成功?}
-  success -->|Yes| persist[(usage / next wake 保存)]
+  success -->|Yes| persist[(合算usage / Main usage / next wake 保存)]
   success -->|No| failed[session.failed event]
   persist --> persisted{保存成功?}
   persisted -->|Yes| alarm
   persisted -->|No| runFailed[system.run.failed event]
   failed --> billed{課金済みusageあり?}
-  billed -->|Yes| failedUsage[(usage保存を試行)]
+  billed -->|Yes| failedUsage[(合算usage / Main usage 保存を試行)]
   billed -->|No| runFailed
   failedUsage --> runFailed
   runFailed --> alarm

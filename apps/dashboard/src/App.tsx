@@ -1013,7 +1013,7 @@ function InstanceStatusCard(props: {
           <strong>{formatMainLlmLabel(instance.runtime)}</strong>
         </p>
         <p>
-          <span>Daily limit</span>
+          <span>Main daily limit</span>
           <strong>{formatDailyTokenLimit(instance.runtime)}</strong>
         </p>
         <p>
@@ -1311,7 +1311,7 @@ function InstanceSnapshot(props: {
           </strong>
         </div>
         <div className="summary-metric">
-          <span>Daily limit</span>
+          <span>Main daily limit</span>
           <strong>{formatDailyTokenLimit(status.runtime)}</strong>
         </div>
         <div className="summary-metric">

@@ -133,7 +133,7 @@ alarm が発火したが、思考 session を実行しない場合。
 | 項目           | 見積もり                                                                   |
 | -------------- | -------------------------------------------------------------------------- |
 | DO requests    | 1 alarm invocation                                                         |
-| Storage reads  | `id`、`name`、state、usage、next wake などの小さい key read                |
+| Storage reads  | `id`、`name`、state、Main usage counter、next wake などの小さい key read   |
 | Storage writes | event rows 約 4 件 + `setAlarm()` 1 件                                     |
 | 外部 API       | Discord unread check: 3 channels x 2 calls = 約 6 calls / alarm / instance |
 
@@ -165,12 +165,12 @@ alarm が思考 session を実行する場合。skip path の固定コストに�
 
 追加 request / storage の概算:
 
-| 項目           | 追加コスト                                                                                                                                         |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Model API      | `T` calls                                                                                                                                          |
-| Discord API    | startup `check_notifications` でさらに約 6 calls。`read_chat_messages` / `send_chat_message` / reaction tool は tool 使用分だけ追加                |
-| Storage reads  | usage / schedule / cognitive domain、Memory recall source 最大500 rows、`search_memory`使用時は追加の最大500 rows、notes tool使用時は最大200 notes |
-| Storage writes | state Running / Idling、session / model / tool event、usage、next wake、cognitive domain / Memory commit、`store_memory`使用分等                   |
+| 項目           | 追加コスト                                                                                                                                                              |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Model API      | `T` calls                                                                                                                                                               |
+| Discord API    | startup `check_notifications` でさらに約 6 calls。`read_chat_messages` / `send_chat_message` / reaction tool は tool 使用分だけ追加                                     |
+| Storage reads  | usage / Main usage counter / schedule / cognitive domain、Memory recall source 最大500 rows、`search_memory`使用時は追加の最大500 rows、notes tool使用時は最大200 notes |
+| Storage writes | state Running / Idling、session / model / tool event、usage / Main usage counter、next wake、cognitive domain / Memory commit、`store_memory`使用分等                   |
 
 event rows written の目安:
 
@@ -188,6 +188,8 @@ skip path events
 ### Cognitive Module
 
 Cognitive phaseのmodel callとstorage操作は、各thinking sessionのrun budgetへ含める。Mainが`store_memory` / `search_memory`を選んだ場合は、そのtool callのcostも同じbudgetへ加算する。
+
+Dashboard向けの日別usageと推定コストにはMain / Cognitive Moduleの両方を含める。scheduled起動のsoft / hard token limitは、Durable Objectの`main_usage_tokens`に分離保存したMain model usageだけで判定する。
 
 変数`T`をMain model turn数、`P = T + 1`をcognitive phase数とする。各Main model turnの前に`pre_main`を1回、session終了時に`post_main`を1回実行し、各phaseで2 moduleを呼ぶ。
 

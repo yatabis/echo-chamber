@@ -75,6 +75,7 @@ pnpm dev
 
 Main / Cognitive Module の LLM 設定と token limit は `packages/core/src/echo/instance-definitions.ts` の各 instance 定義で管理します。
 API key などの secret と、一時的な上書きだけを環境変数で指定します。
+token limit は scheduled 起動時の Main model usage に適用し、Cognitive Module の usage は判定に含めません。Dashboard の usage と推定コストには両方を含めます。
 
 Rapid-MLX や LM Studio などの OpenAI 互換 Chat Completions server を一時的に使う場合は、対象 instance の prefix を付けてローカルの `apps/cloudflare-workers/.dev.vars` に追加します。
 
