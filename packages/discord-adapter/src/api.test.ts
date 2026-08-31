@@ -131,4 +131,24 @@ describe('discord api helpers', () => {
     expect(rest.setToken).toHaveBeenCalledWith('token');
     expect(rest.get).toHaveBeenCalledWith('/users/@me');
   });
+
+  it('makeRequest hook は SDK の各 HTTP attempt 直前に実行する', async () => {
+    const beforeRequest = vi.fn();
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('{}'));
+
+    await getCurrentUser('token', beforeRequest);
+
+    const constructorCalls = vi.mocked(REST).mock.calls;
+    const options = constructorCalls[constructorCalls.length - 1]?.[0];
+    if (options?.makeRequest === undefined) {
+      throw new Error('Expected guarded Discord makeRequest');
+    }
+    await options.makeRequest('https://discord.com/api/v10/users/@me', {});
+
+    expect(beforeRequest).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    fetchMock.mockRestore();
+  });
 });

@@ -159,6 +159,20 @@ function createMockSqlStorage(): MockSqlStorage {
         one: () => rows[0],
       };
     },
+    (queryLower, args): MockSqlResult | null => {
+      if (
+        !queryLower.includes('from memories') ||
+        !queryLower.includes('where id =')
+      ) {
+        return null;
+      }
+      const targetId = args[0] as string;
+      const row = tables.memories.find((memory) => memory.id === targetId);
+      return {
+        toArray: () => (row === undefined ? [] : [{ ...row }]),
+        one: () => (row === undefined ? undefined : { ...row }),
+      };
+    },
     (queryLower): MockSqlResult | null => {
       if (
         !queryLower.includes('from memories') ||
@@ -360,6 +374,62 @@ describe('MemorySystem', () => {
   });
 
   describe('storeMemory', () => {
+    it('embedding 準備だけでは row を書かず、同期 commit で初めて反映する', async () => {
+      const emotion: Emotion = {
+        valence: 0.2,
+        arousal: 0.3,
+        labels: ['calm'],
+      };
+
+      const prepared = await memorySystem.prepareMemoryWrite(
+        'cognitive:boundary-prepared:memory:0',
+        'Prepared memory',
+        emotion,
+        'semantic'
+      );
+
+      expect(mockSql._tables.memories).toEqual([]);
+      const receipt = memorySystem.commitPreparedMemoryWrites([prepared]);
+
+      expect(receipt).toEqual({
+        storedIds: ['cognitive:boundary-prepared:memory:0'],
+        existingIds: [],
+        evicted: [],
+      });
+      expect(mockSql._tables.memories).toHaveLength(1);
+    });
+
+    it('deterministic commit id は重複 embedding と二重保存を避ける', async () => {
+      const emotion: Emotion = {
+        valence: 0.2,
+        arousal: 0.3,
+        labels: ['calm'],
+      };
+
+      await expect(
+        memorySystem.storeMemoryIdempotently(
+          'cognitive:boundary-1:memory:0',
+          'Committed memory',
+          emotion,
+          'semantic'
+        )
+      ).resolves.toBe('stored');
+      await expect(
+        memorySystem.storeMemoryIdempotently(
+          'cognitive:boundary-1:memory:0',
+          'Committed memory',
+          emotion,
+          'semantic'
+        )
+      ).resolves.toBe('existing');
+
+      expect(mockSql._tables.memories).toHaveLength(1);
+      expect(mockSql._tables.memories[0]?.id).toBe(
+        'cognitive:boundary-1:memory:0'
+      );
+      expect(mockEmbeddingService.embed).toHaveBeenCalledTimes(1); // eslint-disable-line @typescript-eslint/unbound-method
+    });
+
     it('新しいメモリを保存できる', async () => {
       const emotion: Emotion = {
         valence: 0.8,
@@ -916,6 +986,24 @@ describe('MemorySystem', () => {
         },
       });
     });
+
+    it('rerank の external request budget 枯渇はvector fallbackで隠さない', async () => {
+      const budgetError = Object.assign(new Error('budget exhausted'), {
+        code: 'external_request_budget_exceeded',
+      });
+      vi.mocked(mockEmbeddingService.embed).mockResolvedValue([1, 0]); // eslint-disable-line @typescript-eslint/unbound-method
+      mockedRerank.mockRejectedValue(budgetError);
+      mockSql._tables.memories = [
+        createMockMemoryRow({
+          content: 'Memory 1',
+          embedding: float32ArrayToBuffer([1, 0]),
+        }),
+      ];
+
+      await expect(memorySystem.searchMemory('budget query')).rejects.toBe(
+        budgetError
+      );
+    });
   });
 
   describe('reEmbedStaleMemories', () => {
@@ -1109,6 +1197,62 @@ describe('MemorySystem', () => {
           failedCount: 1,
         },
       });
+    });
+
+    it('共有 external request budget 枯渇時は残りを反復せず停止する', async () => {
+      const budgetError = Object.assign(new Error('budget exhausted'), {
+        code: 'external_request_budget_exceeded',
+      });
+      vi.mocked(mockEmbeddingService.embed).mockRejectedValue(budgetError); // eslint-disable-line @typescript-eslint/unbound-method
+      mockSql._tables.memories = [
+        createMockMemoryRow({
+          content: 'Memory A',
+          embedding_model: 'openai/text-embedding-3-small',
+        }),
+        createMockMemoryRow({
+          content: 'Memory B',
+          embedding_model: 'openai/text-embedding-3-small',
+        }),
+      ];
+
+      await expect(memorySystem.reEmbedStaleMemories()).rejects.toBe(
+        budgetError
+      );
+      expect(mockEmbeddingService.embed).toHaveBeenCalledTimes(1); // eslint-disable-line @typescript-eslint/unbound-method
+    });
+
+    it('途中で external request budget が枯渇しても成功済みの再 embedding を直後の検索に反映する', async () => {
+      const budgetError = Object.assign(new Error('budget exhausted'), {
+        code: 'external_request_budget_exceeded',
+      });
+      const embedding = new Array<number>(1536).fill(0.5);
+      mockSql._tables.memories = [
+        createMockMemoryRow({
+          content: 'Memory A',
+          embedding_model: 'openai/text-embedding-3-small',
+          updated_at: '2025-01-25T10:00:00.000Z',
+        }),
+        createMockMemoryRow({
+          content: 'Memory B',
+          embedding_model: 'openai/text-embedding-3-small',
+          updated_at: '2025-01-25T11:00:00.000Z',
+        }),
+      ];
+
+      expect(await memorySystem.searchMemory('before re-embedding')).toEqual(
+        []
+      );
+      vi.mocked(mockEmbeddingService.embed) // eslint-disable-line @typescript-eslint/unbound-method
+        .mockResolvedValueOnce(embedding)
+        .mockRejectedValueOnce(budgetError)
+        .mockResolvedValueOnce(embedding);
+
+      await expect(memorySystem.reEmbedStaleMemories()).rejects.toBe(
+        budgetError
+      );
+      const results = await memorySystem.searchMemory('Memory A');
+
+      expect(results.map((result) => result.content)).toEqual(['Memory A']);
     });
   });
 });

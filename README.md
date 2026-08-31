@@ -73,8 +73,9 @@ pnpm dev
 
 ### インスタンスごとの LLM / token limit 設定
 
-通常の LLM / token limit は `packages/core/src/echo/instance-definitions.ts` の各 instance 定義で管理します。
+Main / Cognitive Module の LLM 設定と token limit は `packages/core/src/echo/instance-definitions.ts` の各 instance 定義で管理します。
 API key などの secret と、一時的な上書きだけを環境変数で指定します。
+token limit は scheduled 起動時の Main model usage に適用し、Cognitive Module の usage は判定に含めません。Dashboard の usage と推定コストには両方を含めます。
 
 Rapid-MLX や LM Studio などの OpenAI 互換 Chat Completions server を一時的に使う場合は、対象 instance の prefix を付けてローカルの `apps/cloudflare-workers/.dev.vars` に追加します。
 
@@ -96,6 +97,14 @@ OpenAI 互換 Chat Completions server では `*_MAIN_LLM_BASE_URL` が必須で�
 Chat Completions API 利用時は、prompt template が user message を必須とするモデル向けに `developer` message を `user` role として渡します。
 local runtime には `max_tokens: 32768`、`temperature: 0.7`、`top_p: 0.8`、`presence_penalty: 1.5`、`top_k: 20`、`chat_template_kwargs: { enable_thinking: false }` を固定で指定します。
 
+Memory / Emotion Cognitive Module は、各 instance の `cognitiveModules` にある model / reasoning effort を共有し、認証には Worker の `OPENAI_API_KEY` を使用します。現在の Rin / Marie の default はともに `gpt-5.6-luna` / `low` です。一時的な instance 別上書きには `RIN_COGNITIVE_MODULE_*` / `MARIE_COGNITIVE_MODULE_*` を使います。prefix なしの `COGNITIVE_MODULE_MODEL` / `COGNITIVE_MODULE_REASONING_EFFORT` は、instance definition で該当項目を省略した場合だけ使う global fallback です。詳細は [Cognitive Module Architecture](./docs/cognitive-module-architecture.md) を参照してください。
+
+一時上書き例:
+
+```dotenv
+MARIE_COGNITIVE_MODULE_REASONING_EFFORT=medium
+```
+
 標準の LM Studio / Rapid-MLX には独自 cache field を送りません。E.C.H.O. 向け session cache protocol を実装した専用 runtime を使う場合だけ、次を追加します。
 
 ```dotenv
@@ -115,6 +124,7 @@ pnpm --filter @echo-chamber/cloudflare-workers exec wrangler secret put LOG_CHAN
 ```
 
 `ENVIRONMENT=local` のときのみ `POST /{instanceId}/run` が有効です。
+この手動実行は Echo の state を検証したうえで、alarm 用の未読、token limit、`next_wake_at` による起動判定を経ずに 1 session を開始します。
 
 ## Cloudflare Access 認証
 

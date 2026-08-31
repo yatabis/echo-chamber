@@ -294,14 +294,36 @@ describe('dashboard contract schemas', () => {
       state: 'Idling',
       nextAlarm: null,
       nextWakeAt: '2026-03-19T13:00:00.000Z',
-      context: {
-        content: 'Continue from the latest dashboard work.',
+      cognitive: {
+        domainVersion: 3,
         emotion: {
           valence: 0.3,
           arousal: 0.4,
-          labels: ['focused'],
+          labels: ['intellectual-engagement'],
         },
-        createdAt: '2026-03-19T11:00:00.000Z',
+        previousSessionMemory: {
+          content: 'Continue from the latest dashboard work.',
+          type: 'episode',
+          emotion: {
+            valence: 0.2,
+            arousal: 0.3,
+            labels: ['focused'],
+          },
+          createdAt: '2026-03-19T11:00:00.000Z',
+        },
+        recalledMemories: [
+          {
+            content: 'Review the current dashboard boundary.',
+            type: 'semantic',
+            emotion: {
+              valence: 0.1,
+              arousal: 0.2,
+              labels: ['calm'],
+            },
+            createdAt: '2026-03-18T11:00:00.000Z',
+          },
+        ],
+        lastBoundaryId: 'activation-1:3:post_main',
         updatedAt: '2026-03-19T12:00:00.000Z',
       },
       runtime: {
@@ -322,7 +344,7 @@ describe('dashboard contract schemas', () => {
           emotion: {
             valence: 0.4,
             arousal: 0.2,
-            labels: ['focus'],
+            labels: ['focus', 'curious', 'engaged', 'calm', 'alert', 'steady'],
           },
           embedding_model: 'text-embedding-3-small',
           createdAt: '2026-03-19T12:00:00.000Z',
@@ -366,9 +388,15 @@ describe('dashboard contract schemas', () => {
 
     expect(payload.memories[0]?.type).toBe('semantic');
     expect(payload.notes[0]?.id).toBe('note-1');
-    expect(payload.context?.content).toBe(
+    expect(payload.cognitive.previousSessionMemory?.content).toBe(
       'Continue from the latest dashboard work.'
     );
+    expect(payload.cognitive.emotion?.labels).toEqual([
+      'intellectual-engagement',
+    ]);
+    expect(payload.cognitive.recalledMemories).toHaveLength(1);
+    expect(payload.memories[0]?.emotion.labels).toHaveLength(6);
+    expect(payload.cognitive.domainVersion).toBe(3);
   });
 
   it('rejects invalid /:instanceId payload', () => {
@@ -379,7 +407,14 @@ describe('dashboard contract schemas', () => {
         state: 'Idling',
         nextAlarm: null,
         nextWakeAt: null,
-        context: null,
+        cognitive: {
+          domainVersion: 0,
+          emotion: null,
+          previousSessionMemory: null,
+          recalledMemories: [],
+          lastBoundaryId: null,
+          updatedAt: null,
+        },
         runtime: {
           mainLlm: {
             provider: 'openai',

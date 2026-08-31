@@ -56,6 +56,40 @@ describe('OpenAIChatCompletionsModel', () => {
     vi.resetAllMocks();
   });
 
+  it('SDK retry 設定と各 HTTP attempt の admission hook を caller が指定できる', async () => {
+    const beforeRequest = vi.fn();
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('{}'));
+    new OpenAIChatCompletionsModel({
+      apiKey: 'test-key',
+      model: 'qwen3.6',
+      maxRetries: 0,
+      beforeRequest,
+    });
+
+    expect(mockOpenAIConstructor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: 'test-key',
+        baseURL: undefined,
+        maxRetries: 0,
+      })
+    );
+    const constructorCalls = mockOpenAIConstructor.mock.calls as unknown as [
+      { fetch?: typeof fetch },
+    ][];
+    const constructorOptions = constructorCalls[0]?.[0];
+    if (constructorOptions?.fetch === undefined) {
+      throw new Error('Expected guarded OpenAI fetch');
+    }
+    expect(typeof constructorOptions.fetch).toBe('function');
+    await constructorOptions.fetch('https://api.openai.test', {});
+
+    expect(beforeRequest).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    fetchMock.mockRestore();
+  });
+
   it('createChatCompletion は provider-neutral request を Chat Completions 形式へ変換する', async () => {
     const model = new OpenAIChatCompletionsModel({
       apiKey: 'local-key',

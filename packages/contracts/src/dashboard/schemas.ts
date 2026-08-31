@@ -6,6 +6,13 @@ import { ECHO_INSTANCE_IDS } from '@echo-chamber/core/types/echo-config';
 
 const finiteNumber = z.number();
 
+/** 現行出力制約の導入前に保存された Emotion を読むためのschema。 */
+const persistedEmotionSchema = coreEmotionSchema
+  .extend({
+    labels: z.array(z.string()),
+  })
+  .strict();
+
 /**
  * Echo 本体の state 文字列。
  */
@@ -281,22 +288,30 @@ export const echoMemorySchema = z
   .object({
     content: z.string(),
     type: z.enum(MEMORY_TYPES),
-    emotion: coreEmotionSchema.strict(),
+    emotion: persistedEmotionSchema,
     embedding_model: z.string(),
     createdAt: z.string(),
     updatedAt: z.string(),
   })
   .strict();
 
-/**
- * Dashboard に返す最新 runtime context snapshot。
- */
-export const dashboardContextSnapshotSchema = z
+/** Dashboardに表示するCognitive Memory。 */
+export const dashboardCognitiveMemorySchema = echoMemorySchema.pick({
+  content: true,
+  type: true,
+  emotion: true,
+  createdAt: true,
+});
+
+/** Cognitive Domainの確定済み状態を表示するread model。 */
+export const dashboardCognitiveModuleStatusSchema = z
   .object({
-    content: z.string(),
-    emotion: coreEmotionSchema.strict(),
-    createdAt: z.string(),
-    updatedAt: z.string(),
+    domainVersion: z.number().int().nonnegative(),
+    emotion: persistedEmotionSchema.nullable(),
+    previousSessionMemory: dashboardCognitiveMemorySchema.nullable(),
+    recalledMemories: z.array(dashboardCognitiveMemorySchema),
+    lastBoundaryId: z.string().nullable(),
+    updatedAt: z.string().nullable(),
   })
   .strict();
 
@@ -310,7 +325,7 @@ export const echoStatusSchema = z
     state: echoStateSchema,
     nextAlarm: z.string().nullable(),
     nextWakeAt: z.string().nullable(),
-    context: dashboardContextSnapshotSchema.nullable(),
+    cognitive: dashboardCognitiveModuleStatusSchema,
     runtime: dashboardRuntimeConfigSchema,
     memories: z.array(echoMemorySchema),
     notes: z.array(noteSchema),

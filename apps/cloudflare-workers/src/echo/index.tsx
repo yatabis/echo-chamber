@@ -1,6 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { Hono } from 'hono';
 
+import type { EmbeddingService } from '@echo-chamber/cloudflare-runtime/embedding-service';
 import { MemorySystem } from '@echo-chamber/cloudflare-runtime/memory-system';
 import { NoteSystem } from '@echo-chamber/cloudflare-runtime/note-system';
 import {
@@ -23,7 +24,12 @@ import {
 import { canonicalRuntimeTools } from '@echo-chamber/core/agent/runtime-tools/catalog';
 import { bindRuntimeTools } from '@echo-chamber/core/agent/runtime-tools/tool';
 import type { AgentSessionTool } from '@echo-chamber/core/agent/session';
-import { ThinkingEngine as AgentThinkingEngine } from '@echo-chamber/core/agent/thinking-engine';
+import {
+  ThinkingEngine as AgentThinkingEngine,
+  isThinkingEngineExecutionError,
+  type ThinkingEngineExecutionError,
+  type ThinkingEngineResult,
+} from '@echo-chamber/core/agent/thinking-engine';
 import {
   ALARM_CONFIG,
   SCHEDULING_CONFIG,
@@ -46,10 +52,9 @@ import {
   getTodayUsageKey,
   normalizeUsageRecord,
 } from '@echo-chamber/core/echo/usage';
-import type { ContextSnapshot } from '@echo-chamber/core/ports/context';
 import { emitEchoEvent } from '@echo-chamber/core/ports/echo-event';
 import type { EchoEventPort } from '@echo-chamber/core/ports/echo-event';
-import type { ModelPort } from '@echo-chamber/core/ports/model';
+import type { ModelPort, ModelUsage } from '@echo-chamber/core/ports/model';
 import type { EchoInstanceId } from '@echo-chamber/core/types/echo-config';
 import { isValidInstanceId } from '@echo-chamber/core/types/echo-config';
 import { formatDatetime } from '@echo-chamber/core/utils/datetime';
@@ -62,6 +67,7 @@ import {
 import { OpenAIChatCompletionsModel } from '@echo-chamber/openai-adapter/openai-chat-completions-model';
 import { OpenAIResponsesModel } from '@echo-chamber/openai-adapter/openai-responses-model';
 
+import { resolveCognitiveModuleConfig } from '../config/cognitive-module-config';
 import {
   resolveEchoRuntimeBindings,
   type EchoChatChannelBinding,
@@ -76,22 +82,40 @@ import { createEmbeddingService } from '../embedding/create-embedding-service';
 import { createRerankingService } from '../reranking/create-reranking-service';
 import { createCloudflareEchoEventPort } from '../utils/echo-event';
 
+import { CognitiveModuleDomainStore } from './cognitive-module-domain';
+import {
+  createCognitiveModuleOrchestrator,
+  isRetryableCognitiveModuleError,
+} from './cognitive-modules';
 import {
   DASHBOARD_ACTION_ANALYSIS_PERIOD_DAYS,
   buildDashboardActionAnalysisResponse,
 } from './dashboard-action-analysis';
 import { buildDashboardSessionLogsResponse } from './dashboard-activities';
 import { SqliteEchoEventArchive, getEventArchiveDay } from './event-archive';
+import {
+  DEFAULT_NOTIFICATION_REQUEST_BUDGET,
+  ExternalRequestBudget,
+  type ExternalRequestBudgetSnapshot,
+} from './external-request-budget';
 import { createToolExecutionContext } from './tool-context';
 
 async function fetchUnreadMessageCounts(
   token: string,
-  chatChannels: readonly EchoChatChannelBinding[]
+  chatChannels: readonly EchoChatChannelBinding[],
+  beforeRequest?: () => void
 ): Promise<{ channel: EchoChatChannelBinding; unreadCount: number }[]> {
   return await Promise.all(
     chatChannels.map(async (channel) => ({
       channel,
-      unreadCount: await getUnreadMessageCount(token, channel.discordChannelId),
+      unreadCount:
+        beforeRequest === undefined
+          ? await getUnreadMessageCount(token, channel.discordChannelId)
+          : await getUnreadMessageCount(
+              token,
+              channel.discordChannelId,
+              beforeRequest
+            ),
     }))
   );
 }
@@ -100,6 +124,11 @@ interface RunDecision {
   shouldRun: boolean;
   unreadCheckMs: number;
 }
+
+type RunTrigger = 'scheduled' | 'manual';
+
+/** usage 日付キーごとの Main model token 数。 */
+type DailyMainUsageTokenRecord = Record<string, number>;
 
 interface RunExecutionResult {
   unreadCheckMs: number;
@@ -133,6 +162,31 @@ const DASHBOARD_STATUS_CACHE_TTL_MS = 30_000;
 const DASHBOARD_SUMMARY_CACHE_TTL_MS = 30_000;
 const DASHBOARD_SESSION_LOGS_CACHE_TTL_MS = 30_000;
 const DASHBOARD_ACTION_ANALYSIS_CACHE_TTL_MS = 60_000;
+const USAGE_STORAGE_KEY = 'usage';
+const MAIN_USAGE_TOKENS_STORAGE_KEY = 'main_usage_tokens';
+
+/**
+ * Main token counter の保存値から有限な非負値だけを取り出す。
+ *
+ * @param value Durable Object storage から読んだ未検証値
+ * @returns 正規化済みの日別 Main token record
+ */
+function normalizeDailyMainUsageTokenRecord(
+  value: unknown
+): DailyMainUsageTokenRecord {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      (entry): entry is [string, number] =>
+        typeof entry[1] === 'number' &&
+        Number.isFinite(entry[1]) &&
+        entry[1] >= 0
+    )
+  );
+}
 
 /**
  * 短時間だけ使う in-memory dashboard read cache entry を作る。
@@ -169,6 +223,8 @@ export class Echo extends DurableObject<Env> {
   private readonly _env: Env;
   private readonly noteSystem: NoteSystem;
   private currentSessionId: string | null = null;
+  private activeExternalRequestBudget: ExternalRequestBudget | null = null;
+  private activeNotificationRequestBudget: ExternalRequestBudget | null = null;
   private dashboardActionAnalysisCache: DashboardReadCacheEntry<DashboardActionAnalysisResponse> | null =
     null;
   private dashboardSessionLogsCache: DashboardReadCacheEntry<DashboardSessionLogsResponse> | null =
@@ -183,6 +239,7 @@ export class Echo extends DurableObject<Env> {
   private instanceDefinition: EchoInstanceDefinition | null = null;
   private runtimeBindings: EchoRuntimeBindings | null = null;
   private memorySystem: MemorySystem | null = null;
+  private cognitiveDomainStore: CognitiveModuleDomainStore | null = null;
   private lastUnreadMessageDetails: {
     totalUnreadCount: number;
     channels: {
@@ -211,6 +268,9 @@ export class Echo extends DurableObject<Env> {
       getInstanceId: (): string | null => this.instanceDefinition?.id ?? null,
       getSessionId: (): string | null => this.currentSessionId,
       eventArchive: this.eventArchive,
+      beforeRequest: (): void => {
+        this.reserveNotificationRequest();
+      },
       getDiscordConfig: (): { token: string; channelId: string } | null => {
         if (this.runtimeBindings === null) {
           return null;
@@ -261,13 +321,61 @@ export class Echo extends DurableObject<Env> {
         if (env.ENVIRONMENT !== 'local') {
           return c.notFound();
         }
-        await this.run();
+        await this.run('manual');
         return c.text('OK.');
       });
   }
 
   async fetch(request: Request): Promise<Response> {
     return this.router.fetch(request);
+  }
+
+  /** この invocation が共有予算を新規作成したかを返す。 */
+  private beginExternalRequestBudget(): boolean {
+    if (this.activeExternalRequestBudget !== null) {
+      return false;
+    }
+    this.activeExternalRequestBudget = new ExternalRequestBudget();
+    this.activeNotificationRequestBudget = new ExternalRequestBudget(
+      DEFAULT_NOTIFICATION_REQUEST_BUDGET
+    );
+    return true;
+  }
+
+  /** 所有している invocation の終了時だけ共有予算を破棄する。 */
+  private endExternalRequestBudget(ownsBudget: boolean): void {
+    if (ownsBudget) {
+      this.activeExternalRequestBudget = null;
+      this.activeNotificationRequestBudget = null;
+    }
+  }
+
+  /** provider の実 request 直前に active invocation の予算を消費する。 */
+  private reserveExternalRequest(): void {
+    this.activeExternalRequestBudget?.reserve();
+  }
+
+  /** Discord event 通知のために分離した予約枠を消費する。 */
+  private reserveNotificationRequest(): void {
+    this.activeNotificationRequestBudget?.reserve();
+  }
+
+  /** active invocation の外部 request 使用量を event 用に複製する。 */
+  private getExternalRequestBudgetSnapshot(): ExternalRequestBudgetSnapshot | null {
+    return this.activeExternalRequestBudget?.snapshot() ?? null;
+  }
+
+  /** 外部 provider の embedding call を共有 request budget に接続する。 */
+  private withExternalRequestBudgetForEmbedding(
+    service: EmbeddingService
+  ): EmbeddingService {
+    return {
+      modelIdentifier: service.modelIdentifier,
+      embed: async (text): Promise<number[]> => {
+        this.reserveExternalRequest();
+        return await service.embed(text);
+      },
+    };
   }
 
   /**
@@ -287,11 +395,17 @@ export class Echo extends DurableObject<Env> {
       this.store,
       id
     );
-    const embeddingService = createEmbeddingService(
+    const configuredEmbeddingService = createEmbeddingService(
       this._env,
       this.runtimeBindings.embeddingConfig,
       this.events
     );
+    const embeddingService =
+      this.runtimeBindings.embeddingConfig?.provider === 'workersai'
+        ? configuredEmbeddingService
+        : this.withExternalRequestBudgetForEmbedding(
+            configuredEmbeddingService
+          );
     const rerankingService = createRerankingService(this._env);
     this.memorySystem = new MemorySystem({
       sql: this.ctx.storage.sql,
@@ -299,10 +413,24 @@ export class Echo extends DurableObject<Env> {
       rerankingService,
       events: this.events,
     });
+    this.cognitiveDomainStore = new CognitiveModuleDomainStore({
+      storage: this.storage,
+      memory: this.memorySystem,
+      events: this.events,
+      isRetryable: isRetryableCognitiveModuleError,
+      onStateChanged: (): void => {
+        this.clearDashboardReadCache();
+      },
+    });
     const toolContext = createToolExecutionContext({
       chatBindings: this.getRuntimeBindingsOrThrow(),
       memorySystem: this.memorySystem,
       noteSystem: this.noteSystem,
+      getCurrentEmotion: async () =>
+        await this.getCognitiveDomainStoreOrThrow().getCurrentEmotion(),
+      beforeExternalRequest: (): void => {
+        this.reserveExternalRequest();
+      },
     });
     this.executableTools = bindRuntimeTools(canonicalRuntimeTools, toolContext);
     // ストレージにID/名前を保存（alarmから参照するため）
@@ -363,7 +491,16 @@ export class Echo extends DurableObject<Env> {
     return this.memorySystem;
   }
 
+  /** Cognitive Module の phase commit store を取得する。 */
+  private getCognitiveDomainStoreOrThrow(): CognitiveModuleDomainStore {
+    if (this.cognitiveDomainStore === null) {
+      throw new Error('CognitiveModuleDomainStore not initialized');
+    }
+    return this.cognitiveDomainStore;
+  }
+
   async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+    const ownsExternalRequestBudget = this.beginExternalRequestBudget();
     const alarmStartedAt = Date.now();
     let runResult: RunExecutionResult = {
       unreadCheckMs: 0,
@@ -428,15 +565,19 @@ export class Echo extends DurableObject<Env> {
       runResult = await this.run();
       await this.setNextAlarm();
     } finally {
-      await this.emitAlarmCompleted({
-        status: alarmStatus,
-        severity: alarmSeverity,
-        reason: alarmReason,
-        eventRetentionCleanup,
-        memoryReembeddingMaintenance,
-        alarmStartedAt,
-        runResult,
-      });
+      try {
+        await this.emitAlarmCompleted({
+          status: alarmStatus,
+          severity: alarmSeverity,
+          reason: alarmReason,
+          eventRetentionCleanup,
+          memoryReembeddingMaintenance,
+          alarmStartedAt,
+          runResult,
+        });
+      } finally {
+        this.endExternalRequestBudget(ownsExternalRequestBudget);
+      }
     }
   }
 
@@ -568,6 +709,7 @@ export class Echo extends DurableObject<Env> {
         alarmTotalMs: Date.now() - input.alarmStartedAt,
         unreadCheckMs: input.runResult.unreadCheckMs,
         thinkMs: input.runResult.thinkMs,
+        externalRequestBudget: this.getExternalRequestBudgetSnapshot(),
       },
     });
   }
@@ -643,7 +785,8 @@ export class Echo extends DurableObject<Env> {
     const state = await this.getState();
     const nextAlarm = await this.getNextAlarm();
     const nextWakeAt = await this.loadNextWakeAt();
-    const context = await this.loadContext();
+    const cognitive =
+      await this.getCognitiveDomainStoreOrThrow().getDashboardState();
     const usage = await this.getAllUsage();
 
     const memories = this.getMemorySystemOrThrow()
@@ -668,7 +811,7 @@ export class Echo extends DurableObject<Env> {
       state,
       nextAlarm,
       nextWakeAt,
-      context,
+      cognitive,
       runtime: this.getDashboardRuntimeConfig(),
       memories,
       notes,
@@ -814,7 +957,7 @@ export class Echo extends DurableObject<Env> {
    * 全期間のUsage履歴を取得
    */
   async getAllUsage(): Promise<UsageRecord> {
-    const usage = await this.storage.get('usage');
+    const usage = await this.storage.get(USAGE_STORAGE_KEY);
     return normalizeUsageRecord(usage);
   }
 
@@ -824,6 +967,53 @@ export class Echo extends DurableObject<Env> {
   async getTodayUsage(): Promise<Usage | null> {
     const usageRecord = await this.getAllUsage();
     return usageRecord[getTodayUsageKey()] ?? null;
+  }
+
+  /**
+   * scheduled 起動判定に使う、当日の Main model token 数を返す。
+   *
+   * @returns 当日の Main model token 数
+   */
+  private async getTodayMainUsageTokens(): Promise<number> {
+    const dateKey = getTodayUsageKey();
+    const mainUsageRecord = normalizeDailyMainUsageTokenRecord(
+      await this.storage.get(MAIN_USAGE_TOKENS_STORAGE_KEY)
+    );
+    const storedMainTokens = mainUsageRecord[dateKey];
+    if (storedMainTokens !== undefined) {
+      return storedMainTokens;
+    }
+
+    const usageRecord = await this.getAllUsage();
+    return this.getLegacyMainUsageTokens(usageRecord[dateKey]);
+  }
+
+  /**
+   * Main 専用 counter 導入前の model breakdown から Main token 数を復元する。
+   *
+   * @param usage 当日の合算 usage
+   * @returns 復元した Main model token 数
+   */
+  private getLegacyMainUsageTokens(usage: Usage | undefined): number {
+    if (usage === undefined) {
+      return 0;
+    }
+
+    const mainIdentity = this.getMainLLMUsageIdentity();
+    const matchingBreakdowns = usage.by_model.filter(
+      (breakdown) =>
+        breakdown.provider === mainIdentity.provider &&
+        breakdown.model === mainIdentity.model
+    );
+    if (matchingBreakdowns.length === 0) {
+      // 旧 record や当日中の model 変更は正確に分離できないため、過少計上を避ける。
+      return usage.total_tokens;
+    }
+
+    return matchingBreakdowns.reduce(
+      (total, breakdown) => total + breakdown.total_tokens,
+      0
+    );
   }
 
   async wake(force = false): Promise<void> {
@@ -890,8 +1080,20 @@ export class Echo extends DurableObject<Env> {
     }
   }
 
-  async run(): Promise<RunExecutionResult> {
-    const runDecision = await this.resolveRunDecision();
+  async run(trigger: RunTrigger = 'scheduled'): Promise<RunExecutionResult> {
+    const ownsExternalRequestBudget = this.beginExternalRequestBudget();
+    try {
+      return await this.runWithinExternalRequestBudget(trigger);
+    } finally {
+      this.endExternalRequestBudget(ownsExternalRequestBudget);
+    }
+  }
+
+  /** active 外部 request budget の内側で1回の思考実行を行う。 */
+  private async runWithinExternalRequestBudget(
+    trigger: RunTrigger
+  ): Promise<RunExecutionResult> {
+    const runDecision = await this.resolveRunDecision(trigger);
     if (!runDecision.shouldRun) {
       return {
         unreadCheckMs: runDecision.unreadCheckMs,
@@ -906,19 +1108,17 @@ export class Echo extends DurableObject<Env> {
 
     try {
       thinkStartedAt = Date.now();
-      const { context, nextWakeAt, usage } =
-        await this.createThinkingEngine().think();
+      const thinkingResult = await this.createThinkingEngine().think();
+      const { nextWakeAt, usage } = thinkingResult;
       thinkMs = Date.now() - thinkStartedAt;
-      if (context != null) {
-        await this.saveContext(context);
-      }
       if (nextWakeAt == null) {
         await this.clearNextWakeAt('finish_thinking');
       } else {
         await this.saveNextWakeAt(nextWakeAt, 'finish_thinking');
       }
       const totalUsage = await this.updateUsage(
-        convertUsage(usage, this.getMainLLMUsageIdentity())
+        this.createRecordedSessionUsage(thinkingResult),
+        thinkingResult.mainUsage
       );
       await emitEchoEvent(this.events, {
         type: 'usage.recorded',
@@ -927,11 +1127,37 @@ export class Echo extends DurableObject<Env> {
         payload: {
           usage,
           totalUsage,
+          externalRequestBudget: this.getExternalRequestBudgetSnapshot(),
         },
       });
     } catch (error) {
       if (thinkStartedAt !== 0) {
         thinkMs = Date.now() - thinkStartedAt;
+      }
+      let usageRecordingError: string | null = null;
+      if (
+        isThinkingEngineExecutionError(error) &&
+        error.usage.totalTokens > 0
+      ) {
+        try {
+          const totalUsage = await this.updateUsage(
+            this.createRecordedFailedSessionUsage(error),
+            error.mainUsage
+          );
+          await emitEchoEvent(this.events, {
+            type: 'usage.recorded',
+            severity: 'info',
+            summary: `failed session usage recorded: ${error.usage.totalTokens} tokens`,
+            payload: {
+              status: 'failed',
+              usage: error.usage,
+              totalUsage,
+              externalRequestBudget: this.getExternalRequestBudgetSnapshot(),
+            },
+          });
+        } catch (recordingError) {
+          usageRecordingError = getErrorMessage(recordingError);
+        }
       }
       await emitEchoEvent(this.events, {
         type: 'system.run.failed',
@@ -940,6 +1166,8 @@ export class Echo extends DurableObject<Env> {
         payload: {
           error: getErrorMessage(error),
           thinkMs,
+          externalRequestBudget: this.getExternalRequestBudgetSnapshot(),
+          ...(usageRecordingError === null ? {} : { usageRecordingError }),
         },
       });
     } finally {
@@ -958,7 +1186,7 @@ export class Echo extends DurableObject<Env> {
    *
    * @returns 実行可否と未読確認にかかった時間
    */
-  private async resolveRunDecision(): Promise<RunDecision> {
+  private async resolveRunDecision(trigger: RunTrigger): Promise<RunDecision> {
     // Stateチェック
     if (!(await this.validateEchoState())) {
       await this.emitRunDecisionEvaluated({
@@ -968,6 +1196,18 @@ export class Echo extends DurableObject<Env> {
       });
       return {
         shouldRun: false,
+        unreadCheckMs: 0,
+      };
+    }
+
+    if (trigger === 'manual') {
+      await this.emitRunDecisionEvaluated({
+        shouldRun: true,
+        reason: 'manual_run',
+        unreadCheckMs: 0,
+      });
+      return {
+        shouldRun: true,
         unreadCheckMs: 0,
       };
     }
@@ -990,14 +1230,13 @@ export class Echo extends DurableObject<Env> {
       };
     }
 
-    const todayUsage = await this.getTodayUsage();
-    const totalTokens = todayUsage?.total_tokens ?? 0;
+    const mainTokens = await this.getTodayMainUsageTokens();
     const { nextWakeAt, hasReachedNextWakeAt } =
       await this.resolveNextWakeAtStatus();
 
     return await this.resolveScheduledRunDecision({
       unreadCheckMs,
-      totalTokens,
+      mainTokens,
       nextWakeAt,
       hasReachedNextWakeAt,
     });
@@ -1008,13 +1247,13 @@ export class Echo extends DurableObject<Env> {
    */
   private async resolveScheduledRunDecision(input: {
     unreadCheckMs: number;
-    totalTokens: number;
+    mainTokens: number;
     nextWakeAt: Date | null;
     hasReachedNextWakeAt: boolean;
   }): Promise<RunDecision> {
     if (
       !(await this.validateHardTokenLimit(
-        input.totalTokens,
+        input.mainTokens,
         input.nextWakeAt,
         input.hasReachedNextWakeAt
       ))
@@ -1023,7 +1262,7 @@ export class Echo extends DurableObject<Env> {
         shouldRun: false,
         reason: 'hard_token_limit',
         unreadCheckMs: input.unreadCheckMs,
-        totalTokens: input.totalTokens,
+        mainTokens: input.mainTokens,
         nextWakeAt: input.nextWakeAt?.toISOString() ?? null,
       });
       return {
@@ -1037,7 +1276,7 @@ export class Echo extends DurableObject<Env> {
         shouldRun: true,
         reason: 'next_wake_at_reached',
         unreadCheckMs: input.unreadCheckMs,
-        totalTokens: input.totalTokens,
+        mainTokens: input.mainTokens,
         nextWakeAt: input.nextWakeAt.toISOString(),
       });
       return {
@@ -1047,14 +1286,14 @@ export class Echo extends DurableObject<Env> {
     }
 
     const softLimitRun = this.evaluateSoftLimitRun(
-      input.totalTokens,
+      input.mainTokens,
       input.nextWakeAt
     );
     await this.emitRunDecisionEvaluated({
       shouldRun: softLimitRun.shouldRun,
       reason: softLimitRun.reason,
       unreadCheckMs: input.unreadCheckMs,
-      totalTokens: input.totalTokens,
+      mainTokens: input.mainTokens,
       softLimit: softLimitRun.softLimit,
       nextWakeAt: input.nextWakeAt?.toISOString() ?? null,
     });
@@ -1072,7 +1311,7 @@ export class Echo extends DurableObject<Env> {
     shouldRun: boolean;
     reason: string;
     unreadCheckMs: number;
-    totalTokens?: number;
+    mainTokens?: number;
     softLimit?: number;
     nextWakeAt?: string | null;
     unreadTotalCount?: number;
@@ -1141,12 +1380,12 @@ export class Echo extends DurableObject<Env> {
    * soft limit の範囲で通常起動できるかを判定する。
    * next_wake_at が直近にある場合は、soft limit 未満でも次回起動時刻を優先して待機する。
    *
-   * @param totalTokens 今日すでに消費した総トークン数
+   * @param mainTokens 今日 Main model が消費したトークン数
    * @param nextWakeAt 比較可能な next_wake_at。未設定または不正なら `null`
    * @returns soft limit 起動を許可する場合は `true`
    */
   private evaluateSoftLimitRun(
-    totalTokens: number,
+    mainTokens: number,
     nextWakeAt: Date | null
   ): {
     shouldRun: boolean;
@@ -1159,7 +1398,7 @@ export class Echo extends DurableObject<Env> {
     // soft limit 未満なら通常起動。ただし直近の next_wake_at があるときは待機する。
     const tokenLimits = this.getTokenLimitConfig();
     const softLimit = calculateDynamicTokenLimit(tokenLimits.dailySoftLimit);
-    if (totalTokens >= softLimit) {
+    if (mainTokens >= softLimit) {
       return {
         shouldRun: false,
         reason: 'soft_token_limit',
@@ -1189,13 +1428,13 @@ export class Echo extends DurableObject<Env> {
    * 未読メッセージ以外の通常起動で使えるトークン量が残っているかを検証する。
    * hard limit を超えた場合は next_wake_at に到達していても起動しない。
    *
-   * @param totalTokens 今日すでに消費した総トークン数
+   * @param mainTokens 今日 Main model が消費したトークン数
    * @param nextWakeAt 正規化済みの next_wake_at。未設定なら `null`
    * @param shouldWarnOnHardLimit hard limit 到達時に warn と fallback を行うべきなら `true`
    * @returns hard limit 未満なら `true`
    */
   private async validateHardTokenLimit(
-    totalTokens: number,
+    mainTokens: number,
     nextWakeAt: Date | null,
     shouldWarnOnHardLimit: boolean
   ): Promise<boolean> {
@@ -1204,13 +1443,13 @@ export class Echo extends DurableObject<Env> {
       tokenLimits.dailyHardLimit,
       tokenLimits.hardLimitBufferFactor
     );
-    if (totalTokens < hardLimit) {
+    if (mainTokens < hardLimit) {
       return true;
     }
 
     if (shouldWarnOnHardLimit && nextWakeAt !== null) {
       const fallbackNextWakeAt = findNextTokenLimitRecoveryTime(
-        totalTokens,
+        mainTokens,
         tokenLimits.dailyHardLimit,
         tokenLimits.hardLimitBufferFactor
       );
@@ -1218,7 +1457,7 @@ export class Echo extends DurableObject<Env> {
         fallbackNextWakeAt.toISOString(),
         'hard_token_limit_defer',
         {
-          totalTokens,
+          mainTokens,
           hardLimit,
         },
         nextWakeAt.toISOString()
@@ -1286,7 +1525,10 @@ export class Echo extends DurableObject<Env> {
 
     const unreadCounts = await fetchUnreadMessageCounts(
       runtimeBindings.discordBotToken,
-      runtimeBindings.chatChannels
+      runtimeBindings.chatChannels,
+      (): void => {
+        this.reserveExternalRequest();
+      }
     );
 
     const unreadChannels = unreadCounts.filter(
@@ -1350,17 +1592,34 @@ export class Echo extends DurableObject<Env> {
 
   /**
    * Usage情報を日別に累積保存
+   *
+   * @param usage Dashboard 向けの Main / Cognitive 合算 usage
+   * @param mainUsage scheduled 起動判定向けの Main model usage
+   * @returns 更新後の当日合算 usage
    */
-  async updateUsage(usage: Usage): Promise<Usage> {
+  async updateUsage(usage: Usage, mainUsage: ModelUsage): Promise<Usage> {
     const dateKey = getTodayUsageKey();
-    const usageRecord = await this.getAllUsage();
+    const [usageRecord, storedMainUsageRecord] = await Promise.all([
+      this.getAllUsage(),
+      this.storage.get(MAIN_USAGE_TOKENS_STORAGE_KEY),
+    ]);
+    const mainUsageRecord = normalizeDailyMainUsageTokenRecord(
+      storedMainUsageRecord
+    );
+    const previousMainTokens =
+      mainUsageRecord[dateKey] ??
+      this.getLegacyMainUsageTokens(usageRecord[dateKey]);
     const updatedUsageRecord = addUsage(usageRecord, dateKey, usage);
+    mainUsageRecord[dateKey] = previousMainTokens + mainUsage.totalTokens;
     const totalUsage = updatedUsageRecord[dateKey];
     if (totalUsage === undefined) {
       throw new Error(`Usage was not accumulated for ${dateKey}`);
     }
 
-    await this.storage.put('usage', updatedUsageRecord);
+    await this.storage.put({
+      [USAGE_STORAGE_KEY]: updatedUsageRecord,
+      [MAIN_USAGE_TOKENS_STORAGE_KEY]: mainUsageRecord,
+    });
     this.clearDashboardReadCache();
     return totalUsage;
   }
@@ -1378,6 +1637,56 @@ export class Echo extends DurableObject<Env> {
       provider: config.provider,
       model: config.model ?? 'unknown',
     };
+  }
+
+  /** Main と Cognitive submodule の usage を正しい model bucket へ分離する。 */
+  private createRecordedSessionUsage(
+    result: Pick<
+      ThinkingEngineResult,
+      'usage' | 'mainUsage' | 'cognitiveModules'
+    >
+  ): Usage {
+    return this.createRecordedModelUsage(
+      result.mainUsage,
+      result.cognitiveModules.usage
+    );
+  }
+
+  /** 失敗した session でも ThinkingEngine が保持した課金済み usage を保存する。 */
+  private createRecordedFailedSessionUsage(
+    error: ThinkingEngineExecutionError
+  ): Usage {
+    return this.createRecordedModelUsage(error.mainUsage, error.cognitiveUsage);
+  }
+
+  /** Main と Cognitive usage を provider/model bucket 付き Usage へ変換する。 */
+  private createRecordedModelUsage(
+    mainModelUsage: ModelUsage,
+    cognitiveModelUsage: ModelUsage
+  ): Usage {
+    const mainUsage = convertUsage(
+      mainModelUsage,
+      this.getMainLLMUsageIdentity()
+    );
+    const cognitiveConfig = resolveCognitiveModuleConfig(
+      this._env,
+      this.getInstanceDefinitionOrThrow()
+    );
+    const cognitiveUsage = convertUsage(cognitiveModelUsage, {
+      provider: cognitiveConfig.provider,
+      model: cognitiveConfig.model,
+    });
+    const usageKey = 'session';
+    const combinedRecord = addUsage(
+      { [usageKey]: mainUsage },
+      usageKey,
+      cognitiveUsage
+    );
+    const combinedUsage = combinedRecord[usageKey];
+    if (combinedUsage === undefined) {
+      throw new Error('Session usage aggregation failed');
+    }
+    return combinedUsage;
   }
 
   /**
@@ -1413,25 +1722,6 @@ export class Echo extends DurableObject<Env> {
       this._env,
       this.getInstanceDefinitionOrThrow()
     );
-  }
-
-  /**
-   * 前回 `finish_thinking` が残した context を DO storage から読み出す。
-   *
-   * @returns 保存済み context。未保存なら `null`
-   */
-  private async loadContext(): Promise<ContextSnapshot | null> {
-    return (await this.storage.get<ContextSnapshot>('context')) ?? null;
-  }
-
-  /**
-   * 次回起動時に注入する最新 context を DO storage へ保存する。
-   *
-   * @param context 今回セッションの終了時に確定した context snapshot
-   */
-  private async saveContext(context: ContextSnapshot): Promise<void> {
-    await this.storage.put('context', context);
-    this.clearDashboardReadCache();
   }
 
   /**
@@ -1541,6 +1831,9 @@ export class Echo extends DurableObject<Env> {
                 `echo:${definition.id}`
               )
             : undefined,
+        beforeRequest: (): void => {
+          this.reserveExternalRequest();
+        },
       });
     }
 
@@ -1549,6 +1842,9 @@ export class Echo extends DurableObject<Env> {
       model: config.model,
       events: this.events,
       reasoningEffort: config.reasoningEffort,
+      beforeRequest: (): void => {
+        this.reserveExternalRequest();
+      },
     });
   }
 
@@ -1557,20 +1853,22 @@ export class Echo extends DurableObject<Env> {
    */
   private createThinkingEngine(): AgentThinkingEngine {
     const definition = this.getInstanceDefinitionOrThrow();
-    const memorySystem = this.getMemorySystemOrThrow();
+    const cognitiveModules = createCognitiveModuleOrchestrator({
+      env: this._env,
+      instance: definition,
+      events: this.events,
+      domain: this.getCognitiveDomainStoreOrThrow(),
+      beforeModelRequest: (): void => {
+        this.reserveExternalRequest();
+      },
+    });
 
     return new AgentThinkingEngine({
       model: this.createMainLLMClient(),
       events: this.events,
-      context: {
-        load: async (): Promise<ContextSnapshot | null> =>
-          await this.loadContext(),
-      },
-      memory: {
-        search: async (query) => await memorySystem.searchMemory(query),
-      },
       tools: this.getExecutableToolsOrThrow(),
       systemPrompt: definition.systemPrompt,
+      cognitiveModules,
     });
   }
 }

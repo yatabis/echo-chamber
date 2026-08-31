@@ -6,19 +6,28 @@ import { TOKEN_LIMITS } from './constants';
 import type { EchoInstanceId } from '../types/echo-config';
 
 export type EchoMainLLMProvider = 'openai' | 'openai-compatible';
-export type EchoMainLLMReasoningEffort =
+
+/** E.C.H.O. Chamber の model protocol における reasoning effort 設定値。 */
+export type EchoModelReasoningEffort =
   | 'none'
   | 'minimal'
   | 'low'
   | 'medium'
   | 'high'
-  | 'xhigh';
+  | 'xhigh'
+  | 'max';
 
 export interface EchoMainLLMDefinition {
   provider?: EchoMainLLMProvider;
   model?: string;
   baseURL?: string;
-  reasoningEffort?: EchoMainLLMReasoningEffort;
+  reasoningEffort?: EchoModelReasoningEffort;
+}
+
+/** Memory / Emotion Cognitive Module が共有する非 secret の既定設定。 */
+export interface EchoCognitiveModuleDefinition {
+  model?: string;
+  reasoningEffort?: EchoModelReasoningEffort;
 }
 
 export interface EchoTokenLimitDefinition {
@@ -32,6 +41,7 @@ export interface EchoInstanceDefinition {
   name: string;
   systemPrompt: string;
   mainLlm: EchoMainLLMDefinition;
+  cognitiveModules: EchoCognitiveModuleDefinition;
   tokenLimits: EchoTokenLimitDefinition;
 }
 
@@ -44,6 +54,10 @@ export const ECHO_INSTANCE_DEFINITIONS = {
       provider: 'openai',
       model: 'gpt-5.6-sol',
       reasoningEffort: 'none',
+    },
+    cognitiveModules: {
+      model: 'gpt-5.6-luna',
+      reasoningEffort: 'low',
     },
     tokenLimits: {
       dailyHardLimit: TOKEN_LIMITS.DAILY_HARD_LIMIT,
@@ -58,6 +72,10 @@ export const ECHO_INSTANCE_DEFINITIONS = {
     mainLlm: {
       provider: 'openai',
       model: 'gpt-5.6-terra',
+      reasoningEffort: 'low',
+    },
+    cognitiveModules: {
+      model: 'gpt-5.6-luna',
       reasoningEffort: 'low',
     },
     tokenLimits: {

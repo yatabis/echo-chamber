@@ -1,4 +1,3 @@
-import type { PromptContextSnapshot } from '@echo-chamber/core/agent/prompt-builder';
 import type { Note } from '@echo-chamber/core/echo/types';
 import type { ChatMessage } from '@echo-chamber/core/ports/chat';
 import type { MemoryRecord } from '@echo-chamber/core/ports/memory';
@@ -6,6 +5,7 @@ import type { ChannelNotificationSummary } from '@echo-chamber/core/ports/notifi
 
 import type {
   EvaluationCheck,
+  RuntimeContextSnapshot,
   RuntimeInstructionMode,
   RuntimeSessionTrace,
   TraceCall,
@@ -38,7 +38,7 @@ export interface RuntimeWorkflowFixture {
   id: string;
   title: string;
   instructionMode: RuntimeInstructionMode;
-  initialContext: PromptContextSnapshot | null;
+  initialContext: RuntimeContextSnapshot | null;
   initialMemories: MemoryRecord[];
   initialNotes: Note[];
   sessions: readonly RuntimeWorkflowSessionFixture[];

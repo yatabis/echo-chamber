@@ -1,3 +1,4 @@
+import OpenAI from 'openai';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { EchoEventPort } from '@echo-chamber/core/ports/echo-event';
@@ -58,6 +59,38 @@ const thinkDeeplyTool = {
 describe('OpenAIResponsesModel', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+  });
+
+  it('SDK retry設定と各HTTP attemptのadmission hookをcallerが指定できる', async () => {
+    const beforeRequest = vi.fn();
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('{}'));
+    new OpenAIResponsesModel({
+      apiKey: 'test-key',
+      maxRetries: 0,
+      beforeRequest,
+    });
+
+    expect(OpenAI).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: 'test-key',
+        maxRetries: 0,
+      })
+    );
+    const constructorCalls = vi.mocked(OpenAI).mock.calls as unknown as [
+      { fetch?: typeof fetch },
+    ][];
+    const constructorOptions = constructorCalls[0]?.[0];
+    if (constructorOptions?.fetch === undefined) {
+      throw new Error('Expected guarded OpenAI fetch');
+    }
+    expect(typeof constructorOptions.fetch).toBe('function');
+    await constructorOptions.fetch('https://api.openai.test', {});
+
+    expect(beforeRequest).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    fetchMock.mockRestore();
   });
 
   it('createResponse は provider-neutral request を Responses API 形式へ変換する', async () => {
@@ -220,6 +253,57 @@ describe('OpenAIResponsesModel', () => {
           effort: 'low',
         },
       })
+    );
+  });
+
+  it('provider-neutral strict JSON Schema と output/deadline 制約を渡す', async () => {
+    const model = new OpenAIResponsesModel({ apiKey: 'test-key' });
+    const signal = new AbortController().signal;
+    const schema = {
+      type: 'object',
+      properties: { answer: { type: 'string' } },
+      required: ['answer'],
+      additionalProperties: false,
+    };
+
+    mockCreateResponse.mockResolvedValue({
+      output: [],
+      usage: {
+        input_tokens: 0,
+        input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
+        output_tokens: 0,
+        output_tokens_details: { reasoning_tokens: 0 },
+        total_tokens: 0,
+      },
+    });
+
+    await model.generate({
+      input: [],
+      tools: [],
+      responseFormat: {
+        type: 'json_schema',
+        name: 'answer_contract',
+        strict: true,
+        schema,
+      },
+      maxOutputTokens: 512,
+      signal,
+    });
+
+    expect(mockCreateResponse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        max_output_tokens: 512,
+        text: {
+          format: {
+            type: 'json_schema',
+            name: 'answer_contract',
+            strict: true,
+            schema,
+          },
+          verbosity: 'medium',
+        },
+      }),
+      { signal }
     );
   });
 

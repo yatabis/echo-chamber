@@ -109,7 +109,7 @@ export function formatJapaneseDatetime(
 }
 
 /**
- * エージェント（OpenAI API）に渡す日時フォーマット
+ * Agent model に渡す日時フォーマット
  * 出力: `n日前 (YYYY年MM月DD日 HH:mm:ss)`
  *
  * @param date - フォーマット対象の日時

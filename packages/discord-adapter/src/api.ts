@@ -1,4 +1,4 @@
-import { REST } from '@discordjs/rest';
+import { REST, type ResponseLike, type RESTOptions } from '@discordjs/rest';
 
 import type {
   RESTGetAPIChannelMessagesQuery,
@@ -9,6 +9,15 @@ import type {
 } from 'discord-api-types/v10';
 
 type DiscordRoute = `/${string}`;
+
+/** Discord SDK が HTTP attempt を開始する直前の admission hook。 */
+export type DiscordBeforeRequest = () => void | Promise<void>;
+
+/** Reaction文字列と任意のrequest admission hook。 */
+export interface DiscordReactionInput {
+  reaction: string;
+  beforeRequest?: DiscordBeforeRequest;
+}
 
 const DISCORD_REST_OPTIONS = {
   handlerSweepInterval: 0,
@@ -22,8 +31,24 @@ const DISCORD_REST_OPTIONS = {
  * @param token Discord bot token
  * @returns 認証済み REST client
  */
-function createDiscordRestClient(token: string): REST {
-  return new REST(DISCORD_REST_OPTIONS).setToken(token);
+function createDiscordRestClient(
+  token: string,
+  beforeRequest?: DiscordBeforeRequest
+): REST {
+  const runtimeFetch = fetch as unknown as RESTOptions['makeRequest'];
+  const options =
+    beforeRequest === undefined
+      ? DISCORD_REST_OPTIONS
+      : {
+          ...DISCORD_REST_OPTIONS,
+          makeRequest: async (
+            ...request: Parameters<RESTOptions['makeRequest']>
+          ): Promise<ResponseLike> => {
+            await beforeRequest();
+            return await runtimeFetch(...request);
+          },
+        };
+  return new REST(options).setToken(token);
 }
 
 /**
@@ -73,9 +98,10 @@ function routeCurrentUser(): DiscordRoute {
 export async function getChannelMessages(
   token: string,
   channelId: string,
-  options: RESTGetAPIChannelMessagesQuery = {}
+  options: RESTGetAPIChannelMessagesQuery = {},
+  beforeRequest?: DiscordBeforeRequest
 ): Promise<RESTGetAPIChannelMessagesResult> {
-  const rest = createDiscordRestClient(token);
+  const rest = createDiscordRestClient(token, beforeRequest);
   return rest.get(routeChannelMessages(channelId), {
     query: new URLSearchParams(
       Object.entries(options).map(([key, value]) => [key, String(value)])
@@ -94,9 +120,10 @@ export async function getChannelMessages(
 export async function sendChannelMessage(
   token: string,
   channelId: string,
-  options: RESTPostAPIChannelMessageJSONBody
+  options: RESTPostAPIChannelMessageJSONBody,
+  beforeRequest?: DiscordBeforeRequest
 ): Promise<RESTPostAPIChannelMessageResult> {
-  const rest = createDiscordRestClient(token);
+  const rest = createDiscordRestClient(token, beforeRequest);
   return rest.post(routeChannelMessages(channelId), {
     body: options,
   }) as Promise<RESTPostAPIChannelMessageResult>;
@@ -108,16 +135,19 @@ export async function sendChannelMessage(
  * @param token Discord bot token
  * @param channelId Discord channel ID
  * @param messageId Discord message ID
- * @param reaction 追加するリアクション
+ * @param input 追加するリアクションと任意のrequest hook
  * @returns Discord API への反映完了
  */
 export async function addReactionToMessage(
   token: string,
   channelId: string,
   messageId: string,
-  reaction: string
+  input: string | DiscordReactionInput
 ): Promise<void> {
-  const rest = createDiscordRestClient(token);
+  const reaction = typeof input === 'string' ? input : input.reaction;
+  const beforeRequest =
+    typeof input === 'string' ? undefined : input.beforeRequest;
+  const rest = createDiscordRestClient(token, beforeRequest);
   await rest.put(
     routeChannelMessageOwnReaction(channelId, messageId, reaction)
   );
@@ -130,8 +160,9 @@ export async function addReactionToMessage(
  * @returns 現在の bot ユーザー情報
  */
 export async function getCurrentUser(
-  token: string
+  token: string,
+  beforeRequest?: DiscordBeforeRequest
 ): Promise<RESTGetAPICurrentUserResult> {
-  const rest = createDiscordRestClient(token);
+  const rest = createDiscordRestClient(token, beforeRequest);
   return rest.get(routeCurrentUser()) as Promise<RESTGetAPICurrentUserResult>;
 }

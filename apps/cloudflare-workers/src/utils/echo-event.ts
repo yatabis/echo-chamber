@@ -18,6 +18,7 @@ export interface DiscordEchoEventConfig {
 export interface DiscordEchoEventPortOptions
   extends ConsoleEchoEventPortOptions {
   getDiscordConfig(): DiscordEchoEventConfig | null;
+  beforeRequest?(): void | Promise<void>;
 }
 
 export interface EchoEventArchive {
@@ -120,7 +121,7 @@ export class DiscordEchoEventPort implements EchoEventPort {
       return;
     }
 
-    await sendChannelMessage(config.token, config.channelId, {
+    const body = {
       content: truncateDiscordMessage(
         formatDiscordEventMessage(event, {
           source: this.options.source,
@@ -128,7 +129,20 @@ export class DiscordEchoEventPort implements EchoEventPort {
           sessionId: this.options.getSessionId(),
         })
       ),
-    });
+    };
+    if (this.options.beforeRequest === undefined) {
+      await sendChannelMessage(config.token, config.channelId, body);
+      return;
+    }
+
+    await sendChannelMessage(
+      config.token,
+      config.channelId,
+      body,
+      async (): Promise<void> => {
+        await this.options.beforeRequest?.();
+      }
+    );
   }
 }
 

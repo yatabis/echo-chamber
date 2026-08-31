@@ -2,30 +2,18 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   accumulateModelUsage,
+  AgentSessionExecutionError,
   executeAgentToolCall,
   runAgentSession,
   ZERO_MODEL_USAGE,
 } from './session';
 
-import type { FinishThinkingSessionRecord } from './tools/thinking';
 import type { EchoEventPort } from '../ports/echo-event';
 import type { ModelPort, ModelToolContract, ModelUsage } from '../ports/model';
 
 afterEach(() => {
   vi.useRealTimers();
 });
-
-function createSessionContext(): FinishThinkingSessionRecord {
-  return {
-    content:
-      'Responded to recent messages and left a concise recap for the next cycle.',
-    emotion: {
-      valence: 0.4,
-      arousal: 0.2,
-      labels: ['calm', 'satisfied'],
-    },
-  };
-}
 
 function createFinishThinkingInput(
   reason = 'done',
@@ -34,7 +22,6 @@ function createFinishThinkingInput(
   return JSON.stringify({
     reason,
     next_wake_at: nextWakeAt,
-    session_record: createSessionContext(),
   });
 }
 
@@ -511,7 +498,6 @@ describe('runAgentSession', () => {
     });
     expect(executeFinish).toHaveBeenCalledWith(createFinishThinkingInput());
     expect(result).toEqual({
-      context: createSessionContext(),
       nextWakeAt: null,
       usage: createUsage({ totalTokens: 15 }),
       responseToken: 'resp-2',
@@ -700,7 +686,6 @@ describe('runAgentSession', () => {
     });
     expect(executeFinish).toHaveBeenCalledWith(createFinishThinkingInput());
     expect(result).toEqual({
-      context: createSessionContext(),
       nextWakeAt: null,
       usage: createUsage({
         cachedInputTokens: 111,
@@ -825,6 +810,121 @@ describe('runAgentSession', () => {
     });
   });
 
+  it('turn boundary hook の追加入力を tool result の後に次ターンへ渡す', async () => {
+    const firstOutput = [
+      {
+        type: 'tool_call' as const,
+        callId: 'call-think',
+        toolName: 'think_deeply',
+        input: '{"thought":"test"}',
+      },
+    ];
+    const terminalOutput = [
+      {
+        type: 'tool_call' as const,
+        callId: 'call-finish',
+        toolName: 'finish_thinking',
+        input: createFinishThinkingInput(),
+      },
+    ];
+    const generate = vi
+      .fn<ModelPort['generate']>()
+      .mockResolvedValueOnce({
+        output: firstOutput,
+        usage: createUsage({ totalTokens: 10 }),
+        responseToken: 'resp-1',
+      })
+      .mockResolvedValueOnce({
+        output: terminalOutput,
+        usage: createUsage({ totalTokens: 5 }),
+        responseToken: 'resp-2',
+      });
+    const onTurnBoundary = vi
+      .fn()
+      .mockResolvedValueOnce([
+        {
+          role: 'developer',
+          content: '<memory_module_result>ready</memory_module_result>',
+        },
+        {
+          role: 'developer',
+          content: '<emotion_module_result>ready</emotion_module_result>',
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          role: 'developer',
+          content: 'terminal input must not be sent to another model turn',
+        },
+      ]);
+
+    await runAgentSession({
+      model: { generate },
+      tools: [
+        {
+          name: 'think_deeply',
+          contract: createToolContract('think_deeply'),
+          execute: vi.fn().mockResolvedValue('{"success":true}'),
+        },
+        {
+          name: 'finish_thinking',
+          contract: createToolContract('finish_thinking'),
+          execute: vi.fn().mockResolvedValue('{"success":true}'),
+        },
+      ],
+      initialInput: [{ role: 'developer', content: 'test' }],
+      onTurnBoundary,
+    });
+
+    const firstResolvedInput = [
+      {
+        type: 'tool_result',
+        callId: 'call-think',
+        output: '{"success":true}',
+      },
+    ];
+    expect(onTurnBoundary).toHaveBeenNthCalledWith(1, {
+      turnIndex: 1,
+      responseOutput: firstOutput,
+      toolCalls: firstOutput,
+      resolvedInput: firstResolvedInput,
+      terminationReason: null,
+    });
+    expect(generate).toHaveBeenNthCalledWith(2, {
+      input: [
+        ...firstResolvedInput,
+        {
+          role: 'developer',
+          content: '<memory_module_result>ready</memory_module_result>',
+        },
+        {
+          role: 'developer',
+          content: '<emotion_module_result>ready</emotion_module_result>',
+        },
+      ],
+      tools: [
+        createToolContract('think_deeply'),
+        createToolContract('finish_thinking'),
+      ],
+      previousResponseToken: 'resp-1',
+      turnIndex: 2,
+    });
+    expect(onTurnBoundary).toHaveBeenNthCalledWith(2, {
+      turnIndex: 2,
+      responseOutput: terminalOutput,
+      toolCalls: terminalOutput,
+      resolvedInput: [
+        {
+          type: 'tool_result',
+          callId: 'call-finish',
+          output: '{"success":true}',
+        },
+      ],
+      terminationReason: 'finish_thinking',
+    });
+    expect(generate).toHaveBeenCalledTimes(2);
+  });
+
   it('finish_thinking を含む場合は tool 実行後に終了する', async () => {
     const generate = vi.fn<ModelPort['generate']>().mockResolvedValue({
       output: [
@@ -873,7 +973,6 @@ describe('runAgentSession', () => {
     expect(executeFinish).toHaveBeenCalled();
     expect(generate).toHaveBeenCalledTimes(1);
     expect(result).toEqual({
-      context: createSessionContext(),
       nextWakeAt: null,
       usage: createUsage({ totalTokens: 10 }),
       responseToken: 'resp-1',
@@ -914,7 +1013,6 @@ describe('runAgentSession', () => {
     });
 
     expect(result).toEqual({
-      context: createSessionContext(),
       nextWakeAt,
       usage: createUsage({ totalTokens: 10 }),
       responseToken: 'resp-1',
@@ -923,7 +1021,9 @@ describe('runAgentSession', () => {
   });
 
   it('無効な finish_thinking は継続し、有効な finish_thinking で終了する', async () => {
-    const invalidFinishInput = '{"reason":"done"}';
+    const invalidFinishInput = JSON.stringify({
+      next_wake_at: '2026-08-29T12:00:00.000Z',
+    });
     const generate = vi
       .fn<ModelPort['generate']>()
       .mockResolvedValueOnce({
@@ -985,11 +1085,116 @@ describe('runAgentSession', () => {
       turnIndex: 2,
     });
     expect(result).toEqual({
-      context: createSessionContext(),
       nextWakeAt: null,
       usage: createUsage({ totalTokens: 15 }),
       responseToken: 'resp-2',
       terminationReason: 'finish_thinking',
+    });
+  });
+
+  it('入力が有効でも finish_thinking の実行に失敗した場合は継続する', async () => {
+    const generate = vi
+      .fn<ModelPort['generate']>()
+      .mockResolvedValueOnce({
+        output: [
+          {
+            type: 'tool_call',
+            callId: 'call-finish-failed',
+            toolName: 'finish_thinking',
+            input: createFinishThinkingInput('not ready'),
+          },
+        ],
+        usage: createUsage({ totalTokens: 10 }),
+        responseToken: 'resp-1',
+      })
+      .mockResolvedValueOnce({
+        output: [
+          {
+            type: 'tool_call',
+            callId: 'call-finish-succeeded',
+            toolName: 'finish_thinking',
+            input: createFinishThinkingInput('done for real'),
+          },
+        ],
+        usage: createUsage({ totalTokens: 5 }),
+        responseToken: 'resp-2',
+      });
+    const executeFinish = vi
+      .fn()
+      .mockResolvedValueOnce('{"success":false,"error":"completion rejected"}')
+      .mockResolvedValueOnce('{"success":true}');
+
+    const result = await runAgentSession({
+      model: { generate },
+      tools: [
+        {
+          name: 'finish_thinking',
+          contract: createToolContract('finish_thinking'),
+          execute: executeFinish,
+        },
+      ],
+      initialInput: [
+        {
+          role: 'developer',
+          content: 'test',
+        },
+      ],
+    });
+
+    expect(generate).toHaveBeenNthCalledWith(2, {
+      input: [
+        {
+          type: 'tool_result',
+          callId: 'call-finish-failed',
+          output: '{"success":false,"error":"completion rejected"}',
+        },
+      ],
+      tools: [createToolContract('finish_thinking')],
+      previousResponseToken: 'resp-1',
+      turnIndex: 2,
+    });
+    expect(result).toEqual({
+      nextWakeAt: null,
+      usage: createUsage({ totalTokens: 15 }),
+      responseToken: 'resp-2',
+      terminationReason: 'finish_thinking',
+    });
+  });
+
+  it('boundary failure でも課金済み Main usage と response token を保持する', async () => {
+    const boundaryFailure = new Error('cognitive boundary failed');
+    const generate = vi.fn<ModelPort['generate']>().mockResolvedValue({
+      output: [
+        {
+          type: 'tool_call',
+          callId: 'call-think',
+          toolName: 'think_deeply',
+          input: '{"thought":"inspect"}',
+        },
+      ],
+      usage: createUsage({ totalTokens: 7 }),
+      responseToken: 'resp-paid-turn',
+    });
+
+    const execution = runAgentSession({
+      model: { generate },
+      tools: [
+        {
+          name: 'think_deeply',
+          contract: createToolContract('think_deeply'),
+          execute: vi.fn().mockResolvedValue('{"success":true}'),
+        },
+      ],
+      initialInput: [],
+      onTurnBoundary: vi.fn().mockRejectedValue(boundaryFailure),
+    });
+
+    const error = await execution.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(AgentSessionExecutionError);
+    expect(error).toMatchObject({
+      cause: boundaryFailure,
+      usage: createUsage({ totalTokens: 7 }),
+      responseToken: 'resp-paid-turn',
     });
   });
 

@@ -1,10 +1,6 @@
 /* eslint-disable @typescript-eslint/require-await -- In-memory fixture ports intentionally implement asynchronous production contracts without external I/O. */
 
 import { buildAgentPromptMessages } from '@echo-chamber/core/agent/prompt-builder';
-import type {
-  PromptContextSnapshot,
-  PromptRelatedMemorySnapshot,
-} from '@echo-chamber/core/agent/prompt-builder';
 import { canonicalRuntimeTools } from '@echo-chamber/core/agent/runtime-tools/catalog';
 import { bindRuntimeTools } from '@echo-chamber/core/agent/runtime-tools/tool';
 import {
@@ -14,6 +10,13 @@ import {
 } from '@echo-chamber/core/agent/session';
 import type { AgentSessionTool } from '@echo-chamber/core/agent/session';
 import type { ToolExecutionContext } from '@echo-chamber/core/agent/tool-context';
+import {
+  emotionSchema,
+  MAX_EMOTION_LABEL_LENGTH,
+  MAX_EMOTION_LABELS,
+  MAX_MEMORY_CONTENT_LENGTH,
+  memoryContentSchema,
+} from '@echo-chamber/core/echo/schemas';
 import type { Note } from '@echo-chamber/core/echo/types';
 import type { ChatMessage } from '@echo-chamber/core/ports/chat';
 import type {
@@ -24,6 +27,7 @@ import type { MemorySearchResult } from '@echo-chamber/core/ports/memory';
 import type {
   ModelInputItem,
   ModelPort,
+  ModelToolContract,
   ModelUsage,
 } from '@echo-chamber/core/ports/model';
 import type { ChannelNotificationSummary } from '@echo-chamber/core/ports/notification';
@@ -41,6 +45,7 @@ import type {
   RuntimeScenarioObservation,
 } from './runtime-scenarios';
 import type {
+  RuntimeContextSnapshot,
   RuntimeGenerationProfile,
   RuntimeScenarioResult,
   TraceCall,
@@ -54,6 +59,112 @@ export interface RuntimeHarnessOptions {
   generationProfile: RuntimeGenerationProfile;
   repetition: number;
   sessionId?: string;
+}
+
+type EvaluationSessionRecord = Pick<
+  RuntimeContextSnapshot,
+  'content' | 'emotion'
+>;
+
+const EVALUATION_FINISH_THINKING_CONTRACT: ModelToolContract = {
+  name: 'finish_thinking',
+  description:
+    '思考プロセスを終了し、Qwen評価の次セッションへ渡す要点と感情状態を記録する。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      reason: { type: 'string' },
+      next_wake_at: { type: 'string' },
+      session_record: {
+        type: 'object',
+        properties: {
+          content: {
+            type: 'string',
+            minLength: 1,
+            maxLength: MAX_MEMORY_CONTENT_LENGTH,
+          },
+          emotion: {
+            type: 'object',
+            properties: {
+              valence: { type: 'number', minimum: -1, maximum: 1 },
+              arousal: { type: 'number', minimum: 0, maximum: 1 },
+              labels: {
+                type: 'array',
+                items: {
+                  type: 'string',
+                  minLength: 1,
+                  maxLength: MAX_EMOTION_LABEL_LENGTH,
+                },
+                maxItems: MAX_EMOTION_LABELS,
+              },
+            },
+            required: ['valence', 'arousal', 'labels'],
+            additionalProperties: false,
+          },
+        },
+        required: ['content', 'emotion'],
+        additionalProperties: false,
+      },
+    },
+    required: ['reason', 'session_record'],
+    additionalProperties: false,
+  },
+  strict: false,
+};
+
+/** Qwen評価のfinish inputから次セッション用snapshotを検証して取り出す。 */
+function parseEvaluationSessionRecord(
+  input: string
+): EvaluationSessionRecord | null {
+  try {
+    const parsed = JSON.parse(input) as unknown;
+    if (typeof parsed !== 'object' || parsed === null) {
+      return null;
+    }
+    const sessionRecord = (parsed as Record<string, unknown>).session_record;
+    if (typeof sessionRecord !== 'object' || sessionRecord === null) {
+      return null;
+    }
+    const record = sessionRecord as Record<string, unknown>;
+    const content = memoryContentSchema.safeParse(record.content);
+    const emotion = emotionSchema.safeParse(record.emotion);
+    if (!content.success || !emotion.success) {
+      return null;
+    }
+    return {
+      content: content.data,
+      emotion: emotion.data,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Production tool群からQwen評価専用のsession snapshot境界だけを分離する。 */
+export function bindQwenEvaluationRuntimeTools(
+  context: ToolExecutionContext,
+  onSessionRecord?: (record: EvaluationSessionRecord) => void | Promise<void>
+): readonly AgentSessionTool[] {
+  return bindRuntimeTools(canonicalRuntimeTools, context).map((tool) => {
+    if (tool.name !== 'finish_thinking') {
+      return tool;
+    }
+    return {
+      name: EVALUATION_FINISH_THINKING_CONTRACT.name,
+      contract: EVALUATION_FINISH_THINKING_CONTRACT,
+      execute: async (input: string): Promise<string> => {
+        const sessionRecord = parseEvaluationSessionRecord(input);
+        if (sessionRecord === null) {
+          return JSON.stringify({
+            success: false,
+            error: 'session_record is required for the Qwen evaluation',
+          });
+        }
+        await onSessionRecord?.(sessionRecord);
+        return JSON.stringify({ success: true });
+      },
+    };
+  });
 }
 
 /**
@@ -184,8 +295,8 @@ function createRuntimeEnvironment(
         },
       },
       memory: {
-        async store(content, emotion, type): Promise<void> {
-          record('store_memory', { content, emotion, type });
+        async store(content, type): Promise<void> {
+          record('store_memory', { content, type });
         },
         async search(query, type): Promise<MemorySearchResult[]> {
           record('search_memory', { query, type }, fixture.memorySearchResults);
@@ -300,8 +411,8 @@ function createRuntimeEnvironment(
 export interface RuntimeInitialInputOptions {
   systemPrompt: string;
   currentDatetime: Date;
-  latestContext: PromptContextSnapshot | null;
-  relatedMemories: readonly PromptRelatedMemorySnapshot[];
+  latestContext: RuntimeContextSnapshot | null;
+  relatedMemories: readonly MemorySearchResult[];
 }
 
 export async function createRuntimeInitialInput(
@@ -311,10 +422,18 @@ export async function createRuntimeInitialInput(
   const promptMessages = buildAgentPromptMessages({
     systemPrompt: input.systemPrompt,
     currentDatetime: input.currentDatetime,
-    latestContext: input.latestContext,
-    relatedMemories: input.relatedMemories,
     toolContracts: tools.map((tool) => tool.contract),
   });
+  const evaluationContinuityInput: ModelInputItem = {
+    role: 'developer',
+    content: [
+      '評価用の継続情報:',
+      JSON.stringify({
+        latestContext: input.latestContext,
+        relatedMemories: input.relatedMemories,
+      }),
+    ].join('\n'),
+  };
   const startupTool = tools.find((tool) => tool.name === 'check_notifications');
   if (startupTool === undefined) {
     throw new Error('check_notifications tool is required');
@@ -322,10 +441,9 @@ export async function createRuntimeInitialInput(
 
   const callId = 'check_notifications';
   return [
-    ...promptMessages.map<ModelInputItem>((message) => ({
-      role: message.role,
-      content: message.content,
-    })),
+    promptMessages.mainSystemPrompt,
+    promptMessages.sharedRuntimeContext,
+    evaluationContinuityInput,
     {
       type: 'tool_call',
       callId,
@@ -350,7 +468,7 @@ export async function runRuntimeScenario(
   const startedAt = performance.now();
   const trace = new EvaluationTrace(startedAt);
   const environment = createRuntimeEnvironment(fixture, startedAt);
-  const tools = bindRuntimeTools(canonicalRuntimeTools, environment.context);
+  const tools = bindQwenEvaluationRuntimeTools(environment.context);
   const model = options.createModel({
     events: trace,
     generationProfile: options.generationProfile,

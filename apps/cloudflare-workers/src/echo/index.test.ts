@@ -10,19 +10,27 @@ import {
 import type { DashboardEchoEvent } from '@echo-chamber/contracts/dashboard/types';
 import { canonicalRuntimeTools } from '@echo-chamber/core/agent/runtime-tools/catalog';
 import { bindRuntimeTools } from '@echo-chamber/core/agent/runtime-tools/tool';
+import {
+  ThinkingEngineExecutionError,
+  type ThinkingEngineResult,
+} from '@echo-chamber/core/agent/thinking-engine';
 import { TOKEN_LIMITS } from '@echo-chamber/core/echo/constants';
 import { getEchoInstanceDefinition } from '@echo-chamber/core/echo/instance-definitions';
 import type { Usage } from '@echo-chamber/core/echo/types';
-import { calculateDynamicTokenLimit } from '@echo-chamber/core/echo/usage';
-import type { ContextSnapshot } from '@echo-chamber/core/ports/context';
+import {
+  calculateDynamicTokenLimit,
+  getTodayUsageKey,
+} from '@echo-chamber/core/echo/usage';
 import type {
   EchoEvent,
   EchoEventType,
 } from '@echo-chamber/core/ports/echo-event';
+import type { ModelUsage } from '@echo-chamber/core/ports/model';
 
 import { resolveEchoRuntimeBindings } from '../config/echo-runtime-bindings';
 import { createEmbeddingService } from '../embedding/create-embedding-service';
 import { createRerankingService } from '../reranking/create-reranking-service';
+import { createCloudflareEchoEventPort } from '../utils/echo-event';
 
 import { createToolExecutionContext } from './tool-context';
 
@@ -41,7 +49,10 @@ const {
   mockRuntimeBindings,
   mockToolContext,
 } = vi.hoisted(() => ({
-  mockEmbeddingService: { provider: 'test-embedding' },
+  mockEmbeddingService: {
+    modelIdentifier: 'test-embedding',
+    embed: vi.fn(async () => Promise.resolve([0.1])),
+  },
   mockExecutableTools: [{ name: 'tool-1' }],
   mockEvents: {
     emit: vi.fn(async (_event: unknown) => Promise.resolve()),
@@ -53,6 +64,10 @@ const {
     mainLlm: {
       provider: 'openai' as const,
       model: 'gpt-5.5',
+    },
+    cognitiveModules: {
+      model: 'test-cognitive-model',
+      reasoningEffort: 'medium' as const,
     },
     tokenLimits: {
       dailyHardLimit: 500_000,
@@ -71,7 +86,10 @@ const {
       })
     ),
   },
-  mockRerankingService: { provider: 'test-reranker' },
+  mockRerankingService: {
+    modelIdentifier: 'test-reranker',
+    rerank: vi.fn(async () => Promise.resolve([])),
+  },
   mockRuntimeBindings: {
     discordBotToken: 'discord-token',
     chatChannels: [
@@ -157,7 +175,9 @@ function createMockStorage(): {
   putFn: ReturnType<typeof vi.fn>;
 } {
   const deleteFn = vi.fn(async () => Promise.resolve(false));
-  const getFn = vi.fn(async () => Promise.resolve(undefined));
+  const getFn = vi.fn(async (_key?: string | string[]) =>
+    Promise.resolve(undefined)
+  );
   const putFn = vi.fn(async () => Promise.resolve());
 
   return {
@@ -215,19 +235,52 @@ function createUsage(totalTokens: number): Usage {
     output_tokens: 0,
     reasoning_tokens: 0,
     total_tokens: totalTokens,
-    by_model: [
-      {
-        provider: 'openai',
-        model: 'gpt-5.5',
-        cached_input_tokens: 0,
-        cache_write_input_tokens: 0,
-        uncached_input_tokens: 0,
-        total_input_tokens: 0,
-        output_tokens: 0,
-        reasoning_tokens: 0,
-        total_tokens: totalTokens,
-      },
-    ],
+    by_model: [createUsageModelBreakdown(totalTokens)],
+  };
+}
+
+function createUsageModelBreakdown(
+  totalTokens: number,
+  model = 'gpt-5.5'
+): Usage['by_model'][number] {
+  return {
+    provider: 'openai',
+    model,
+    cached_input_tokens: 0,
+    cache_write_input_tokens: 0,
+    uncached_input_tokens: 0,
+    total_input_tokens: 0,
+    output_tokens: 0,
+    reasoning_tokens: 0,
+    total_tokens: totalTokens,
+  };
+}
+
+function createModelUsage(totalTokens: number): ModelUsage {
+  return {
+    cachedInputTokens: 0,
+    cacheWriteInputTokens: 0,
+    uncachedInputTokens: 0,
+    totalInputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    totalTokens,
+  };
+}
+
+function createSuccessfulThinkingResult(
+  nextWakeAt: string | null
+): ThinkingEngineResult {
+  const mainUsage = createModelUsage(42);
+  return {
+    nextWakeAt,
+    usage: mainUsage,
+    mainUsage,
+    cognitiveModules: {
+      activationId: 'rin:test-activation',
+      phases: [],
+      usage: createModelUsage(0),
+    },
   };
 }
 
@@ -287,20 +340,70 @@ function setInitializedDefinition(
   ).instanceDefinition = getEchoInstanceDefinition(id);
 }
 
-async function resolveRunDecision(echo: Echo): Promise<{
+async function resolveRunDecision(
+  echo: Echo,
+  trigger: 'scheduled' | 'manual' = 'scheduled'
+): Promise<{
   shouldRun: boolean;
   unreadCheckMs: number;
 }> {
   setInitializedDefinition(echo);
   return await (
     echo as unknown as {
-      resolveRunDecision(): Promise<{
+      resolveRunDecision(trigger: 'scheduled' | 'manual'): Promise<{
         shouldRun: boolean;
         unreadCheckMs: number;
       }>;
     }
-  ).resolveRunDecision();
+  ).resolveRunDecision(trigger);
 }
+
+describe('Echo external request budgets', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('application budget を使い切っても Discord event 通知用の10件を別枠で保つ', async () => {
+    const env = createMockEnv();
+    const { storage } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+    const beginExternalRequestBudget = (
+      echo as unknown as {
+        beginExternalRequestBudget(): boolean;
+      }
+    ).beginExternalRequestBudget.bind(echo);
+    const reserveExternalRequest = (
+      echo as unknown as {
+        reserveExternalRequest(): void;
+      }
+    ).reserveExternalRequest.bind(echo);
+
+    expect(beginExternalRequestBudget()).toBe(true);
+    for (let index = 0; index < 40; index += 1) {
+      reserveExternalRequest();
+    }
+
+    const eventPortOptions = vi.mocked(createCloudflareEchoEventPort).mock
+      .calls[0]?.[0];
+    if (eventPortOptions?.beforeRequest === undefined) {
+      throw new Error('Expected Discord event request admission hook');
+    }
+    const beforeNotificationRequest = async (): Promise<void> => {
+      await eventPortOptions.beforeRequest?.();
+    };
+    await Promise.all(
+      Array.from({ length: 10 }, async () => {
+        await beforeNotificationRequest();
+      })
+    );
+
+    await expect(
+      Promise.resolve().then(async () => {
+        await beforeNotificationRequest();
+      })
+    ).rejects.toThrow('External request budget exceeded');
+  });
+});
 
 describe('Echo.ensureInitialized', () => {
   beforeEach(() => {
@@ -329,12 +432,20 @@ describe('Echo.ensureInitialized', () => {
     );
     expect(embeddingServiceCalls[0]?.[2]).toBe(mockEvents);
     expect(createRerankingService).toHaveBeenCalledWith(env);
-    expect(MemorySystem).toHaveBeenCalledWith({
-      sql: storage.sql,
-      embeddingService: mockEmbeddingService,
-      rerankingService: mockRerankingService,
-      events: mockEvents,
-    });
+    const memorySystemInput = vi.mocked(MemorySystem).mock.calls[0]?.[0];
+    if (memorySystemInput === undefined) {
+      throw new Error('Expected MemorySystem construction');
+    }
+    expect(memorySystemInput.sql).toBe(storage.sql);
+    expect(memorySystemInput.embeddingService.modelIdentifier).toBe(
+      'test-embedding'
+    );
+    expect(memorySystemInput.embeddingService).toBe(mockEmbeddingService);
+    expect(memorySystemInput.rerankingService.modelIdentifier).toBe(
+      'test-reranker'
+    );
+    expect(memorySystemInput.rerankingService).toBe(mockRerankingService);
+    expect(memorySystemInput.events).toBe(mockEvents);
     const toolContextCalls = vi.mocked(createToolExecutionContext).mock.calls;
     expect(toolContextCalls).toHaveLength(1);
     expect(toolContextCalls[0]?.[0]).toMatchObject({
@@ -370,6 +481,123 @@ describe('Echo.ensureInitialized', () => {
     expect(createToolExecutionContext).not.toHaveBeenCalled();
     expect(bindRuntimeTools).not.toHaveBeenCalled();
     expect(mockMemorySystem.reEmbedStaleMemories).not.toHaveBeenCalled();
+  });
+
+  it('外部 provider の embedding だけを external request budget に接続する', async () => {
+    const env = createMockEnv();
+    const { storage } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+    vi.mocked(resolveEchoRuntimeBindings).mockResolvedValueOnce({
+      ...mockRuntimeBindings,
+      embeddingConfig: { provider: 'openai' },
+    });
+    const reserveExternalRequest = vi.spyOn(
+      echo as unknown as { reserveExternalRequest(): void },
+      'reserveExternalRequest'
+    );
+
+    await ensureInitialized(echo, 'rin');
+
+    const memorySystemInput = vi.mocked(MemorySystem).mock.calls[0]?.[0];
+    if (memorySystemInput === undefined) {
+      throw new Error('Expected MemorySystem construction');
+    }
+    expect(memorySystemInput.embeddingService).not.toBe(mockEmbeddingService);
+    expect(memorySystemInput.rerankingService).toBe(mockRerankingService);
+
+    await memorySystemInput.embeddingService.embed('query');
+    await memorySystemInput.rerankingService.rerank('query', [], 5);
+
+    expect(reserveExternalRequest).toHaveBeenCalledTimes(1);
+    expect(mockEmbeddingService.embed).toHaveBeenCalledWith('query');
+    expect(mockRerankingService.rerank).toHaveBeenCalledWith('query', [], 5);
+  });
+});
+
+describe('Echo.createThinkingEngine', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('enable flag 無しで cognitive modules を ThinkingEngine の必須経路へ接続する', async () => {
+    const env = {
+      ...createMockEnv(),
+      OPENAI_API_KEY: 'test-openai-key',
+    } as unknown as Env;
+    const { storage } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+    await ensureInitialized(echo, 'rin');
+
+    const thinkingEngine = (
+      echo as unknown as {
+        createThinkingEngine(): unknown;
+      }
+    ).createThinkingEngine();
+    const engineInput = (
+      thinkingEngine as {
+        input: { cognitiveModules: unknown };
+      }
+    ).input;
+
+    expect(engineInput.cognitiveModules).toBeDefined();
+  });
+
+  it('main と cognitive module の usage を別 model bucket に記録する', () => {
+    const env = {
+      ...createMockEnv(),
+      OPENAI_API_KEY: 'test-openai-key',
+    } as unknown as Env;
+    const { storage } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+    setInitializedDefinition(echo);
+
+    const recordedUsage = (
+      echo as unknown as {
+        createRecordedSessionUsage(result: {
+          usage: ModelUsage;
+          mainUsage: ModelUsage;
+          cognitiveModules: {
+            activationId: string;
+            phases: [];
+            usage: ModelUsage;
+          };
+        }): Usage;
+      }
+    ).createRecordedSessionUsage({
+      usage: createModelUsage(16),
+      mainUsage: createModelUsage(10),
+      cognitiveModules: {
+        activationId: 'rin:activation-1',
+        phases: [],
+        usage: createModelUsage(6),
+      },
+    });
+
+    expect(recordedUsage.total_tokens).toBe(16);
+    expect(recordedUsage.by_model).toEqual([
+      {
+        provider: 'openai',
+        model: 'gpt-5.5',
+        cached_input_tokens: 0,
+        cache_write_input_tokens: 0,
+        uncached_input_tokens: 0,
+        total_input_tokens: 0,
+        output_tokens: 0,
+        reasoning_tokens: 0,
+        total_tokens: 10,
+      },
+      {
+        provider: 'openai',
+        model: 'test-cognitive-model',
+        cached_input_tokens: 0,
+        cache_write_input_tokens: 0,
+        uncached_input_tokens: 0,
+        total_input_tokens: 0,
+        output_tokens: 0,
+        reasoning_tokens: 0,
+        total_tokens: 6,
+      },
+    ]);
   });
 });
 
@@ -615,7 +843,14 @@ describe('Echo dashboard status payload', () => {
         state: 'Idling',
         nextAlarm: null,
         nextWakeAt: null,
-        context: null,
+        cognitive: {
+          domainVersion: 0,
+          emotion: null,
+          previousSessionMemory: null,
+          recalledMemories: [],
+          lastBoundaryId: null,
+          updatedAt: null,
+        },
         runtime: {
           mainLlm: {
             provider: 'openai',
@@ -663,7 +898,14 @@ describe('Echo dashboard status payload', () => {
           state: 'Idling',
           nextAlarm: null,
           nextWakeAt: null,
-          context: null,
+          cognitive: {
+            domainVersion: 0,
+            emotion: null,
+            previousSessionMemory: null,
+            recalledMemories: [],
+            lastBoundaryId: null,
+            updatedAt: null,
+          },
           runtime: {
             mainLlm: {
               provider: 'openai',
@@ -687,7 +929,18 @@ describe('Echo dashboard status payload', () => {
           state: 'Running',
           nextAlarm: null,
           nextWakeAt: null,
-          context: null,
+          cognitive: {
+            domainVersion: 1,
+            emotion: {
+              valence: 0.2,
+              arousal: 0.3,
+              labels: ['focused'],
+            },
+            previousSessionMemory: null,
+            recalledMemories: [],
+            lastBoundaryId: 'rin:activation-1:1:pre_main',
+            updatedAt: '2026-03-19T12:00:00.000Z',
+          },
           runtime: {
             mainLlm: {
               provider: 'openai',
@@ -766,27 +1019,46 @@ describe('Echo dashboard status payload', () => {
     expect(getSummary).toHaveBeenCalledTimes(1);
   });
 
-  it('保存済み context と next_wake_at を詳細 status に含める', async () => {
+  it('Cognitive domain stateとnext_wake_atを詳細statusに含める', async () => {
     const env = createMockEnv();
     const { storage, getFn } = createMockStorage();
     const echo = new Echo(createMockState(storage), env);
-    const context: ContextSnapshot = {
-      content: 'Latest context for dashboard display.',
-      createdAt: '2026-03-22T10:00:00.000Z',
-      updatedAt: '2026-03-22T11:00:00.000Z',
+    const cognitive = {
+      domainVersion: 4,
       emotion: {
         valence: 0.4,
         arousal: 0.3,
         labels: ['focused'],
       },
+      previousSessionMemory: {
+        content: 'Latest cognitive memory for dashboard display.',
+        type: 'episode' as const,
+        emotion: {
+          valence: 0.3,
+          arousal: 0.2,
+          labels: ['settled'],
+        },
+        createdAt: '2026-03-22T10:00:00.000Z',
+      },
+      recalledMemories: [
+        {
+          content: 'Related memory recalled before Main.',
+          type: 'semantic' as const,
+          emotion: {
+            valence: 0.1,
+            arousal: 0.2,
+            labels: ['calm'],
+          },
+          createdAt: '2026-03-21T10:00:00.000Z',
+        },
+      ],
+      lastBoundaryId: 'rin:activation-4:2:post_main',
+      updatedAt: '2026-03-22T11:00:00.000Z',
     };
     const nextWakeAt = '2026-03-22T12:00:00.000Z';
     setInitializedDefinition(echo);
     getFn.mockImplementation(async (key: unknown) => {
       await Promise.resolve();
-      if (key === 'context') {
-        return context;
-      }
       if (key === 'next_wake_at') {
         return nextWakeAt;
       }
@@ -800,14 +1072,32 @@ describe('Echo dashboard status payload', () => {
     ).mockReturnValue({
       getDashboardMemories: () => [],
     });
+    vi.spyOn(
+      echo as unknown as {
+        getCognitiveDomainStoreOrThrow(): {
+          getDashboardState(): Promise<{
+            domainVersion: number;
+            emotion: typeof cognitive.emotion;
+            previousSessionMemory: typeof cognitive.previousSessionMemory;
+            recalledMemories: typeof cognitive.recalledMemories;
+            lastBoundaryId: string;
+            updatedAt: string;
+          }>;
+        };
+      },
+      'getCognitiveDomainStoreOrThrow'
+    ).mockReturnValue({
+      getDashboardState: async () => await Promise.resolve(cognitive),
+    });
     vi.spyOn(echo, 'getNextAlarm').mockResolvedValue(null);
     vi.spyOn(echo, 'getNotes').mockResolvedValue([]);
     vi.spyOn(echo, 'getAllUsage').mockResolvedValue({});
 
     const status = await echo.getStatus();
 
-    expect(status.context).toEqual(context);
+    expect(status).not.toHaveProperty('context');
     expect(status.nextWakeAt).toBe(nextWakeAt);
+    expect(status.cognitive).toEqual(cognitive);
   });
 
   it('保存済み next_wake_at を一覧 summary に含める', async () => {
@@ -852,72 +1142,69 @@ describe('Echo dashboard status payload', () => {
   });
 });
 
-describe('Echo context storage', () => {
+describe('Echo local run route', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('DO storage から context を読み出せる', async () => {
-    const env = createMockEnv();
-    const { storage, getFn } = createMockStorage();
+  it('ローカルのrun endpointは手動実行として起動する', async () => {
+    const env = {
+      ...createMockEnv(),
+      ENVIRONMENT: 'local',
+    } as Env;
+    const { storage } = createMockStorage();
     const echo = new Echo(createMockState(storage), env);
-    const context: ContextSnapshot = {
-      content: 'Latest context for the next wake.',
-      createdAt: '2025-01-25T15:00:00.000Z',
-      updatedAt: '2025-01-25T15:00:00.000Z',
-      emotion: {
-        valence: 0.4,
-        arousal: 0.2,
-        labels: ['calm'],
-      },
-    };
-    getFn.mockResolvedValue(context);
-
-    const result = await (
+    vi.spyOn(
       echo as unknown as {
-        loadContext(): Promise<ContextSnapshot | null>;
-      }
-    ).loadContext();
+        ensureInitialized(instanceId: 'rin' | 'marie'): Promise<void>;
+      },
+      'ensureInitialized'
+    ).mockResolvedValue(undefined);
+    const run = vi
+      .spyOn(
+        echo as unknown as {
+          run(trigger?: 'scheduled' | 'manual'): Promise<{
+            unreadCheckMs: number;
+            thinkMs: number;
+          }>;
+        },
+        'run'
+      )
+      .mockResolvedValue({ unreadCheckMs: 0, thinkMs: 1 });
 
-    expect(getFn).toHaveBeenCalledWith('context');
-    expect(result).toEqual(context);
+    const response = await echo.fetch(
+      new Request('http://example.com/rin/run', { method: 'POST' })
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toBe('OK.');
+    expect(run).toHaveBeenCalledWith('manual');
+  });
+});
+
+describe('Echo run usage storage', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
-  it('run 時に返却された context を DO storage へ保存する', async () => {
-    const env = createMockEnv();
-    const { storage, putFn } = createMockStorage();
+  it('失敗した session でも課金済み Main / Cognitive usage を保存する', async () => {
+    const env = {
+      ...createMockEnv(),
+      OPENAI_API_KEY: 'test-openai-key',
+    } as unknown as Env;
+    const { storage } = createMockStorage();
     const echo = new Echo(createMockState(storage), env);
     setInitializedDefinition(echo);
-    const context: ContextSnapshot = {
-      content: 'Summarized the session for the next cycle.',
-      createdAt: '2025-01-25T15:00:00.000Z',
-      updatedAt: '2025-01-25T15:00:00.000Z',
-      emotion: {
-        valence: 0.4,
-        arousal: 0.2,
-        labels: ['calm', 'satisfied'],
-      },
-    };
-    const think = vi.fn().mockResolvedValue({
-      context,
-      usage: {
-        cachedInputTokens: 0,
-        cacheWriteInputTokens: 0,
-        uncachedInputTokens: 0,
-        totalInputTokens: 0,
-        outputTokens: 0,
-        reasoningTokens: 0,
-        totalTokens: 42,
-      },
-    });
+    const executionError = new ThinkingEngineExecutionError(
+      new Error('cognitive boundary failed'),
+      createModelUsage(7),
+      createModelUsage(3)
+    );
+
     vi.spyOn(
       echo as unknown as { setState(state: string): Promise<void> },
       'setState'
     ).mockResolvedValue(undefined);
-    vi.spyOn(
-      echo as unknown as { getName(): Promise<string> },
-      'getName'
-    ).mockResolvedValue('リン');
     vi.spyOn(
       echo as unknown as {
         resolveRunDecision(): Promise<{
@@ -926,30 +1213,108 @@ describe('Echo context storage', () => {
         }>;
       },
       'resolveRunDecision'
-    ).mockResolvedValue({
-      shouldRun: true,
-      unreadCheckMs: 12,
-    });
+    ).mockResolvedValue({ shouldRun: true, unreadCheckMs: 4 });
     vi.spyOn(
       echo as unknown as {
-        createThinkingEngine(): { think(): Promise<unknown> };
+        createThinkingEngine(): { think(): Promise<never> };
       },
       'createThinkingEngine'
     ).mockReturnValue({
-      think,
+      think: vi.fn().mockRejectedValue(executionError),
     });
-    vi.spyOn(
-      echo as unknown as { updateUsage(): Promise<{ total_tokens: number }> },
-      'updateUsage'
-    ).mockResolvedValue({ total_tokens: 42 });
-    const result = await echo.run();
+    const updateUsage = vi
+      .spyOn(
+        echo as unknown as {
+          updateUsage(usage: Usage, mainUsage: ModelUsage): Promise<Usage>;
+        },
+        'updateUsage'
+      )
+      .mockResolvedValue(createUsage(10));
 
-    expect(think).toHaveBeenCalledTimes(1);
-    expect(putFn).toHaveBeenCalledWith('context', context);
-    expect(result).toMatchObject({
-      unreadCheckMs: 12,
+    await echo.run();
+
+    expect(updateUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        total_tokens: 10,
+        by_model: [
+          expect.objectContaining({ model: 'gpt-5.5', total_tokens: 7 }),
+          expect.objectContaining({
+            model: 'test-cognitive-model',
+            total_tokens: 3,
+          }),
+        ],
+      }),
+      createModelUsage(7)
+    );
+    expect(findEmittedEvent('usage.recorded')).toMatchObject({
+      payload: {
+        status: 'failed',
+        usage: createModelUsage(10),
+      },
     });
-    expect(typeof result.thinkMs).toBe('number');
+  });
+
+  it('表示用の合算 usage と起動判定用の Main token を同時に保存する', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-30T03:00:00.000Z'));
+
+    const env = createMockEnv();
+    const { storage, getFn, putFn } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+    setInitializedDefinition(echo);
+    getFn.mockResolvedValue(undefined);
+
+    const updateUsage = (
+      echo as unknown as {
+        updateUsage(usage: Usage, mainUsage: ModelUsage): Promise<Usage>;
+      }
+    ).updateUsage.bind(echo);
+    const sessionUsage: Usage = {
+      ...createUsage(16),
+      by_model: [
+        createUsageModelBreakdown(10),
+        createUsageModelBreakdown(6, 'test-cognitive-model'),
+      ],
+    };
+
+    await updateUsage(sessionUsage, createModelUsage(10));
+
+    expect(putFn).toHaveBeenCalledWith({
+      usage: {
+        [getTodayUsageKey()]: sessionUsage,
+      },
+      main_usage_tokens: {
+        [getTodayUsageKey()]: 10,
+      },
+    });
+  });
+
+  it('Main counter 導入前の usage から現在の Main model 分だけを引き継ぐ', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-30T03:00:00.000Z'));
+
+    const env = createMockEnv();
+    const { storage, getFn } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+    setInitializedDefinition(echo);
+    const dateKey = getTodayUsageKey();
+    getFn.mockResolvedValueOnce(undefined).mockResolvedValueOnce({
+      [dateKey]: {
+        ...createUsage(16),
+        by_model: [
+          createUsageModelBreakdown(10),
+          createUsageModelBreakdown(6, 'test-cognitive-model'),
+        ],
+      },
+    });
+
+    const mainTokens = await (
+      echo as unknown as {
+        getTodayMainUsageTokens(): Promise<number>;
+      }
+    ).getTodayMainUsageTokens();
+
+    expect(mainTokens).toBe(10);
   });
 });
 
@@ -977,24 +1342,17 @@ describe('Echo next_wake_at storage', () => {
   });
 
   it('run 時に返却された next_wake_at を DO storage へ保存する', async () => {
-    const env = createMockEnv();
+    const env = {
+      ...createMockEnv(),
+      OPENAI_API_KEY: 'test-openai-key',
+    } as unknown as Env;
     const { storage, putFn } = createMockStorage();
     const echo = new Echo(createMockState(storage), env);
     setInitializedDefinition(echo);
     const nextWakeAt = '2026-03-23T00:00:00.000Z';
-    const think = vi.fn().mockResolvedValue({
-      context: null,
-      nextWakeAt,
-      usage: {
-        cachedInputTokens: 0,
-        cacheWriteInputTokens: 0,
-        uncachedInputTokens: 0,
-        totalInputTokens: 0,
-        outputTokens: 0,
-        reasoningTokens: 0,
-        totalTokens: 42,
-      },
-    });
+    const think = vi
+      .fn()
+      .mockResolvedValue(createSuccessfulThinkingResult(nextWakeAt));
 
     vi.spyOn(
       echo as unknown as { setState(state: string): Promise<void> },
@@ -1039,23 +1397,16 @@ describe('Echo next_wake_at storage', () => {
   });
 
   it('run 時に next_wake_at が無ければ保存済み値をクリアする', async () => {
-    const env = createMockEnv();
+    const env = {
+      ...createMockEnv(),
+      OPENAI_API_KEY: 'test-openai-key',
+    } as unknown as Env;
     const { storage, deleteFn } = createMockStorage();
     const echo = new Echo(createMockState(storage), env);
     setInitializedDefinition(echo);
-    const think = vi.fn().mockResolvedValue({
-      context: null,
-      nextWakeAt: null,
-      usage: {
-        cachedInputTokens: 0,
-        cacheWriteInputTokens: 0,
-        uncachedInputTokens: 0,
-        totalInputTokens: 0,
-        outputTokens: 0,
-        reasoningTokens: 0,
-        totalTokens: 42,
-      },
-    });
+    const think = vi
+      .fn()
+      .mockResolvedValue(createSuccessfulThinkingResult(null));
 
     vi.spyOn(
       echo as unknown as { setState(state: string): Promise<void> },
@@ -1106,6 +1457,42 @@ describe('Echo run preconditions', () => {
     vi.useRealTimers();
   });
 
+  it('ローカル手動実行はstate以外の自動起動条件を適用しない', async () => {
+    const env = createMockEnv();
+    const { storage } = createMockStorage();
+    const echo = new Echo(createMockState(storage), env);
+
+    vi.spyOn(
+      echo as unknown as { validateEchoState(): Promise<boolean> },
+      'validateEchoState'
+    ).mockResolvedValue(true);
+    const validateChatMessage = vi.spyOn(
+      echo as unknown as { validateChatMessage(): Promise<boolean> },
+      'validateChatMessage'
+    );
+    const getTodayMainUsageTokens = vi.spyOn(
+      echo as unknown as { getTodayMainUsageTokens(): Promise<number> },
+      'getTodayMainUsageTokens'
+    );
+    const loadNextWakeAt = vi.spyOn(
+      echo as unknown as { loadNextWakeAt(): Promise<string | null> },
+      'loadNextWakeAt'
+    );
+
+    const result = await resolveRunDecision(echo, 'manual');
+
+    expect(result).toEqual({ shouldRun: true, unreadCheckMs: 0 });
+    expect(validateChatMessage).not.toHaveBeenCalled();
+    expect(getTodayMainUsageTokens).not.toHaveBeenCalled();
+    expect(loadNextWakeAt).not.toHaveBeenCalled();
+    expect(findEmittedEvent('system.run_decision.evaluated')).toMatchObject({
+      payload: {
+        shouldRun: true,
+        reason: 'manual_run',
+      },
+    });
+  });
+
   it('未読メッセージがあれば hard limit より優先して実行する', async () => {
     const env = createMockEnv();
     const { storage } = createMockStorage();
@@ -1119,9 +1506,9 @@ describe('Echo run preconditions', () => {
       echo as unknown as { validateChatMessage(): Promise<boolean> },
       'validateChatMessage'
     ).mockResolvedValue(true);
-    const getTodayUsage = vi.spyOn(
-      echo as unknown as { getTodayUsage(): Promise<Usage | null> },
-      'getTodayUsage'
+    const getTodayMainUsageTokens = vi.spyOn(
+      echo as unknown as { getTodayMainUsageTokens(): Promise<number> },
+      'getTodayMainUsageTokens'
     );
     const loadNextWakeAt = vi.spyOn(
       echo as unknown as { loadNextWakeAt(): Promise<string | null> },
@@ -1130,7 +1517,7 @@ describe('Echo run preconditions', () => {
     const result = await resolveRunDecision(echo);
 
     expect(result.shouldRun).toBe(true);
-    expect(getTodayUsage).not.toHaveBeenCalled();
+    expect(getTodayMainUsageTokens).not.toHaveBeenCalled();
     expect(loadNextWakeAt).not.toHaveBeenCalled();
   });
 
@@ -1155,9 +1542,9 @@ describe('Echo run preconditions', () => {
       TOKEN_LIMITS.HARD_LIMIT_BUFFER_FACTOR
     );
     vi.spyOn(
-      echo as unknown as { getTodayUsage(): Promise<Usage | null> },
-      'getTodayUsage'
-    ).mockResolvedValue(createUsage(hardLimit));
+      echo as unknown as { getTodayMainUsageTokens(): Promise<number> },
+      'getTodayMainUsageTokens'
+    ).mockResolvedValue(hardLimit);
     const loadNextWakeAt = vi
       .spyOn(
         echo as unknown as { loadNextWakeAt(): Promise<string | null> },
@@ -1180,7 +1567,7 @@ describe('Echo run preconditions', () => {
         previousValue: '2026-03-22T00:59:00.000Z',
         nextValue: '2026-03-22T01:01:00.000Z',
         reason: 'hard_token_limit_defer',
-        totalTokens: hardLimit,
+        mainTokens: hardLimit,
         hardLimit,
       },
     });
@@ -1207,9 +1594,9 @@ describe('Echo run preconditions', () => {
       TOKEN_LIMITS.HARD_LIMIT_BUFFER_FACTOR
     );
     vi.spyOn(
-      echo as unknown as { getTodayUsage(): Promise<Usage | null> },
-      'getTodayUsage'
-    ).mockResolvedValue(createUsage(hardLimit));
+      echo as unknown as { getTodayMainUsageTokens(): Promise<number> },
+      'getTodayMainUsageTokens'
+    ).mockResolvedValue(hardLimit);
     vi.spyOn(
       echo as unknown as { loadNextWakeAt(): Promise<string | null> },
       'loadNextWakeAt'
@@ -1240,9 +1627,9 @@ describe('Echo run preconditions', () => {
       'validateChatMessage'
     ).mockResolvedValue(false);
     vi.spyOn(
-      echo as unknown as { getTodayUsage(): Promise<Usage | null> },
-      'getTodayUsage'
-    ).mockResolvedValue(createUsage(TOKEN_LIMITS.DAILY_HARD_LIMIT));
+      echo as unknown as { getTodayMainUsageTokens(): Promise<number> },
+      'getTodayMainUsageTokens'
+    ).mockResolvedValue(TOKEN_LIMITS.DAILY_HARD_LIMIT);
     vi.spyOn(
       echo as unknown as { loadNextWakeAt(): Promise<string | null> },
       'loadNextWakeAt'
@@ -1283,9 +1670,9 @@ describe('Echo run preconditions', () => {
       'validateChatMessage'
     ).mockResolvedValue(false);
     vi.spyOn(
-      echo as unknown as { getTodayUsage(): Promise<Usage | null> },
-      'getTodayUsage'
-    ).mockResolvedValue(createUsage(100_000));
+      echo as unknown as { getTodayMainUsageTokens(): Promise<number> },
+      'getTodayMainUsageTokens'
+    ).mockResolvedValue(100_000);
     vi.spyOn(
       echo as unknown as { loadNextWakeAt(): Promise<string | null> },
       'loadNextWakeAt'
@@ -1319,9 +1706,9 @@ describe('Echo run preconditions', () => {
       'validateChatMessage'
     ).mockResolvedValue(false);
     vi.spyOn(
-      echo as unknown as { getTodayUsage(): Promise<Usage | null> },
-      'getTodayUsage'
-    ).mockResolvedValue(createUsage(0));
+      echo as unknown as { getTodayMainUsageTokens(): Promise<number> },
+      'getTodayMainUsageTokens'
+    ).mockResolvedValue(0);
     vi.spyOn(
       echo as unknown as { loadNextWakeAt(): Promise<string | null> },
       'loadNextWakeAt'
@@ -1355,9 +1742,9 @@ describe('Echo run preconditions', () => {
       'validateChatMessage'
     ).mockResolvedValue(false);
     vi.spyOn(
-      echo as unknown as { getTodayUsage(): Promise<Usage | null> },
-      'getTodayUsage'
-    ).mockResolvedValue(createUsage(0));
+      echo as unknown as { getTodayMainUsageTokens(): Promise<number> },
+      'getTodayMainUsageTokens'
+    ).mockResolvedValue(0);
     vi.spyOn(
       echo as unknown as { loadNextWakeAt(): Promise<string | null> },
       'loadNextWakeAt'
@@ -1391,9 +1778,9 @@ describe('Echo run preconditions', () => {
       'validateChatMessage'
     ).mockResolvedValue(false);
     vi.spyOn(
-      echo as unknown as { getTodayUsage(): Promise<Usage | null> },
-      'getTodayUsage'
-    ).mockResolvedValue(createUsage(0));
+      echo as unknown as { getTodayMainUsageTokens(): Promise<number> },
+      'getTodayMainUsageTokens'
+    ).mockResolvedValue(0);
     vi.spyOn(
       echo as unknown as { loadNextWakeAt(): Promise<string | null> },
       'loadNextWakeAt'

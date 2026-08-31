@@ -187,9 +187,65 @@ function createMemoryActivity(
       return createMemorySearchCompletedActivity(event);
     case 'memory.search.failed':
       return createMemorySearchFailedActivity(event);
+    case 'cognitive.phase.committed':
+      return createCognitivePhaseCommittedActivity(event);
+    case 'cognitive.phase.failed':
+      return createCognitivePhaseFailedActivity(event);
     default:
       return null;
   }
+}
+
+/** Cognitive phase commit を検索・記銘・Emotion更新の確定 activity にする。 */
+function createCognitivePhaseCommittedActivity(
+  event: DashboardSessionEchoEvent
+): DashboardActivity {
+  const payload = getEventPayload(event);
+  const phase = getPayloadString(payload, 'phase');
+  const committedVersion = getPayloadNumber(payload, 'committedVersion');
+  return {
+    id: event.id,
+    body: `Cognitive state was committed for ${phase ?? 'a cognitive phase'}.`,
+    createdAt: event.createdAt,
+    details: compactDetails({
+      boundaryId: getPayloadString(payload, 'boundaryId'),
+      committedVersion,
+      memoryUpdates: getPayloadNumber(payload, 'memoryUpdates'),
+      phase,
+    }),
+    kind: 'knowledge',
+    meta: createActivityMeta(event, [
+      phase,
+      committedVersion === undefined
+        ? undefined
+        : `domain v${committedVersion}`,
+    ]),
+    tone: 'positive',
+    title: 'Cognitive phase committed',
+  };
+}
+
+/** Cognitive phase failure を generic Memory search failure と混同せず表示する。 */
+function createCognitivePhaseFailedActivity(
+  event: DashboardSessionEchoEvent
+): DashboardActivity {
+  const payload = getEventPayload(event);
+  return {
+    id: event.id,
+    body: event.summary,
+    createdAt: event.createdAt,
+    details: compactDetails({
+      boundaryId: getPayloadString(payload, 'boundaryId'),
+      commitError: getPayloadString(payload, 'commitError'),
+      emotion: payload.emotion,
+      memory: payload.memory,
+      phase: getPayloadString(payload, 'phase'),
+    }),
+    kind: 'issue',
+    meta: createActivityMeta(event, []),
+    tone: 'critical',
+    title: 'Cognitive phase failed',
+  };
 }
 
 function toDashboardSessionLog(
@@ -333,7 +389,10 @@ function createSessionCompletedActivity(
       .join(' '),
     createdAt: event.createdAt,
     details: compactDetails({
-      hasContext: getPayloadBoolean(payload, 'hasContext'),
+      committedCognitivePhases: getPayloadNumber(
+        payload,
+        'committedCognitivePhases'
+      ),
       nextWakeAt,
       terminationReason,
       totalTokens,
@@ -372,22 +431,25 @@ function createModelOutputActivity(
   }
 
   const turnIndex = getPayloadNumber(payload, 'turnIndex');
+  const cognitiveModule = getPayloadString(payload, 'cognitiveModule');
+  const cognitiveModuleLabel = getCognitiveModuleLabel(cognitiveModule);
   return {
     id: event.id,
     body: content,
     createdAt: event.createdAt,
     details: compactDetails({
+      cognitiveModule,
       model: getPayloadString(payload, 'model'),
       provider: getPayloadString(payload, 'provider'),
       turnIndex,
     }),
     kind: 'thought',
-    meta: createActivityMeta(
-      event,
-      turnIndex === undefined ? [] : [`turn ${turnIndex}`]
-    ),
+    meta: createActivityMeta(event, [
+      turnIndex === undefined ? undefined : `turn ${turnIndex}`,
+      cognitiveModuleLabel,
+    ]),
     tone: 'neutral',
-    title: 'Echo',
+    title: cognitiveModuleLabel ?? 'Echo',
   };
 }
 
@@ -508,21 +570,37 @@ function createModelProviderWarningActivity(
   event: DashboardSessionEchoEvent
 ): DashboardActivity {
   const payload = getEventPayload(event);
+  const cognitiveModule = getPayloadString(payload, 'cognitiveModule');
+  const cognitiveModuleLabel = getCognitiveModuleLabel(cognitiveModule);
   return {
     id: event.id,
     body: event.summary,
     createdAt: event.createdAt,
     details: compactDetails({
       code: getPayloadString(payload, 'code'),
+      cognitiveModule,
       model: getPayloadString(payload, 'model'),
       provider: getPayloadString(payload, 'provider'),
       turnIndex: getPayloadNumber(payload, 'turnIndex'),
     }),
     kind: 'issue',
-    meta: createActivityMeta(event, []),
+    meta: createActivityMeta(event, [cognitiveModuleLabel]),
     tone: 'warning',
     title: 'Model warning',
   };
+}
+
+/** Cognitive model event の attribution を Dashboard 表示名へ正規化する。 */
+function getCognitiveModuleLabel(
+  cognitiveModule: string | undefined
+): 'Memory Module' | 'Emotion Module' | undefined {
+  if (cognitiveModule === 'memory') {
+    return 'Memory Module';
+  }
+  if (cognitiveModule === 'emotion') {
+    return 'Emotion Module';
+  }
+  return undefined;
 }
 
 function createMemorySearchFailedActivity(

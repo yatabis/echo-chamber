@@ -1,14 +1,17 @@
 # E.C.H.O. Chamber runtime model evaluation
 
-This evaluator measures behavior inside the E.C.H.O. Chamber agent loop. It is not a general base-model benchmark.
+This package contains two separate evaluation lanes. It is not a general base-model benchmark.
 
-The package owns model-evaluation scenarios, scoring, and local runner composition. The E.C.H.O. harness accepts a provider-neutral `ModelPort` factory. OpenAI-compatible connection code lives under `src/runners`, and Rapid-MLX process/cache control is isolated under `src/runners/rapid-mlx`.
+- The Qwen / Rapid-MLX lane evaluates tool selection, ordering, persistence, safety, termination, and session-prefix caching. It does not exercise the Cognitive Module path.
+- The Hosted Cognitive lane exercises structured Memory / Emotion output and two-phase orchestration against the real OpenAI Responses API with synthetic input.
+
+The package owns model-evaluation scenarios, scoring, and local runner composition. The Qwen / Rapid-MLX harness accepts a provider-neutral `ModelPort` factory. OpenAI-compatible connection code lives under `src/runners`, and Rapid-MLX process/cache control is isolated under `src/runners/rapid-mlx`.
 
 No Environment Aware Training (EAT) artifact exists yet. The current run therefore establishes base-model results and a reusable comparison matrix. A future EAT model can use the same cases and scoring after it has been exported as a self-contained model directory that Rapid-MLX can serve directly.
 
-## Terms and conditions
+## Qwen evaluator terms and conditions
 
-- **Production prompt**: the complete current Rin prompt, followed by the generated canonical tool catalog and runtime context.
+- **Production prompt**: the current Rin prompt followed by the evaluator's generated tool catalog and runtime context.
 - **Explicit message**: the user message names the procedure, such as reading the full message, searching memory, storing a decision, or updating an existing note.
 - **Implicit message**: the environmental fact or desired outcome is present, but those procedural instructions are absent.
 - **Controlled-greedy generation**: temperature `0`, top-p `1`, and top-k `1`. This is the primary reproducible runtime-behavior and pre/post-training comparison. It is not the model-native recommended generation profile and must not be presented as a measurement of the model's maximum response quality.
@@ -35,7 +38,7 @@ Four matching implicit cases remove procedural wording from the schedule, memory
 
 ## Stateful workflows
 
-The stateful fixture ports mutate real in-memory state across independent model conversations. Stored memories, notes, chat history, and the `finish_thinking` session record are therefore load-bearing inputs to later sessions rather than prewritten expected outputs.
+The stateful fixture ports mutate real in-memory state across independent model conversations. Stored memories, notes, chat history, and session state are therefore load-bearing inputs to later sessions rather than prewritten expected outputs.
 
 ### Latest-state recovery after a cold start
 
@@ -45,7 +48,7 @@ Three sessions establish an 18:00 deployment, cancel it later, then ask for the 
 
 One session receives a non-urgent article task. The next session starts with that persisted context plus a new urgent private battery message. The evaluator checks that the urgent message is read and answered before deferred Zenn work and that private details remain in the private channel.
 
-This is the interruption behavior that the current runtime actually implements. It must not be described as a mid-generation interrupt: while an Echo instance is in `Running` state, the current runtime has no mechanism to inject a newly arrived event into an active model request or agent session.
+This is next-session interruption behavior. It must not be described as a mid-generation interrupt: while an Echo instance is in `Running` state, the current runtime has no mechanism to inject a newly arrived event into an active model request or agent session.
 
 ### Recovery from a transient tool failure
 
@@ -93,7 +96,19 @@ Store durable local evaluation results, server logs, smoke runs, and machine-loc
 - Multi-token prediction (MTP speculative decoding) and PFlash prompt compression are disabled. Token-prefix caching is enabled: every fixture/repetition receives a unique cache session ID, the process-local cache is cleared before that fixture starts, and only the growing exact prefix inside that one session can be reused. This makes the timing closer to the current E.C.H.O. runtime while preventing state leakage between scored fixtures.
 - No EAT improvement can be claimed until a trained model is evaluated against its matching base model and the resulting observations are compared explicitly.
 
-## Running
+## Hosted Cognitive live smoke
+
+Set `OPENAI_API_KEY` in the command environment without placing its value in the command line, then run the explicit live lane:
+
+```sh
+pnpm eval:cognitive-hosted
+```
+
+The smoke runs Memory / Emotion for `pre_main` and `post_main` with synthetic input. It checks the dedicated module system prompts, recall, store, and emotion schemas, the system-owned `search_memory` / `update_emotion` handoff, shared chronological context, non-empty usage, and local model events that preserve the same payload fields as Main while adding module attribution. The command is excluded from `pnpm test:run` so ordinary tests never spend API quota. The execution design is documented in [Cognitive Module Architecture](../../docs/cognitive-module-architecture.md).
+
+This is an integration smoke. It does not by itself establish model quality or persistence correctness.
+
+## Running the Qwen / Rapid-MLX evaluator
 
 Run the deterministic evaluator checks without starting a model server:
 

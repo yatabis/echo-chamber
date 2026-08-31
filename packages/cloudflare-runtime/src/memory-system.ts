@@ -17,6 +17,16 @@ const VECTOR_CANDIDATE_LIMIT = 20;
 const SEARCH_RESULT_LIMIT = 5;
 const SIMILARITY_THRESHOLD = 0.001;
 
+/** application全体のexternal request枯渇はlocal fallbackで隠さない。 */
+function isExternalRequestBudgetError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    error.code === 'external_request_budget_exceeded'
+  );
+}
+
 /**
  * メモリのスナップショット（embeddingを除いた情報）
  *
@@ -86,6 +96,30 @@ interface ReEmbedStaleMemoriesInput {
 export interface MemoryDashboardSummary {
   count: number;
   latestUpdatedAt: string | null;
+}
+
+/** 外部 embedding 済みで、SQLite commit だけを残した memory write。 */
+export type PreparedMemoryWrite =
+  | {
+      status: 'existing';
+      id: string;
+    }
+  | {
+      status: 'prepared';
+      id: string;
+      content: string;
+      emotion: Emotion;
+      type: MemoryType;
+      embedding: ArrayBuffer;
+      embeddingModel: string;
+      createdAt: string;
+    };
+
+/** 同期 memory commit が確定した行と capacity eviction の記録。 */
+export interface MemoryCommitReceipt {
+  storedIds: string[];
+  existingIds: string[];
+  evicted: { id: string; content: string }[];
 }
 
 /**
@@ -199,55 +233,182 @@ export class MemorySystem {
     emotion: Emotion,
     type: MemoryType
   ): Promise<void> {
+    await this.storeMemoryIdempotently(
+      crypto.randomUUID(),
+      content,
+      emotion,
+      type
+    );
+  }
+
+  /**
+   * Commit key 由来の deterministic id で memory write を一度だけ適用する。
+   *
+   * 同じ id の row がすでに確定している再実行では、embedding・保存・evictionを
+   * 繰り返さない。
+   *
+   * @param id Cognitive Module commit 層が決定する一意 id
+   * @param content 保存する本文
+   * @param emotion 感情メタデータ
+   * @param type 記憶タイプ
+   * @returns 新規保存か既存 commit の再確認か
+   */
+  async storeMemoryIdempotently(
+    id: string,
+    content: string,
+    emotion: Emotion,
+    type: MemoryType
+  ): Promise<'stored' | 'existing'> {
+    const prepared = await this.prepareMemoryWrite(id, content, emotion, type);
+    const receipt = this.commitPreparedMemoryWrites([prepared]);
+    await this.emitMemoryCommitEvents(receipt);
+    return receipt.storedIds.includes(id) ? 'stored' : 'existing';
+  }
+
+  /**
+   * 外部 embedding を完了し、永続化前の値として返す。
+   *
+   * この段階では row も eviction も変更しないため、呼び出し側は返り値を
+   * Durable Object の state transaction 内で同期 commit できる。
+   *
+   * @param id Cognitive boundary から導出した deterministic id
+   * @param content 保存する本文
+   * @param emotion 感情メタデータ
+   * @param type 記憶タイプ
+   * @returns 既存 row token または embedding 済み write
+   */
+  async prepareMemoryWrite(
+    id: string,
+    content: string,
+    emotion: Emotion,
+    type: MemoryType
+  ): Promise<PreparedMemoryWrite> {
     this.ensureSchema();
 
-    const embedding = await this.embeddingService.embed(content);
+    const existing = this.sql
+      .exec<{ id: string }>('SELECT id FROM memories WHERE id = ? LIMIT 1', id)
+      .toArray();
+    if (existing.length > 0) {
+      return { status: 'existing', id };
+    }
 
-    // 容量超過時は最古のメモリを削除
-    const memoryCount = this.getMemoryCount();
-    if (memoryCount >= MAX_MEMORY_COUNT) {
-      // 500件以上存在する場合は必ず1行返るのでone()で取得可能
-      const oldest = this.sql
+    const embedding = await this.embeddingService.embed(content);
+    return {
+      status: 'prepared',
+      id,
+      content,
+      emotion: {
+        valence: emotion.valence,
+        arousal: emotion.arousal,
+        labels: [...emotion.labels],
+      },
+      type,
+      embedding: float32ArrayToBuffer(embedding),
+      embeddingModel: this.embeddingService.modelIdentifier,
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Prepared write と capacity eviction を同期 SQL だけで確定する。
+   *
+   * Echo は SQLite-backed Durable Object のため、このメソッドを
+   * `storage.transaction()` 内で呼ぶと hidden KV state と同じ transaction に入る。
+   * 外部 I/O は `prepareMemoryWrite()` 側で完了済みなので transaction を跨がない。
+   *
+   * @param writes embedding 済みの bounded write 群
+   * @returns commit 後に配送する event を含む receipt
+   */
+  commitPreparedMemoryWrites(
+    writes: readonly PreparedMemoryWrite[]
+  ): MemoryCommitReceipt {
+    this.ensureSchema();
+    const storedIds: string[] = [];
+    const existingIds: string[] = [];
+    const evicted: { id: string; content: string }[] = [];
+    const pending: Extract<PreparedMemoryWrite, { status: 'prepared' }>[] = [];
+    const seenIds = new Set<string>();
+
+    for (const write of writes) {
+      if (seenIds.has(write.id)) {
+        throw new Error(`Duplicate prepared memory id: ${write.id}`);
+      }
+      seenIds.add(write.id);
+
+      const existing = this.sql
+        .exec<{
+          id: string;
+        }>('SELECT id FROM memories WHERE id = ? LIMIT 1', write.id)
+        .toArray();
+      if (existing.length > 0) {
+        existingIds.push(write.id);
+        continue;
+      }
+      if (write.status === 'existing') {
+        throw new Error(`Prepared existing memory disappeared: ${write.id}`);
+      }
+      pending.push(write);
+    }
+
+    let rowsToEvict = Math.max(
+      0,
+      this.getMemoryCount() + pending.length - MAX_MEMORY_COUNT
+    );
+    while (rowsToEvict > 0) {
+      const [oldest] = this.sql
         .exec<{
           id: string;
           content: string;
         }>('SELECT id, content FROM memories ORDER BY updated_at ASC LIMIT 1')
-        .one();
-
+        .toArray();
+      if (oldest === undefined) {
+        throw new Error('Memory capacity count did not match stored rows');
+      }
       this.sql.exec('DELETE FROM memories WHERE id = ?', oldest.id);
-      await emitEchoEvent(this.events, {
-        type: 'memory.evicted',
-        severity: 'warn',
-        summary: 'memory capacity reached; removed oldest memory',
-        payload: {
-          id: oldest.id,
-          content: oldest.content,
-          maxMemoryCount: MAX_MEMORY_COUNT,
-        },
-      });
-      this.searchableMemoryRows = null;
+      evicted.push({ id: oldest.id, content: oldest.content });
+      rowsToEvict -= 1;
     }
 
-    const now = new Date().toISOString();
-    const id = crypto.randomUUID();
-    const embeddingBuffer = float32ArrayToBuffer(embedding);
-    const embeddingModel = this.embeddingService.modelIdentifier;
+    for (const write of pending) {
+      this.sql.exec(
+        `INSERT INTO memories (id, content, type, embedding, embedding_model, emotion_valence, emotion_arousal, emotion_labels, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        write.id,
+        write.content,
+        write.type,
+        write.embedding,
+        write.embeddingModel,
+        write.emotion.valence,
+        write.emotion.arousal,
+        JSON.stringify(write.emotion.labels),
+        write.createdAt,
+        write.createdAt
+      );
+      storedIds.push(write.id);
+    }
 
-    this.sql.exec(
-      `INSERT INTO memories (id, content, type, embedding, embedding_model, emotion_valence, emotion_arousal, emotion_labels, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      id,
-      content,
-      type,
-      embeddingBuffer,
-      embeddingModel,
-      emotion.valence,
-      emotion.arousal,
-      JSON.stringify(emotion.labels),
-      now,
-      now
+    if (storedIds.length > 0 || evicted.length > 0) {
+      this.searchableMemoryRows = null;
+    }
+    return { storedIds, existingIds, evicted };
+  }
+
+  /** Transaction 確定後に capacity eviction event を配送する。 */
+  async emitMemoryCommitEvents(receipt: MemoryCommitReceipt): Promise<void> {
+    await Promise.all(
+      receipt.evicted.map(async (memory) =>
+        emitEchoEvent(this.events, {
+          type: 'memory.evicted',
+          severity: 'warn',
+          summary: 'memory capacity reached; removed oldest memory',
+          payload: {
+            id: memory.id,
+            content: memory.content,
+            maxMemoryCount: MAX_MEMORY_COUNT,
+          },
+        })
+      )
     );
-    this.searchableMemoryRows = null;
   }
 
   /**
@@ -560,7 +721,11 @@ export class MemorySystem {
           currentModel,
           row.id
         );
+        this.searchableMemoryRows = null;
       } catch (error) {
+        if (isExternalRequestBudgetError(error)) {
+          throw error;
+        }
         failedCount += 1;
         // eslint-disable-next-line no-await-in-loop
         await emitEchoEvent(this.events, {
@@ -575,8 +740,6 @@ export class MemorySystem {
         });
       }
     }
-    this.searchableMemoryRows = null;
-
     await emitEchoEvent(this.events, {
       type: 'memory.reembedding.completed',
       severity: failedCount > 0 ? 'warn' : 'info',
@@ -648,6 +811,9 @@ export class MemorySystem {
         },
       });
     } catch (error) {
+      if (isExternalRequestBudgetError(error)) {
+        throw error;
+      }
       await emitEchoEvent(this.events, {
         type: 'memory.rerank.failed',
         severity: 'warn',

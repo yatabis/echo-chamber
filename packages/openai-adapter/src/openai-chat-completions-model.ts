@@ -63,6 +63,25 @@ export interface OpenAIChatCompletionsModelOptions {
   frequencyPenalty?: number;
   extraBody?: OpenAIChatCompletionsExtraBody;
   requestBodyExtension?: OpenAIChatCompletionsRequestBodyExtension;
+  /** SDK 内部 retry 回数。application が request 予算を所有する場合は0。 */
+  maxRetries?: number;
+  /** SDK retry を含む各 HTTP attempt 直前の admission hook。 */
+  beforeRequest?(): void | Promise<void>;
+}
+
+/** OpenAI SDK の各 HTTP attempt を呼び出し側の admission gate へ接続する。 */
+function createRequestFetch(
+  beforeRequest: OpenAIChatCompletionsModelOptions['beforeRequest']
+): typeof fetch | undefined {
+  if (beforeRequest === undefined) {
+    return undefined;
+  }
+  const runtimeFetch: typeof fetch = async (input, init) =>
+    await globalThis.fetch(input, init);
+  return async (input, init) => {
+    await beforeRequest();
+    return await runtimeFetch(input, init);
+  };
 }
 
 const EMPTY_CHAT_USAGE: CompletionUsage = {
@@ -90,9 +109,20 @@ export class OpenAIChatCompletionsModel implements ModelPort {
    * @param options API キー、モデル名、base URL、任意の推論・sampling 設定
    */
   constructor(private readonly options: OpenAIChatCompletionsModelOptions) {
+    const requestFetch = createRequestFetch(
+      options.beforeRequest === undefined
+        ? undefined
+        : async (): Promise<void> => {
+            await options.beforeRequest?.();
+          }
+    );
     this.client = new OpenAI({
       apiKey: options.apiKey,
       baseURL: options.baseURL,
+      ...(options.maxRetries === undefined
+        ? {}
+        : { maxRetries: options.maxRetries }),
+      ...(requestFetch === undefined ? {} : { fetch: requestFetch }),
     });
     this.events = options.events;
   }

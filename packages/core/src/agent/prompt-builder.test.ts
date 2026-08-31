@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildAgentPromptMessages,
+  buildEmotionCognitiveModuleSystemPrompt,
+  buildMemoryCognitiveModuleSystemPrompt,
   buildRuntimeContextPrompt,
   buildToolCatalogPrompt,
 } from './prompt-builder';
@@ -10,27 +12,6 @@ import { canonicalRuntimeTools } from './runtime-tools/catalog';
 import type { ModelToolContract } from '../ports/model';
 
 const testCurrentDatetime = new Date('2025-01-25T15:00:00.000Z');
-const testLatestContext = {
-  content: 'Finished replying to the urgent thread and queued the rest.',
-  createdAt: '2025-01-25T15:00:00.000Z',
-  emotion: {
-    valence: 0.4,
-    arousal: 0.2,
-    labels: ['calm', 'satisfied'],
-  },
-};
-const testRelatedMemories = [
-  {
-    content: 'Remembered an earlier similar conversation.',
-    type: 'episode' as const,
-    createdAt: '2日前 (2025年01月24日 10:00:00)',
-    emotion: {
-      valence: 0.3,
-      arousal: 0.1,
-      labels: ['calm'],
-    },
-  },
-];
 const canonicalToolContracts = canonicalRuntimeTools.map(
   (tool) => tool.contract
 );
@@ -38,7 +19,7 @@ const canonicalToolContracts = canonicalRuntimeTools.map(
 function createToolContract(name: string): ModelToolContract {
   return {
     name,
-    description: `${name} description`,
+    description: `${name} の説明`,
     inputSchema: {
       type: 'object',
       properties: {},
@@ -60,10 +41,10 @@ describe('buildToolCatalogPrompt', () => {
     }
 
     expect(result).toContain(
-      'channelKey (required): 読み取り対象の channelKey。check_notifications の結果に含まれる channelKey を使う。'
+      'channelKey (必須): 読み取り対象の channelKey。check_notifications の結果に含まれる channelKey を使う。'
     );
-    expect(result).toContain('limit (required): 取得するメッセージ数');
-    expect(result).toContain('arguments: none');
+    expect(result).toContain('limit (必須): 取得するメッセージ数');
+    expect(result).toContain('引数: なし');
   });
 
   it('渡されていないtoolをstatic catalogから補完しない', () => {
@@ -71,90 +52,68 @@ describe('buildToolCatalogPrompt', () => {
       createToolContract('only_bound_tool'),
     ]);
 
-    expect(result).toContain('- only_bound_tool: only_bound_tool description');
+    expect(result).toContain('- only_bound_tool: only_bound_tool の説明');
     expect(result).not.toContain('finish_thinking');
     expect(result).not.toContain('read_web_page');
   });
 });
 
 describe('buildRuntimeContextPrompt', () => {
-  it('runtime context block の開始タグと終了タグを含む', () => {
-    const result = buildRuntimeContextPrompt(testCurrentDatetime, null);
+  it('共有runtime contextに現在日時を含める', () => {
+    const result = buildRuntimeContextPrompt(testCurrentDatetime);
 
-    expect(result).toContain('<runtime_context>');
-    expect(result).toContain('</runtime_context>');
-  });
-
-  it('persisted context がない場合はプレースホルダを表示する', () => {
-    const result = buildRuntimeContextPrompt(testCurrentDatetime, null);
-
-    expect(result).toContain('No persisted context loaded.');
-  });
-
-  it('現在時刻を含める', () => {
-    const result = buildRuntimeContextPrompt(testCurrentDatetime, null);
-
-    expect(result).toContain('Current datetime: 2025年01月26日 00:00:00');
-  });
-
-  it('latest context がある場合は context 本文を含める', () => {
-    const result = buildRuntimeContextPrompt(
-      testCurrentDatetime,
-      testLatestContext
-    );
-
-    expect(result).toContain('Latest context:');
-    expect(result).toContain(
-      '"content": "Finished replying to the urgent thread and queued the rest."'
+    expect(result).toBe(
+      '<runtime_context>\n現在日時: 2025年01月26日 00:00:00\n</runtime_context>'
     );
   });
+});
 
-  it('latest context がある場合は context の created_at と emotion を含める', () => {
-    const result = buildRuntimeContextPrompt(
-      testCurrentDatetime,
-      testLatestContext
+describe('buildMemoryCognitiveModuleSystemPrompt', () => {
+  it.each([
+    [
+      'pre_main',
+      'あなたはE.C.H.O. Chamberで動作する「リン」の記憶モジュールです。記憶の想起と記銘を担います。共有コンテキストにあるthinkはMainの自然言語出力を表します。その他のツール利用も含め、いずれもMainの履歴であり、あなた自身の過去の出力ではありません。共有コンテキストから、「リン」が次の思考で必要とする可能性のある記憶を想起してください。その記憶を検索するためのクエリを1つ返してください。',
+    ],
+    [
+      'post_main',
+      'あなたはE.C.H.O. Chamberで動作する「リン」の記憶モジュールです。記憶の想起と記銘を担います。共有コンテキストにあるthinkはMainの自然言語出力を表します。その他のツール利用も含め、いずれもMainの履歴であり、あなた自身の過去の出力ではありません。完了した思考セッションの共有コンテキストから、「リン」が記憶しておく内容を選んでください。記憶の本文と種類を返してください。',
+    ],
+  ] as const)('%s phaseの責務を示す', (phase, expected) => {
+    expect(buildMemoryCognitiveModuleSystemPrompt('リン', phase)).toBe(
+      expected
     );
-
-    expect(result).toContain('"created_at": "2025-01-25T15:00:00.000Z"');
-    expect(result).toContain('"labels": [');
   });
+});
 
-  it('関連メモリがある場合は related memories block を含める', () => {
-    const result = buildRuntimeContextPrompt(
-      testCurrentDatetime,
-      testLatestContext,
-      testRelatedMemories
+describe('buildEmotionCognitiveModuleSystemPrompt', () => {
+  it('現在の感情状態を更新する責務を示す', () => {
+    expect(buildEmotionCognitiveModuleSystemPrompt('リン')).toBe(
+      'あなたはE.C.H.O. Chamberで動作する「リン」の感情モジュールです。「リン」の感情状態を管理します。共有コンテキストにあるthinkはMainの自然言語出力を表します。その他のツール利用も含め、いずれもMainの履歴であり、あなた自身の過去の出力ではありません。共有コンテキストに基づいて現在の感情状態を更新してください。感情価（valence）、覚醒度（arousal）、ラベル（labels）を返してください。'
     );
-
-    expect(result).toContain('Related memories:');
-    expect(result).toContain(
-      '"content": "Remembered an earlier similar conversation."'
-    );
-    expect(result).toContain('"type": "episode"');
-    expect(result).not.toContain('"similarity"');
   });
 });
 
 describe('buildAgentPromptMessages', () => {
-  it('system prompt と generated blocks から developer messages を組み立てる', () => {
+  it('Main専用promptと共有runtime contextを別のdeveloper messageとして返す', () => {
     const result = buildAgentPromptMessages({
-      systemPrompt: '<persona>Test persona</persona>',
+      systemPrompt: '<persona>テスト用ペルソナ</persona>',
       currentDatetime: testCurrentDatetime,
-      latestContext: null,
       toolContracts: [createToolContract('only_bound_tool')],
     });
 
-    expect(result).toEqual([
-      expect.objectContaining({
-        role: 'developer',
-      }),
-      expect.objectContaining({
-        role: 'developer',
-      }),
-    ]);
-    expect(result[0]?.content).toContain('<persona>Test persona</persona>');
-    expect(result[0]?.content).toContain('<available_tools>');
-    expect(result[0]?.content).toContain('only_bound_tool');
-    expect(result[1]?.content).toContain('<runtime_context>');
+    expect(result.mainSystemPrompt.role).toBe('developer');
+    expect(result.sharedRuntimeContext).toEqual({
+      role: 'developer',
+      content:
+        '<runtime_context>\n現在日時: 2025年01月26日 00:00:00\n</runtime_context>',
+    });
+    expect(result.mainSystemPrompt.content).toContain(
+      '<persona>テスト用ペルソナ</persona>'
+    );
+    expect(result.mainSystemPrompt.content).toContain('<available_tools>');
+    expect(result.mainSystemPrompt.content).toContain('only_bound_tool');
+    expect(result.mainSystemPrompt.content).toContain(
+      'システムが追加する search_memory と update_emotion のツール往復'
+    );
   });
 });
