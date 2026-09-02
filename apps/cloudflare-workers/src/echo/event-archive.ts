@@ -402,6 +402,11 @@ export class SqliteEchoEventArchive implements EchoEventArchive {
         AND type IN (${DASHBOARD_ACTIVITY_EVENT_TYPE_SQL_LIST})
     `);
 
+    // DO の schema は deploy をまたいで残るため、新しい index の作成後に migration を完了する。
+    this.sql.exec(`
+      DROP INDEX IF EXISTS idx_echo_events_archive_day_session_created
+    `);
+
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS echo_action_analysis_daily_stats (
         archive_day TEXT PRIMARY KEY,

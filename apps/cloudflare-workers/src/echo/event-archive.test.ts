@@ -610,4 +610,32 @@ describe('SqliteEchoEventArchive', () => {
       'WHERE session_id IS NOT NULL'
     );
   });
+
+  it('Activity index への schema migration を置換先の作成後に完了する', () => {
+    const { exec, sql } = createMockSql();
+    const archive = new SqliteEchoEventArchive({
+      sql,
+    });
+
+    archive.getTodayEvents({
+      now: new Date('2026-06-02T18:00:00.000Z'),
+    });
+
+    const schemaQueries = exec.mock.calls.map(([query]) => String(query));
+    const createActivityIndexQueryIndex = schemaQueries.findIndex((query) =>
+      query.includes(
+        'CREATE INDEX IF NOT EXISTS idx_echo_events_archive_day_dashboard_activity_created'
+      )
+    );
+    const dropLegacyIndexQueryIndex = schemaQueries.findIndex((query) =>
+      query.includes(
+        'DROP INDEX IF EXISTS idx_echo_events_archive_day_session_created'
+      )
+    );
+
+    expect(createActivityIndexQueryIndex).toBeGreaterThanOrEqual(0);
+    expect(dropLegacyIndexQueryIndex).toBeGreaterThan(
+      createActivityIndexQueryIndex
+    );
+  });
 });
