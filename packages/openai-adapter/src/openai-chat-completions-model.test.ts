@@ -12,15 +12,22 @@ import {
 const { mockChatCreate, mockOpenAIConstructor } = vi.hoisted(() => {
   const chatCreate = vi.fn();
 
-  return {
-    mockChatCreate: chatCreate,
-    mockOpenAIConstructor: vi.fn(() => ({
+  // Vitest 4 requires mocks invoked with `new` to use a constructable implementation.
+  function MockOpenAI(): {
+    chat: { completions: { create: typeof chatCreate } };
+  } {
+    return {
       chat: {
         completions: {
           create: chatCreate,
         },
       },
-    })),
+    };
+  }
+
+  return {
+    mockChatCreate: chatCreate,
+    mockOpenAIConstructor: vi.fn(MockOpenAI),
   };
 });
 

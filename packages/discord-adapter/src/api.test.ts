@@ -26,13 +26,16 @@ class MockREST {
   readonly setToken = vi.fn<(token: string) => MockREST>().mockReturnThis();
 }
 
-vi.mock('@discordjs/rest', () => ({
-  REST: vi.fn().mockImplementation(() => {
+vi.mock('@discordjs/rest', () => {
+  // Vitest 4 requires mocks invoked with `new` to use a constructable implementation.
+  function MockRESTConstructor(): MockREST {
     const rest = new MockREST();
     restInstances.push(rest);
     return rest;
-  }),
-}));
+  }
+
+  return { REST: vi.fn(MockRESTConstructor) };
+});
 
 function getRestInstance(): MockREST {
   const rest = restInstances[0];
@@ -45,6 +48,7 @@ function getRestInstance(): MockREST {
 
 describe('discord api helpers', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     restInstances.length = 0;
     nextGetResult = undefined;
     nextPostResult = undefined;

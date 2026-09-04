@@ -122,6 +122,7 @@ describe('DiscordEchoEventPort', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-03-21T00:00:00.000Z'));
+    vi.clearAllMocks();
     mockSendChannelMessage.mockResolvedValue({});
   });
 
@@ -273,7 +274,10 @@ describe('CompositeEchoEventPort', () => {
   it('途中の port が失敗しても残りの port へ event を流す', async () => {
     const firstError = new Error('first failed');
     const first = {
-      emit: vi.fn(async () => Promise.reject(firstError)),
+      emit: vi.fn(async (): Promise<void> => {
+        await Promise.resolve();
+        throw firstError;
+      }),
     };
     const second = {
       emit: vi.fn(async () => Promise.resolve()),
@@ -298,6 +302,7 @@ describe('createCloudflareEchoEventPort', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-03-21T00:00:00.000Z'));
+    vi.clearAllMocks();
     mockSendChannelMessage.mockResolvedValue({});
   });
 

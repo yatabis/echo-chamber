@@ -18,13 +18,13 @@ describe('note-validation', () => {
   });
 
   it('validateTitleは空文字を拒否する', () => {
-    expect(() => validateTitle('   ')).toThrowError('Title is required');
+    expect(() => validateTitle('   ')).toThrow('Title is required');
   });
 
   it('validateTitleは長すぎる値を拒否する', () => {
-    expect(() =>
-      validateTitle('a'.repeat(MAX_NOTE_TITLE_LENGTH + 1))
-    ).toThrowError(`Title must be at most ${MAX_NOTE_TITLE_LENGTH} characters`);
+    expect(() => validateTitle('a'.repeat(MAX_NOTE_TITLE_LENGTH + 1))).toThrow(
+      `Title must be at most ${MAX_NOTE_TITLE_LENGTH} characters`
+    );
   });
 
   it('validateContentはtrimした値を返す', () => {
@@ -32,15 +32,13 @@ describe('note-validation', () => {
   });
 
   it('validateContentは空文字を拒否する', () => {
-    expect(() => validateContent('   ')).toThrowError('Content is required');
+    expect(() => validateContent('   ')).toThrow('Content is required');
   });
 
   it('validateContentは長すぎる値を拒否する', () => {
     expect(() =>
       validateContent('a'.repeat(MAX_NOTE_CONTENT_LENGTH + 1))
-    ).toThrowError(
-      `Content must be at most ${MAX_NOTE_CONTENT_LENGTH} characters`
-    );
+    ).toThrow(`Content must be at most ${MAX_NOTE_CONTENT_LENGTH} characters`);
   });
 
   it('validateQueryはtrimした値を返す', () => {
@@ -48,12 +46,12 @@ describe('note-validation', () => {
   });
 
   it('validateQueryは空文字を拒否する', () => {
-    expect(() => validateQuery('   ')).toThrowError('Query is required');
+    expect(() => validateQuery('   ')).toThrow('Query is required');
   });
 
   it('validateQueryは長すぎる値を拒否する', () => {
-    expect(() =>
-      validateQuery('a'.repeat(MAX_NOTE_QUERY_LENGTH + 1))
-    ).toThrowError(`Query must be at most ${MAX_NOTE_QUERY_LENGTH} characters`);
+    expect(() => validateQuery('a'.repeat(MAX_NOTE_QUERY_LENGTH + 1))).toThrow(
+      `Query must be at most ${MAX_NOTE_QUERY_LENGTH} characters`
+    );
   });
 });

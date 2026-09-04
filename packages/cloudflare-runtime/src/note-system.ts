@@ -35,18 +35,38 @@ export interface NoteDashboardSummary {
 }
 
 /**
+ * NoteSystem が利用する永続化操作。
+ *
+ * DurableObjectStorage 全体ではなく、note 管理に必要な境界だけを表す。
+ */
+export interface NoteStorage {
+  /** 指定したキーの値を取得する。 */
+  get(key: string): Promise<unknown>;
+  /** 条件に一致する値を取得する。 */
+  list(options?: {
+    prefix?: string;
+    reverse?: boolean;
+    limit?: number;
+  }): Promise<Map<string, unknown>>;
+  /** 指定したキーへ値を保存する。 */
+  put(key: string, value: unknown): Promise<void>;
+  /** 指定したキーの値を削除する。 */
+  delete(key: string): Promise<boolean>;
+}
+
+/**
  * ノートシステム
  * DurableObjectStorage上でメモを管理する。
  */
 export class NoteSystem {
-  private readonly storage: DurableObjectStorage;
+  private readonly storage: NoteStorage;
 
   /**
    * Durable Object storage 上で動く note runtime を構築する。
    *
    * @param options storage
    */
-  constructor(options: { storage: DurableObjectStorage }) {
+  constructor(options: { storage: NoteStorage }) {
     this.storage = options.storage;
   }
 
@@ -93,7 +113,7 @@ export class NoteSystem {
       throw new Error('Note ID is required');
     }
 
-    const storedNote = await this.storage.get<Note>(getNoteStorageKey(noteId));
+    const storedNote = await this.storage.get(getNoteStorageKey(noteId));
     if (!isNoteRecord(storedNote)) {
       return null;
     }
@@ -171,7 +191,7 @@ export class NoteSystem {
     }
 
     const storageKey = getNoteStorageKey(noteId);
-    const storedNote = await this.storage.get<Note>(storageKey);
+    const storedNote = await this.storage.get(storageKey);
     if (!isNoteRecord(storedNote)) {
       return null;
     }

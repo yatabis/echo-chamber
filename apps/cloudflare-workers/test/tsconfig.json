@@ -2,7 +2,7 @@
   "extends": "../tsconfig.json",
   "compilerOptions": {
     "moduleResolution": "bundler",
-    "types": ["@cloudflare/vitest-pool-workers", "vitest/globals"]
+    "types": ["@cloudflare/vitest-plugin/types", "vitest/globals"]
   },
   "include": ["./**/*.ts", "../worker-configuration.d.ts"]
 }

@@ -26,7 +26,7 @@ export class WorkersAIRerankingService implements RerankingService {
     contexts: string[],
     topK?: number
   ): Promise<RerankResult[]> {
-    const response = await this.ai.run(this.model as Parameters<Ai['run']>[0], {
+    const response = await this.ai.run(this.model, {
       query,
       contexts: contexts.map((text) => ({ text })),
       top_k: topK,

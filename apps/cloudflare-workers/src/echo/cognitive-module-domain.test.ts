@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, type Mock, vi } from 'vitest';
 
+import type { MemorySystem } from '@echo-chamber/cloudflare-runtime/memory-system';
 import type {
   CognitiveModuleDomainCommitInput,
   CognitiveModulePhase,
@@ -13,10 +14,10 @@ import type { ModelUsage } from '@echo-chamber/core/ports/model';
 import { CognitiveModuleDomainStore } from './cognitive-module-domain';
 
 interface MemoryRuntime {
-  searchMemory: ReturnType<typeof vi.fn>;
-  prepareMemoryWrite: ReturnType<typeof vi.fn>;
-  commitPreparedMemoryWrites: ReturnType<typeof vi.fn>;
-  emitMemoryCommitEvents: ReturnType<typeof vi.fn>;
+  searchMemory: Mock<MemorySystem['searchMemory']>;
+  prepareMemoryWrite: Mock<MemorySystem['prepareMemoryWrite']>;
+  commitPreparedMemoryWrites: Mock<MemorySystem['commitPreparedMemoryWrites']>;
+  emitMemoryCommitEvents: Mock<MemorySystem['emitMemoryCommitEvents']>;
 }
 
 interface MemoryStorage {
@@ -67,9 +68,9 @@ function createStorage(
 
 function createMemoryRuntime(): MemoryRuntime {
   return {
-    searchMemory: vi.fn().mockResolvedValue([]),
-    prepareMemoryWrite: vi.fn(
-      async (id: string, content: string, emotion: unknown, type: string) =>
+    searchMemory: vi.fn<MemorySystem['searchMemory']>().mockResolvedValue([]),
+    prepareMemoryWrite: vi.fn<MemorySystem['prepareMemoryWrite']>(
+      async (id, content, emotion, type) =>
         await Promise.resolve({
           status: 'prepared',
           id,
@@ -81,12 +82,16 @@ function createMemoryRuntime(): MemoryRuntime {
           createdAt: '2026-08-23T00:00:00.000Z',
         })
     ),
-    commitPreparedMemoryWrites: vi.fn((writes: { id: string }[]) => ({
+    commitPreparedMemoryWrites: vi.fn<
+      MemorySystem['commitPreparedMemoryWrites']
+    >((writes) => ({
       storedIds: writes.map((write) => write.id),
       existingIds: [],
       evicted: [],
     })),
-    emitMemoryCommitEvents: vi.fn().mockResolvedValue(undefined),
+    emitMemoryCommitEvents: vi
+      .fn<MemorySystem['emitMemoryCommitEvents']>()
+      .mockResolvedValue(undefined),
   };
 }
 
