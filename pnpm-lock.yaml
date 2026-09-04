@@ -140,6 +140,19 @@ importers:
         specifier: ^6.4.1
         version: 6.4.1(@types/node@24.3.0)
 
+  apps/local-runtime:
+    dependencies:
+      '@echo-chamber/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@echo-chamber/native-inference-adapter':
+        specifier: workspace:*
+        version: link:../../packages/native-inference-adapter
+    devDependencies:
+      vite-node:
+        specifier: 3.2.4
+        version: 3.2.4(@types/node@24.3.0)
+
   packages/cloudflare-runtime:
     dependencies:
       '@echo-chamber/core':
@@ -178,12 +191,25 @@ importers:
       '@echo-chamber/core':
         specifier: workspace:*
         version: link:../core
+      '@echo-chamber/native-inference-adapter':
+        specifier: workspace:*
+        version: link:../native-inference-adapter
       '@echo-chamber/openai-adapter':
         specifier: workspace:*
         version: link:../openai-adapter
       openai:
         specifier: 6.46.0
         version: 6.46.0(ws@8.18.0)(zod@4.0.5)
+
+  packages/native-inference-adapter:
+    dependencies:
+      '@echo-chamber/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      vite-node:
+        specifier: 3.2.4
+        version: 3.2.4(@types/node@24.3.0)
 
   packages/openai-adapter:
     dependencies:

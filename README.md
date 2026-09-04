@@ -1,7 +1,7 @@
 # E.C.H.O Chamber
 
-Cloudflare Workers / Durable Objects 上で動作する、Discord 連携型の思考エージェントです。
-OpenAI Responses API と Embedding を利用し、複数インスタンスを 1 つの Worker で運用します。
+複数の存在を独立した状態と記憶で動かす、思考エージェント基盤です。
+現在の主要 entrypoint は Cloudflare Workers / Durable Objects と Discord 連携ですが、runtime 非依存の core を共有する first-class local entrypoint を追加し、そちらを主経路へ寄せる計画です。Cloudflare entrypoint も引き続き維持します。
 
 ## モノレポ構成
 
@@ -9,6 +9,7 @@ OpenAI Responses API と Embedding を利用し、複数インスタンスを 1 
 apps/
   cloudflare-workers/        # Worker エントリ・DO実装・wrangler 設定・Cloudflare依存テスト・静的配信
   dashboard/                 # React + Vite ダッシュボード
+  local-runtime/             # Node上のローカルcomposition root（Native推論ライフサイクルから実装中）
 packages/
   core/                      # Echo agent のドメイン / application 層（tool spec, prompt, session, ports）
   contracts/                 # Worker / Dashboard 間の API contract（DTO + zod schema）
@@ -16,6 +17,8 @@ packages/
   model-evaluation/          # E.C.H.O. runtime behavior / local model 評価
   discord-adapter/           # Chat / Notification / ThoughtLog の Discord 実装
   cloudflare-runtime/        # Memory / Note など Cloudflare runtime 実装
+native/
+  echo-inference/            # Qwen3.5系とE.C.H.O.状態管理に特化したRust推論エンジン
 ```
 
 ## 依存ルール
@@ -26,6 +29,8 @@ packages/
 - `packages/model-evaluation` は評価対象の `core` / adapter に依存し、production package からは参照しない
 - `packages/cloudflare-runtime` は `packages/core` に依存し、Cloudflare 固有実装を閉じ込める
 - `apps/cloudflare-workers` は composition root として adapter / core を束ねる
+- `apps/local-runtime` はローカル composition root として、常駐 Native owner と instance ごとの `ModelPort` を束ねる
+- `native/echo-inference` は pnpm workspace から独立した Cargo workspace として、local inference と per-instance KV/GDN state を担う
 - `apps/dashboard` は agent core ではなく API contract に依存する形へ寄せる
 - workspace package は root barrel ではなく subpath import で参照する
 - 禁止: `packages/core -> adapter/apps` の逆依存
@@ -37,6 +42,8 @@ packages/
 - Cloudflare アカウント
 - Discord Bot（Echo インスタンス用 + ログ通知用）
 - OpenAI API キー
+
+native inference engine の開発には、Rust 1.93 以降、MLX 0.32.0 と対応する official MLX C build が別途必要です。現時点のbuild方法と実装済み範囲は [`native/echo-inference/README.md`](native/echo-inference/README.md) を参照してください。
 
 ## セットアップ
 
@@ -50,6 +57,21 @@ pnpm dev
 
 - `pnpm dev` は `apps/cloudflare-workers` を対象に `wrangler types && wrangler dev` を実行します。
 - dashboard の単体開発は `pnpm --filter @echo-chamber/dashboard dev` を使用します。
+
+### ローカル Native 推論のライフサイクル
+
+`apps/local-runtime` には、1つの常駐 Rust 推論プロセスを `rin` / `marie` で共有しながら、instance ごとに同じ `NativeInferenceModel` を保持する構成を実装しています。
+
+- 起動時、instance ごとの state directory を排他 open し、`current.safetensors` があれば KV/GDN state と instance/model identity を検証して自動復元する
+- `current.safetensors` の認証・整合性検証が失敗した場合は、新規状態へ黙って退避せず起動全体を失敗させる。旧 `current.json` 形式も明示的な移行なしには受け入れない
+- `ThinkingEngine.think()` 1回分を「思考セッション」の保存境界とし、process-local state が更新された場合だけ snapshot を発行する
+- 世代管理は行わず、hidden staging file の同期後に固定 `current.safetensors` を原子的に置換する。起動時は管理対象の staging remainder だけを除去し、未知の operator file は保持する
+- 同じ instance の思考セッションは同時実行させず、異なる instance は同じ常駐 owner を共有する
+- 終了時は進行中の生成を token 境界でキャンセルし、commit 済み状態を保存してから owner を閉じる
+
+各モデル生成の直後ではなく思考セッション終了時に保存するのは、約70MB級の KV/GDN state 書き出しをモデル・ツール反復のホットパスへ入れないためです。通常のプロセス異常終了で失い得る範囲は、実行中だった思考セッションです。
+
+現段階で完成しているのは Native 推論の process/model/state lifecycle です。Chat、Memory、Note、scheduler、外部イベント入力を束ねる完全なローカル entrypoint は後続実装です。
 
 ## 環境変数と Secret
 
@@ -158,21 +180,26 @@ pnpm --filter @echo-chamber/cloudflare-workers exec wrangler kv key put --bindin
 
 ## 実行・開発コマンド
 
-| コマンド                                            | 用途                                                               |
-| --------------------------------------------------- | ------------------------------------------------------------------ |
-| `pnpm dev`                                          | Worker ローカル起動（型生成付き）                                  |
-| `pnpm start`                                        | Worker ローカル起動                                                |
-| `pnpm cf-typegen`                                   | Worker 型定義生成                                                  |
-| `pnpm deploy`                                       | Cloudflare へデプロイ                                              |
-| `pnpm --filter @echo-chamber/dashboard dev`         | Dashboard 単体開発                                                 |
-| `pnpm dashboard:build`                              | Dashboard ビルド（Worker assets に出力）                           |
-| `pnpm test:run`                                     | `core` / `contracts` / adapter / runtime / worker のテスト実行     |
-| `pnpm test:coverage`                                | `core` / `contracts` / adapter / runtime / worker の coverage 集約 |
-| `pnpm eval:check`                                   | モデル評価器のシナリオ・採点・集計ロジックを検証                   |
-| `pnpm eval`                                         | Rapid-MLX上でQwen3.6のE.C.H.O. runtime評価を実行                   |
-| `pnpm eval:session-prefix-cache`                    | 専用session prefix-cache contractを実機検証                        |
-| `pnpm eval:rescore`                                 | 保存済み評価結果を現在の採点条件で再採点                           |
-| `pnpm lint:check` / `pnpm typecheck` / `pnpm check` | 品質チェック                                                       |
+| コマンド                                             | 用途                                                               |
+| ---------------------------------------------------- | ------------------------------------------------------------------ |
+| `pnpm dev`                                           | Worker ローカル起動（型生成付き）                                  |
+| `pnpm start`                                         | Worker ローカル起動                                                |
+| `pnpm cf-typegen`                                    | Worker 型定義生成                                                  |
+| `pnpm deploy`                                        | Cloudflare へデプロイ                                              |
+| `pnpm --filter @echo-chamber/dashboard dev`          | Dashboard 単体開発                                                 |
+| `pnpm --filter @echo-chamber/local-runtime test:run` | ローカル Native lifecycle の統合テスト                             |
+| `pnpm dashboard:build`                               | Dashboard ビルド（Worker assets に出力）                           |
+| `pnpm test:run`                                      | `core` / `contracts` / adapter / runtime / worker のテスト実行     |
+| `pnpm test:coverage`                                 | `core` / `contracts` / adapter / runtime / worker の coverage 集約 |
+| `pnpm eval:check`                                    | モデル評価器のシナリオ・採点・集計ロジックを検証                   |
+| `pnpm eval`                                          | Rapid-MLX上でQwen3.6のE.C.H.O. runtime評価を実行                   |
+| `pnpm eval:native-rapid-performance`                 | nativeとRapid-MLXの同条件性能ゲートを実機実行                      |
+| `pnpm eval:native-stateful-performance`              | nativeの状態継続・存在切替・常駐メモリゲートを実機実行             |
+| `pnpm eval:native-long-session-performance`          | nativeの長コンテキスト・反復continuationゲートを実機実行           |
+| `pnpm eval:native-rapid-long-session-performance`    | nativeとRapid-MLXの実運用長セッション契約を比較                    |
+| `pnpm eval:session-prefix-cache`                     | 専用session prefix-cache contractを実機検証                        |
+| `pnpm eval:rescore`                                  | 保存済み評価結果を現在の採点条件で再採点                           |
+| `pnpm lint:check` / `pnpm typecheck` / `pnpm check`  | 品質チェック                                                       |
 
 ## HTTP エンドポイント
 
@@ -204,6 +231,7 @@ pnpm --filter @echo-chamber/cloudflare-workers exec wrangler kv key put --bindin
 - agent ドメイン / 純粋ロジック: `packages/core/src/**/*.test.ts`
 - API contract / schema: `packages/contracts/src/**/*.test.ts`
 - provider adapter: `packages/openai-adapter/src/**/*.test.ts`, `packages/discord-adapter/src/**/*.test.ts`
+- local composition: `apps/local-runtime/src/**/*.test.ts`
 - Cloudflare runtime: `packages/cloudflare-runtime/src/**/*.test.ts`
 - Worker / Durable Object / route: `apps/cloudflare-workers/src/**/*.test.ts`
 - Dashboard は現状、専用 test script ではなく build / typecheck と contract parser で整合を保つ

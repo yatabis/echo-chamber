@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "scenario": "qwen35-echo-production-sampling",
+  "fixture_sha256": "acf99e07fe39e98c32d137e8898dbba055dc373eac67e4f6b818d4ea98b6aaf5",
+  "config": {
+    "temperature": 0.7,
+    "top_p": 0.8,
+    "top_k": 20,
+    "min_p": 0.0,
+    "repetition_penalty": 1.0,
+    "presence_penalty": 1.5
+  },
+  "history_scope": "generated_output",
+  "presence_context_size": 4096,
+  "history_token_count": 24,
+  "seed_count": 64,
+  "expected_tokens": [
+    35, 37, 27, 29, 28, 35, 63, 63, 37, 38, 63, 62, 36, 36, 62, 36, 37, 62, 37,
+    37, 62, 62, 62, 62, 27, 38, 54, 37, 62, 63, 63, 63, 62, 36, 29, 36, 63, 61,
+    46, 63, 28, 36, 28, 61, 37, 63, 63, 29, 36, 61, 36, 36, 61, 46, 37, 37, 36,
+    62, 29, 63, 61, 62, 54, 54
+  ],
+  "actual_tokens": [
+    35, 37, 27, 29, 28, 35, 63, 63, 37, 38, 63, 62, 36, 36, 62, 36, 37, 62, 37,
+    37, 62, 62, 62, 62, 27, 38, 54, 37, 62, 63, 63, 63, 62, 36, 29, 36, 63, 61,
+    46, 63, 28, 36, 28, 61, 37, 63, 63, 29, 36, 61, 36, 36, 61, 46, 37, 37, 36,
+    62, 29, 63, 61, 62, 54, 54
+  ],
+  "mismatch_count": 0,
+  "exact": true
+}

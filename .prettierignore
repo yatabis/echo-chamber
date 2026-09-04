@@ -2,6 +2,7 @@ node_modules/
 .pnpm-store/
 dist/
 build/
+**/target/
 .wrangler/
 **/worker-configuration.d.ts
 *.min.js
