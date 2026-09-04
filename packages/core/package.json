@@ -10,7 +10,6 @@
     "./echo/types": "./src/echo/types.ts",
     "./echo/usage": "./src/echo/usage.ts",
     "./ports/chat": "./src/ports/chat.ts",
-    "./ports/context": "./src/ports/context.ts",
     "./ports/echo-event": "./src/ports/echo-event.ts",
     "./ports/memory": "./src/ports/memory.ts",
     "./ports/model": "./src/ports/model.ts",

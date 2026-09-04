@@ -5,6 +5,8 @@ import type {
   DashboardSessionLogsResponse,
 } from '@echo-chamber/contracts/dashboard/types';
 
+import { isDashboardActivityEventType } from './dashboard-activity-events';
+
 import type { EchoEventArchiveDay } from './event-archive';
 
 type DashboardSessionEchoEvent = Omit<DashboardEchoEvent, 'sessionId'> & {
@@ -110,6 +112,9 @@ function buildActivityEntries(
   const context = buildActivityContext(events);
 
   return events.flatMap((event) => {
+    if (!isDashboardActivityEventType(event.type)) {
+      return [];
+    }
     const entry = createSessionLogActivity(event, context);
 
     return entry === null ? [] : [entry];

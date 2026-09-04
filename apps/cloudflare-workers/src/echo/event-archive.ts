@@ -2,6 +2,8 @@ import type { DashboardEchoEvent } from '@echo-chamber/contracts/dashboard/types
 import type { EchoEvent } from '@echo-chamber/core/ports/echo-event';
 import { formatDate } from '@echo-chamber/core/utils/datetime';
 
+import { DASHBOARD_ACTIVITY_EVENT_TYPES } from './dashboard-activity-events';
+
 import type {
   DashboardActionAnalysisEventRange,
   DashboardActionAnalysisMetrics,
@@ -96,6 +98,9 @@ const ACTION_ANALYSIS_EVENT_TYPES = [
   'memory.search.failed',
 ] as const satisfies readonly EchoEvent['type'][];
 const DASHBOARD_SESSION_LOG_EVENT_LIMIT = 200;
+// SQLite needs the same literal predicate in the query and partial index to select the bounded index path.
+const DASHBOARD_ACTIVITY_EVENT_TYPE_SQL_LIST =
+  DASHBOARD_ACTIVITY_EVENT_TYPES.map((type) => `'${type}'`).join(', ');
 
 type ActionAnalysisEventType = (typeof ACTION_ANALYSIS_EVENT_TYPES)[number];
 
@@ -227,7 +232,7 @@ export class SqliteEchoEventArchive implements EchoEventArchive {
 
     return {
       archiveDay,
-      events: this.getEventsByArchiveDay(
+      events: this.getDashboardActivityEventsByArchiveDay(
         archiveDay,
         input.limit ?? DASHBOARD_SESSION_LOG_EVENT_LIMIT
       ),
@@ -390,11 +395,16 @@ export class SqliteEchoEventArchive implements EchoEventArchive {
       ON echo_events(archive_day, created_at_ms)
     `);
 
-    // Alarm events without a session must not force dashboard reads to scan past the bounded result set.
     this.sql.exec(`
-      CREATE INDEX IF NOT EXISTS idx_echo_events_archive_day_session_created
+      CREATE INDEX IF NOT EXISTS idx_echo_events_archive_day_dashboard_activity_created
       ON echo_events(archive_day, created_at_ms)
       WHERE session_id IS NOT NULL
+        AND type IN (${DASHBOARD_ACTIVITY_EVENT_TYPE_SQL_LIST})
+    `);
+
+    // DO の schema は deploy をまたいで残るため、新しい index の作成後に migration を完了する。
+    this.sql.exec(`
+      DROP INDEX IF EXISTS idx_echo_events_archive_day_session_created
     `);
 
     this.sql.exec(`
@@ -756,9 +766,9 @@ export class SqliteEchoEventArchive implements EchoEventArchive {
   }
 
   /**
-   * 指定 archive day の event を dashboard 用に取得する。
+   * 指定 archive day の Dashboard Activity 候補 event を取得する。
    */
-  private getEventsByArchiveDay(
+  private getDashboardActivityEventsByArchiveDay(
     archiveDay: string,
     limit: number
   ): DashboardEchoEvent[] {
@@ -771,6 +781,7 @@ export class SqliteEchoEventArchive implements EchoEventArchive {
          FROM echo_events
          WHERE archive_day = ?
            AND session_id IS NOT NULL
+           AND type IN (${DASHBOARD_ACTIVITY_EVENT_TYPE_SQL_LIST})
          ORDER BY created_at_ms DESC
          LIMIT ?`,
         archiveDay,

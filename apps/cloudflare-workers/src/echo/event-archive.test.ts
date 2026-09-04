@@ -548,7 +548,25 @@ describe('SqliteEchoEventArchive', () => {
     ]);
   });
 
-  it('dashboard session logs の件数上限を session 付き event に適用する', () => {
+  it('dashboard session logs の件数上限を表示候補 event に適用する', () => {
+    const activityEventTypes = [
+      'session.started',
+      'session.completed',
+      'session.failed',
+      'model.turn.completed',
+      'model.output.emitted',
+      'model.provider.warning',
+      'tool.called',
+      'tool.completed',
+      'tool.failed',
+      'memory.search.completed',
+      'memory.search.failed',
+      'cognitive.phase.committed',
+      'cognitive.phase.failed',
+    ];
+    const activityEventTypeSqlList = activityEventTypes
+      .map((type) => `'${type}'`)
+      .join(', ');
     const { exec, sql } = createMockSql();
     const archive = new SqliteEchoEventArchive({
       sql,
@@ -567,25 +585,57 @@ describe('SqliteEchoEventArchive', () => {
       return String(query).includes('FROM echo_events');
     });
     expect(eventQuery).toEqual([
-      expect.stringContaining('AND session_id IS NOT NULL'),
+      expect.stringContaining(`AND type IN (${activityEventTypeSqlList})`),
       '2026-06-03',
       50,
     ]);
+    expect(String(eventQuery?.[0])).toContain('AND session_id IS NOT NULL');
     expect(String(eventQuery?.[0])).toContain(
       'ORDER BY created_at_ms DESC\n         LIMIT ?'
     );
     expect(exec.mock.calls).toContainEqual([
       expect.stringContaining(
-        'CREATE INDEX IF NOT EXISTS idx_echo_events_archive_day_session_created'
+        'CREATE INDEX IF NOT EXISTS idx_echo_events_archive_day_dashboard_activity_created'
       ),
     ]);
-    const sessionEventIndexQuery = exec.mock.calls.find(([query]) => {
+    const activityEventIndexQuery = exec.mock.calls.find(([query]) => {
       return String(query).includes(
-        'idx_echo_events_archive_day_session_created'
+        'idx_echo_events_archive_day_dashboard_activity_created'
       );
     });
-    expect(String(sessionEventIndexQuery?.[0])).toContain(
+    expect(String(activityEventIndexQuery?.[0])).toContain(
+      `AND type IN (${activityEventTypeSqlList})`
+    );
+    expect(String(activityEventIndexQuery?.[0])).toContain(
       'WHERE session_id IS NOT NULL'
+    );
+  });
+
+  it('Activity index への schema migration を置換先の作成後に完了する', () => {
+    const { exec, sql } = createMockSql();
+    const archive = new SqliteEchoEventArchive({
+      sql,
+    });
+
+    archive.getTodayEvents({
+      now: new Date('2026-06-02T18:00:00.000Z'),
+    });
+
+    const schemaQueries = exec.mock.calls.map(([query]) => String(query));
+    const createActivityIndexQueryIndex = schemaQueries.findIndex((query) =>
+      query.includes(
+        'CREATE INDEX IF NOT EXISTS idx_echo_events_archive_day_dashboard_activity_created'
+      )
+    );
+    const dropLegacyIndexQueryIndex = schemaQueries.findIndex((query) =>
+      query.includes(
+        'DROP INDEX IF EXISTS idx_echo_events_archive_day_session_created'
+      )
+    );
+
+    expect(createActivityIndexQueryIndex).toBeGreaterThanOrEqual(0);
+    expect(dropLegacyIndexQueryIndex).toBeGreaterThan(
+      createActivityIndexQueryIndex
     );
   });
 });
