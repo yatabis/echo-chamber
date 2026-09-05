@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
 import { MemorySystem } from '@echo-chamber/cloudflare-runtime/memory-system';
 import {
@@ -114,13 +114,23 @@ const {
   mockToolContext: { context: 'tool-context' },
 }));
 
-vi.mock('@echo-chamber/cloudflare-runtime/memory-system', () => ({
-  MemorySystem: vi.fn(() => mockMemorySystem),
-}));
+vi.mock('@echo-chamber/cloudflare-runtime/memory-system', () => {
+  // Vitest 4 requires mocks invoked with `new` to use a constructable implementation.
+  function MockMemorySystem(): typeof mockMemorySystem {
+    return mockMemorySystem;
+  }
 
-vi.mock('@echo-chamber/cloudflare-runtime/note-system', () => ({
-  NoteSystem: vi.fn(() => mockNoteSystem),
-}));
+  return { MemorySystem: vi.fn(MockMemorySystem) };
+});
+
+vi.mock('@echo-chamber/cloudflare-runtime/note-system', () => {
+  // Vitest 4 requires mocks invoked with `new` to use a constructable implementation.
+  function MockNoteSystem(): typeof mockNoteSystem {
+    return mockNoteSystem;
+  }
+
+  return { NoteSystem: vi.fn(MockNoteSystem) };
+});
 
 vi.mock('cloudflare:workers', () => ({
   DurableObject: class {
@@ -170,13 +180,13 @@ vi.mock('./tool-context', () => ({
 
 function createMockStorage(): {
   storage: DurableObjectStorage;
-  deleteFn: ReturnType<typeof vi.fn>;
-  getFn: ReturnType<typeof vi.fn>;
-  putFn: ReturnType<typeof vi.fn>;
+  deleteFn: Mock<() => Promise<boolean>>;
+  getFn: Mock<(_key?: string | string[]) => Promise<unknown>>;
+  putFn: Mock<() => Promise<void>>;
 } {
   const deleteFn = vi.fn(async () => Promise.resolve(false));
-  const getFn = vi.fn(async (_key?: string | string[]) =>
-    Promise.resolve(undefined)
+  const getFn = vi.fn<(_key?: string | string[]) => Promise<unknown>>(
+    async () => Promise.resolve(undefined)
   );
   const putFn = vi.fn(async () => Promise.resolve());
 

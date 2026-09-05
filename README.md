@@ -49,6 +49,8 @@ pnpm dev
 補足:
 
 - `pnpm dev` は `apps/cloudflare-workers` を対象に `wrangler types && wrangler dev` を実行します。
+- Workers AI はローカル模擬されず、ローカル開発でもリモートリソースへ接続して利用量が発生し得ます。
+- `pnpm dev` / `pnpm start` は、Access で保護された production / preview hostname と分離するため、ローカル開発セッションだけ Worker 名 `echo-chamber-local-dev` を使用します。この一時セッションは Wrangler の preview token で保護され、`pnpm deploy` の Worker 名 `echo-chamber` には影響しません。
 - dashboard の単体開発は `pnpm --filter @echo-chamber/dashboard dev` を使用します。
 
 ## 環境変数と Secret
@@ -208,7 +210,7 @@ pnpm --filter @echo-chamber/cloudflare-workers exec wrangler kv key put --bindin
 - Worker / Durable Object / route: `apps/cloudflare-workers/src/**/*.test.ts`
 - Dashboard は現状、専用 test script ではなく build / typecheck と contract parser で整合を保つ
 - `pnpm test:coverage` は monorepo 内の package / worker coverage を順に実行する
-- `pnpm test:coverage` は `@cloudflare/vitest-pool-workers` の都合で sandbox 外の実行を前提にする
+- Worker coverage は `@cloudflare/vitest-plugin` を通じて Workerd 上で実行する
 - model evaluationは通常のtest/coverageから分離し、`pnpm eval:*` で明示的に実行する
 
 ## 運用メモ

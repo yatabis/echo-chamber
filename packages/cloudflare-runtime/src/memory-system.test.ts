@@ -302,7 +302,7 @@ const mockEmbeddingService: EmbeddingService = {
   modelIdentifier: 'test/mock-embedding-model',
 };
 
-const rerankMock = vi.fn();
+const rerankMock = vi.fn<RerankingService['rerank']>();
 const mockRerankingService: RerankingService = {
   rerank: rerankMock,
   modelIdentifier: 'workersai/@cf/baai/bge-reranker-base',

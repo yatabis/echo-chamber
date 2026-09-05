@@ -26,12 +26,19 @@ import type {
 const mockCreateResponse = vi.fn();
 
 vi.mock('openai', () => {
-  return {
-    default: vi.fn(() => ({
+  // Vitest 4 requires mocks invoked with `new` to use a constructable implementation.
+  function MockOpenAI(): {
+    responses: { create: typeof mockCreateResponse };
+  } {
+    return {
       responses: {
         create: mockCreateResponse,
       },
-    })),
+    };
+  }
+
+  return {
+    default: vi.fn(MockOpenAI),
   };
 });
 
@@ -845,7 +852,7 @@ describe('formatMessage', () => {
         ] as unknown as ResponseOutputMessage['content'],
       };
 
-      expect(() => formatMessage(message)).toThrowError(
+      expect(() => formatMessage(message)).toThrow(
         'Unexpected contentType: unknown'
       );
     });

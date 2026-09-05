@@ -4,7 +4,7 @@ import { WorkersAIEmbeddingService } from './workersai';
 
 const mockAiRun = vi.fn();
 
-vi.mock('cloudflare:test', () => ({
+vi.mock('cloudflare:workers', () => ({
   env: {
     AI: { run: mockAiRun },
     ENVIRONMENT: 'test',

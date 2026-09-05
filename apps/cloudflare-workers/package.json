@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "deploy": "wrangler deploy --config wrangler.jsonc",
-    "dev": "wrangler types --strict-vars=false --config wrangler.jsonc && wrangler dev --config wrangler.jsonc",
-    "start": "wrangler dev --config wrangler.jsonc",
+    "dev": "wrangler types --strict-vars=false --config wrangler.jsonc && wrangler dev --config wrangler.jsonc --name echo-chamber-local-dev",
+    "start": "wrangler dev --config wrangler.jsonc --name echo-chamber-local-dev",
     "cf-typegen": "wrangler types --strict-vars=false --config wrangler.jsonc",
     "test:run": "vitest run --config vitest.config.ts",
     "test:coverage": "vitest run --coverage --config vitest.config.ts",
