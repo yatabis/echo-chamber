@@ -12,13 +12,14 @@
   "dependencies": {
     "@echo-chamber/contracts": "workspace:*",
     "@echo-chamber/core": "workspace:*",
-    "@tanstack/react-router": "^1.133.0",
+    "@tanstack/react-router": "^1.170.32",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
     "@types/react": "^18.3.28",
     "@types/react-dom": "^18.3.7",
+    "@vitejs/plugin-react": "5.2.0",
     "typescript": "^5.5.2",
     "vite": "^6.4.1"
   }

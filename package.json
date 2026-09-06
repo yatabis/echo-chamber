@@ -44,10 +44,9 @@
     "wrangler": "^4.129.0"
   },
   "dependencies": {
-    "@discordjs/builders": "1.11.2",
-    "@discordjs/rest": "2.5.1",
-    "discord-api-types": "0.38.16",
-    "hono": "4.7.11",
+    "@discordjs/rest": "2.6.3",
+    "discord-api-types": "0.38.55",
+    "hono": "4.13.7",
     "openai": "6.46.0",
     "zod": "4.0.5"
   },

@@ -106,7 +106,7 @@ function isDashboardAssetPath(pathname: string): boolean {
 async function forwardToInstance(c: AppContext): Promise<Response> {
   const instanceId = c.req.param('instanceId');
 
-  if (!isValidInstanceId(instanceId)) {
+  if (instanceId === undefined || !isValidInstanceId(instanceId)) {
     return c.notFound();
   }
 
