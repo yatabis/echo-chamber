@@ -10,6 +10,24 @@ import type {
 
 const ZENN_BASE_URL = 'https://zenn.dev';
 const ZENN_TRENDING_ARTICLES_API_PATH = '/api/articles?order=daily';
+const ZENN_DISCARDED_ELEMENT_SELECTOR =
+  'script, style, noscript, template, svg, canvas, iframe, object, embed, form';
+const ZENN_STRUCTURE_MARKERS: readonly {
+  selector: string;
+  before?: string;
+  after?: string;
+}[] = [
+  { selector: 'br', before: '\n' },
+  { selector: 'li', before: '- ', after: '\n' },
+  { selector: 'pre', before: '\n```\n', after: '\n```\n' },
+  {
+    selector:
+      'p, div, section, article, aside, blockquote, h1, h2, h3, h4, h5, h6, ul, ol',
+    after: '\n\n',
+  },
+  { selector: 'tr', after: '\n' },
+  { selector: 'td, th', after: '\t' },
+];
 
 const zennUserSchema = z.object({
   username: z.string(),
@@ -143,32 +161,93 @@ function decodeHtmlEntities(value: string): string {
 }
 
 /**
+ * Zenn本文の要素境界をプレーンテキスト用の構造マーカーへ変換する。
+ *
+ * @param rewriter 構成対象のHTMLRewriter
+ * @param chunks 抽出本文の格納先
+ */
+function configureZennStructureMarkers(
+  rewriter: HTMLRewriter,
+  chunks: string[]
+): void {
+  for (const { selector, before, after } of ZENN_STRUCTURE_MARKERS) {
+    rewriter.on(selector, {
+      element(element): void {
+        if (element.removed) {
+          return;
+        }
+        if (before !== undefined) {
+          chunks.push(before);
+        }
+        if (after !== undefined) {
+          element.onEndTag(() => {
+            chunks.push(after);
+          });
+        }
+      },
+    });
+  }
+}
+
+/**
+ * Zenn本文の実行要素を除外し、読み順と主要な構造を収集する。
+ *
+ * @param chunks 抽出した本文と構造マーカーの格納先
+ * @returns 構成済みHTMLRewriter
+ */
+function createZennPlainTextRewriter(chunks: string[]): HTMLRewriter {
+  const rewriter = new HTMLRewriter();
+
+  rewriter.on(ZENN_DISCARDED_ELEMENT_SELECTOR, {
+    element(element): void {
+      element.remove();
+    },
+    text(text): void {
+      text.remove();
+    },
+  });
+
+  rewriter.on('img', {
+    element(element): void {
+      if (element.removed) {
+        return;
+      }
+      const altText = element.getAttribute('alt');
+      if (altText !== null) {
+        chunks.push(`[Image: ${altText}]`);
+      }
+    },
+  });
+
+  configureZennStructureMarkers(rewriter, chunks);
+
+  rewriter.onDocument({
+    text(text): void {
+      if (!text.removed) {
+        chunks.push(text.text);
+      }
+    },
+  });
+
+  return rewriter;
+}
+
+/**
  * body_html を LLM が読みやすいプレーンテキストへ崩す。
  *
  * @param html Zenn API が返す body_html
  * @returns 整形済み本文テキスト
  */
-function convertZennHtmlToPlainText(html: string): string {
-  const withStructureMarkers = html
-    .replace(/\r\n/g, '\n')
-    .replace(
-      /<img\b[^>]*alt="([^"]*)"[^>]*>/gi,
-      (_, altText: string) => `[Image: ${altText}]`
-    )
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<li\b[^>]*>/gi, '- ')
-    .replace(/<\/li>/gi, '\n')
-    .replace(/<pre\b[^>]*>/gi, '\n```\n')
-    .replace(/<\/pre>/gi, '\n```\n')
-    .replace(
-      /<\/(p|div|section|article|aside|blockquote|h[1-6]|ul|ol)>/gi,
-      '\n\n'
-    )
-    .replace(/<\/tr>/gi, '\n')
-    .replace(/<\/(td|th)>/gi, '\t');
+async function convertZennHtmlToPlainText(html: string): Promise<string> {
+  const chunks: string[] = [];
+  const rewrittenResponse = createZennPlainTextRewriter(chunks).transform(
+    new Response(html, {
+      headers: { 'content-type': 'text/html; charset=utf-8' },
+    })
+  );
+  await rewrittenResponse.text();
 
-  const withoutTags = withStructureMarkers.replace(/<[^>]+>/g, '');
-  const decoded = decodeHtmlEntities(withoutTags);
+  const decoded = decodeHtmlEntities(chunks.join('').replace(/\r\n/g, '\n'));
 
   return decoded
     .split('\n')
@@ -229,9 +308,9 @@ function mapTrendingArticle(
  * @param article Zenn API の記事オブジェクト
  * @returns core 側の詳細
  */
-function mapArticleDetail(
+async function mapArticleDetail(
   article: z.infer<typeof zennArticleDetailResponseSchema>['article']
-): ZennArticle {
+): Promise<ZennArticle> {
   return {
     slug: article.slug,
     url: buildArticleUrl(article.path),
@@ -242,7 +321,7 @@ function mapArticleDetail(
     },
     topics: article.topics.map((topic) => topic.display_name),
     tableOfContents: flattenTableOfContents(article.toc),
-    content: convertZennHtmlToPlainText(article.body_html),
+    content: await convertZennHtmlToPlainText(article.body_html),
   };
 }
 
