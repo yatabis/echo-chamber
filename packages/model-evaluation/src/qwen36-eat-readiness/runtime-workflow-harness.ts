@@ -394,10 +394,7 @@ async function runWorkflowSession(input: {
       ? {}
       : { sessionId: input.options.sessionId }),
   });
-  let outcome: SessionRunOutcome = {
-    usage: ZERO_MODEL_USAGE,
-    terminationReason: 'error',
-  };
+  let outcome: SessionRunOutcome;
 
   try {
     const context = input.world.loadContext();

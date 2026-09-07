@@ -533,7 +533,7 @@ describe('Echo.createThinkingEngine', () => {
     const env = {
       ...createMockEnv(),
       OPENAI_API_KEY: 'test-openai-key',
-    } as unknown as Env;
+    };
     const { storage } = createMockStorage();
     const echo = new Echo(createMockState(storage), env);
     await ensureInitialized(echo, 'rin');
@@ -556,7 +556,7 @@ describe('Echo.createThinkingEngine', () => {
     const env = {
       ...createMockEnv(),
       OPENAI_API_KEY: 'test-openai-key',
-    } as unknown as Env;
+    };
     const { storage } = createMockStorage();
     const echo = new Echo(createMockState(storage), env);
     setInitializedDefinition(echo);
@@ -1161,7 +1161,7 @@ describe('Echo local run route', () => {
     const env = {
       ...createMockEnv(),
       ENVIRONMENT: 'local',
-    } as Env;
+    };
     const { storage } = createMockStorage();
     const echo = new Echo(createMockState(storage), env);
     vi.spyOn(
@@ -1201,7 +1201,7 @@ describe('Echo run usage storage', () => {
     const env = {
       ...createMockEnv(),
       OPENAI_API_KEY: 'test-openai-key',
-    } as unknown as Env;
+    };
     const { storage } = createMockStorage();
     const echo = new Echo(createMockState(storage), env);
     setInitializedDefinition(echo);
@@ -1355,7 +1355,7 @@ describe('Echo next_wake_at storage', () => {
     const env = {
       ...createMockEnv(),
       OPENAI_API_KEY: 'test-openai-key',
-    } as unknown as Env;
+    };
     const { storage, putFn } = createMockStorage();
     const echo = new Echo(createMockState(storage), env);
     setInitializedDefinition(echo);
@@ -1410,7 +1410,7 @@ describe('Echo next_wake_at storage', () => {
     const env = {
       ...createMockEnv(),
       OPENAI_API_KEY: 'test-openai-key',
-    } as unknown as Env;
+    };
     const { storage, deleteFn } = createMockStorage();
     const echo = new Echo(createMockState(storage), env);
     setInitializedDefinition(echo);

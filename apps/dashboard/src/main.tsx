@@ -1,5 +1,5 @@
 import { RouterProvider } from '@tanstack/react-router';
-import React from 'react';
+import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { router } from './App';
@@ -12,7 +12,7 @@ if (rootElement === null) {
 }
 
 createRoot(rootElement).render(
-  <React.StrictMode>
+  <StrictMode>
     <RouterProvider router={router} />
-  </React.StrictMode>
+  </StrictMode>
 );

@@ -62,7 +62,7 @@ function createOutputFormat(
       target: 'draft-7',
       io: 'output',
       reused: 'inline',
-    }) as Record<string, unknown>,
+    }),
   };
 }
 
