@@ -1,0 +1,22 @@
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+
+    # Version updates remain manual until generated pull requests have CI coverage.
+    open-pull-requests-limit: 0
+
+    groups:
+      production-security-updates:
+        applies-to: security-updates
+        dependency-type: production
+        patterns:
+          - '*'
+      development-security-updates:
+        applies-to: security-updates
+        dependency-type: development
+        patterns:
+          - '*'
