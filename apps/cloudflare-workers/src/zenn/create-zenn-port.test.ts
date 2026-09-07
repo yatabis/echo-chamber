@@ -18,6 +18,64 @@ function resolveRequestUrl(input: RequestInfo | URL): string {
   return input.url;
 }
 
+/**
+ * 本文変換テスト用のZenn記事詳細レスポンスを組み立てる。
+ *
+ * @param bodyHtml Zenn APIが返す本文HTML
+ * @returns 記事詳細レスポンス
+ */
+function createArticleDetailResponse(bodyHtml: string): Response {
+  return new Response(
+    JSON.stringify({
+      article: {
+        slug: TEST_ZENN_ARTICLE_SLUG,
+        path: TEST_ZENN_ARTICLE_PATH,
+        title: 'ダミーの Zenn 記事タイトル',
+        article_type: 'tech',
+        liked_count: 42,
+        bookmarked_count: 12,
+        published_at: '2026-04-01T10:00:00.000+09:00',
+        body_updated_at: '2026-04-02T11:30:00.000+09:00',
+        body_html: bodyHtml,
+        toc: [
+          {
+            id: 'intro',
+            text: 'はじめに',
+            level: 2,
+            children: [
+              {
+                id: 'child',
+                text: '詳細',
+                level: 3,
+                children: [],
+              },
+            ],
+          },
+        ],
+        topics: [
+          {
+            display_name: 'Testing',
+          },
+          {
+            display_name: 'Examples',
+          },
+        ],
+        user: {
+          username: 'example_author',
+          name: 'Example Author',
+        },
+        publication: null,
+      },
+    }),
+    {
+      status: 200,
+      headers: {
+        'content-type': 'application/json',
+      },
+    }
+  );
+}
+
 describe('createZennPort', () => {
   it('日次トレンド記事一覧を軽量 payload へ変換する', async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
@@ -85,58 +143,13 @@ describe('createZennPort', () => {
   });
 
   it('記事本文を取得して詳細 payload へ変換する', async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          article: {
-            slug: TEST_ZENN_ARTICLE_SLUG,
-            path: TEST_ZENN_ARTICLE_PATH,
-            title: 'ダミーの Zenn 記事タイトル',
-            article_type: 'tech',
-            liked_count: 42,
-            bookmarked_count: 12,
-            published_at: '2026-04-01T10:00:00.000+09:00',
-            body_updated_at: '2026-04-02T11:30:00.000+09:00',
-            body_html:
-              '<h2>はじめに</h2><p>Hello &amp; welcome<br>world</p><ul><li>one</li><li>two</li></ul><p><img alt="図" src="https://example.com/image.png"></p>',
-            toc: [
-              {
-                id: 'intro',
-                text: 'はじめに',
-                level: 2,
-                children: [
-                  {
-                    id: 'child',
-                    text: '詳細',
-                    level: 3,
-                    children: [],
-                  },
-                ],
-              },
-            ],
-            topics: [
-              {
-                display_name: 'Testing',
-              },
-              {
-                display_name: 'Examples',
-              },
-            ],
-            user: {
-              username: 'example_author',
-              name: 'Example Author',
-            },
-            publication: null,
-          },
-        }),
-        {
-          status: 200,
-          headers: {
-            'content-type': 'application/json',
-          },
-        }
-      )
-    );
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        createArticleDetailResponse(
+          '<h2>はじめに</h2><p>Hello &amp; welcome<br>world</p><ul><li>one</li><li>two</li></ul><p><img alt="図" src="https://example.com/image.png"></p>'
+        )
+      );
 
     const port = createZennPort(fetchMock);
     const result = await port.getArticleBySlug(TEST_ZENN_ARTICLE_SLUG);
@@ -173,6 +186,21 @@ describe('createZennPort', () => {
       content:
         'はじめに\n\nHello & welcome\nworld\n\n- one\n- two\n\n[Image: 図]',
     });
+  });
+
+  it('本文要素を平文へ変換し、コードとして表されたタグを保持する', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        createArticleDetailResponse(
+          '<p>本文</p><script>executable-element-content</script><p>&lt;script&gt;code sample&lt;/script&gt;</p>'
+        )
+      );
+    const port = createZennPort(fetchMock);
+
+    const result = await port.getArticleBySlug(TEST_ZENN_ARTICLE_SLUG);
+
+    expect(result.content).toBe('本文\n\n<script>code sample</script>');
   });
 
   it('Zenn API エラー時は例外を投げる', async () => {

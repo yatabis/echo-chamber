@@ -105,6 +105,22 @@ describe('createCloudflareWebPageReader', () => {
     }
   });
 
+  it('text/plainのbackslashとMarkdown記号をリテラル表現へ変換する', async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(String.raw`\*literal*`, {
+        headers: { 'content-type': 'text/plain; charset=utf-8' },
+      })
+    );
+    const reader = createCloudflareWebPageReader({ fetcher });
+
+    const result = await reader.readPage('https://www.wikipedia.org/plain');
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.document.content).toBe(String.raw`\\\*literal\*`);
+    }
+  });
+
   it('relative redirectを追跡して最終URLと回数を返す', async () => {
     const fetcher = vi
       .fn()

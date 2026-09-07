@@ -116,7 +116,7 @@ function escapeRegularExpression(value: string): string {
 
 function escapeMarkdownText(value: string): string {
   return value
-    .replaceAll('\\', '\\\\')
+    .replace(/\\/g, '\\\\')
     .replace(/([`*_{}[\]<>~|])/g, '\\$1')
     .replace(/(^|\n)(\s*)(#{1,6}|>|[-+]|\d+\.)\s/g, '$1$2\\$3 ');
 }

@@ -92,6 +92,15 @@ describe('extractHtmlToMarkdown', () => {
     expect(result.content).toContain('| A | 1 |');
   });
 
+  it('既存のbackslashとMarkdown記号をリテラル表現へ変換する', async () => {
+    const result = await extractHtmlToMarkdown(
+      `<html><body><p>${String.raw`\*literal*`}</p></body></html>`,
+      new URL('https://www.wikipedia.org/page')
+    );
+
+    expect(result.content).toBe(String.raw`\\\*literal\*`);
+  });
+
   it('64,000文字をUnicode境界で切り詰める', async () => {
     const result = await extractHtmlToMarkdown(
       `<html><body><article><p>${'長'.repeat(70_000)}😀</p></article></body></html>`,
