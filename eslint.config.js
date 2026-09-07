@@ -1,7 +1,7 @@
 import js from '@eslint/js';
 import tsparser from '@typescript-eslint/parser';
 import eslintConfigPrettier from 'eslint-config-prettier';
-import importPlugin from 'eslint-plugin-import';
+import { importX } from 'eslint-plugin-import-x';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
@@ -55,8 +55,8 @@ export default tseslint.config(
       ...tseslint.configs.recommended,
       ...tseslint.configs.strictTypeChecked,
       ...tseslint.configs.stylisticTypeChecked,
-      importPlugin.flatConfigs.recommended,
-      importPlugin.flatConfigs.typescript,
+      importX.flatConfigs.recommended,
+      importX.flatConfigs.typescript,
     ],
     rules: {
       '@typescript-eslint/consistent-type-imports': [
@@ -114,7 +114,7 @@ export default tseslint.config(
       'max-depth': ['error', 4],
       'max-lines-per-function': ['warn', { max: 120, skipComments: true }],
       'max-params': ['warn', 4],
-      'import/order': [
+      'import-x/order': [
         'error',
         {
           groups: [
@@ -152,9 +152,9 @@ export default tseslint.config(
           distinctGroup: false,
         },
       ],
-      'import/first': 'error',
-      'import/newline-after-import': 'error',
-      'import/no-unresolved': 'off',
+      'import-x/first': 'error',
+      'import-x/newline-after-import': 'error',
+      'import-x/no-unresolved': 'off',
     },
   },
   {

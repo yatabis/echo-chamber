@@ -212,7 +212,7 @@ function createMockEnv(options: MockEnvOptions = {}): MockEnvResult {
           toString: () => name,
           equals: () => false,
           name,
-        } as unknown as DurableObjectId;
+        };
       },
       get: (id: DurableObjectId): DurableObjectStub => {
         const instanceId = id.toString() as 'rin' | 'marie';

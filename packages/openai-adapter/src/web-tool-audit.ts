@@ -309,14 +309,9 @@ export function projectResponsesWebToolExchange<
   const output = projectResponseItems(responseRecord.output, webToolCallIds);
 
   return {
-    request:
-      input === requestRecord.input
-        ? request
-        : ({ ...request, input } as TRequest),
+    request: input === requestRecord.input ? request : { ...request, input },
     response:
-      output === responseRecord.output
-        ? response
-        : ({ ...response, output } as TResponse),
+      output === responseRecord.output ? response : { ...response, output },
     webToolCallIds,
   };
 }
@@ -341,13 +336,9 @@ export function projectChatCompletionsWebToolExchange<
 
   return {
     request:
-      messages === requestRecord.messages
-        ? request
-        : ({ ...request, messages } as TRequest),
+      messages === requestRecord.messages ? request : { ...request, messages },
     response:
-      choices === responseRecord.choices
-        ? response
-        : ({ ...response, choices } as TResponse),
+      choices === responseRecord.choices ? response : { ...response, choices },
     webToolCallIds,
   };
 }

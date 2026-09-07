@@ -564,10 +564,7 @@ liveTest(
         kvCacheDtype,
         prefixCacheMode: 'enabled',
       });
-      let stopResult: { exitCode: number | null; signalCode: string | null } = {
-        exitCode: null,
-        signalCode: null,
-      };
+      let stopResult: { exitCode: number | null; signalCode: string | null };
       const candidateResult = {
         candidate: target,
         architecture: readModelArchitecture(target.modelPath),
