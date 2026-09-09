@@ -49,8 +49,8 @@
     "@discordjs/rest": "2.6.3",
     "discord-api-types": "0.38.55",
     "hono": "4.13.7",
-    "openai": "6.46.0",
-    "zod": "4.0.5"
+    "openai": "6.49.0",
+    "zod": "4.5.4"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

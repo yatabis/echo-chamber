@@ -15,6 +15,6 @@
   },
   "dependencies": {
     "@echo-chamber/core": "workspace:*",
-    "zod": "4.0.5"
+    "zod": "4.5.4"
   }
 }

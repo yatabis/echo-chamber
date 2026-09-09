@@ -14,6 +14,6 @@
   "dependencies": {
     "@echo-chamber/core": "workspace:*",
     "@echo-chamber/openai-adapter": "workspace:*",
-    "openai": "6.46.0"
+    "openai": "6.49.0"
   }
 }
