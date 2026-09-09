@@ -70,8 +70,10 @@ export interface StoredMemoryRow extends Record<string, SqlStorageValue> {
 /**
  * Dashboard 表示に必要な embedding 以外の memory row。
  */
-export interface StoredMemoryDashboardRow
-  extends Record<string, SqlStorageValue> {
+export interface StoredMemoryDashboardRow extends Record<
+  string,
+  SqlStorageValue
+> {
   id: string;
   content: string;
   type: MemoryType;
@@ -83,8 +85,10 @@ export interface StoredMemoryDashboardRow
   updated_at: string;
 }
 
-interface StoredMemoryDashboardSummaryRow
-  extends Record<string, SqlStorageValue> {
+interface StoredMemoryDashboardSummaryRow extends Record<
+  string,
+  SqlStorageValue
+> {
   memory_count: number;
   latest_updated_at: string | null;
 }

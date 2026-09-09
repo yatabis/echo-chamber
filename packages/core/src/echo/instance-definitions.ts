@@ -9,13 +9,7 @@ export type EchoMainLLMProvider = 'openai' | 'openai-compatible';
 
 /** E.C.H.O. Chamber の model protocol における reasoning effort 設定値。 */
 export type EchoModelReasoningEffort =
-  | 'none'
-  | 'minimal'
-  | 'low'
-  | 'medium'
-  | 'high'
-  | 'xhigh'
-  | 'max';
+  'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export interface EchoMainLLMDefinition {
   provider?: EchoMainLLMProvider;

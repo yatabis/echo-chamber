@@ -17,15 +17,10 @@ export type MainLLMProvider = EchoMainLLMProvider;
 export type MainLLMApi = 'responses' | 'chat_completions';
 export type MainLLMExtraBody = Record<string, unknown>;
 export type MainLLMRuntimeProfile =
-  | 'standard'
-  | typeof ECHO_SESSION_CACHE_RUNTIME_PROFILE;
+  'standard' | typeof ECHO_SESSION_CACHE_RUNTIME_PROFILE;
 
 type MainLLMConfigKey =
-  | 'provider'
-  | 'model'
-  | 'baseURL'
-  | 'apiKey'
-  | 'reasoningEffort';
+  'provider' | 'model' | 'baseURL' | 'apiKey' | 'reasoningEffort';
 
 const MAIN_LLM_ENV_KEYS = {
   provider: 'PROVIDER',

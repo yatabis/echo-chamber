@@ -140,8 +140,7 @@ export interface CognitiveModuleFailedOutcome {
 
 /** 1 moduleの成功またはfail-closed terminal result。 */
 export type CognitiveModuleOutcome<T> =
-  | CognitiveModuleReadyOutcome<T>
-  | CognitiveModuleFailedOutcome;
+  CognitiveModuleReadyOutcome<T> | CognitiveModuleFailedOutcome;
 
 /** Memory / Emotionが両方確定した1 phaseの記録。 */
 export interface CognitiveModulePhaseResult extends CognitiveModulePhaseInput {
@@ -253,8 +252,7 @@ interface ModuleFailedExecutionResult {
 }
 
 type ModuleExecutionResult<T> =
-  | ModuleReadyExecutionResult<T>
-  | ModuleFailedExecutionResult;
+  ModuleReadyExecutionResult<T> | ModuleFailedExecutionResult;
 
 const MAIN_THINK_TOOL_NAME = 'think';
 const MAIN_THINK_SUCCESS_OUTPUT = '{"success":true}';
@@ -329,9 +327,7 @@ type ActivationLifecycle = 'created' | 'active' | 'terminal' | 'failed';
  *
  * 同一phaseの結果は互いへ渡さず、両方の確定後にだけMainへ返す。
  */
-export class ParallelCognitiveModuleOrchestrator
-  implements CognitiveModuleOrchestrator
-{
+export class ParallelCognitiveModuleOrchestrator implements CognitiveModuleOrchestrator {
   /** @param options module port、retry policy、Main handoff formatter */
   constructor(
     private readonly options: ParallelCognitiveModuleOrchestratorOptions

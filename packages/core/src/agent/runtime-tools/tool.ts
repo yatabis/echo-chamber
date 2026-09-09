@@ -33,8 +33,7 @@ export interface RuntimeTool {
 export class Tool<
   Parameters extends z.ZodRawShape,
   OutputSchema extends z.ZodType,
-> implements RuntimeTool
-{
+> implements RuntimeTool {
   constructor(
     readonly specification: ToolSpecification<Parameters, OutputSchema>,
     readonly handler: (

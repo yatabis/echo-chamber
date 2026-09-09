@@ -76,10 +76,7 @@ export interface TraceEvent {
 }
 
 export type EvaluationCategory =
-  | 'outcome'
-  | 'protocol'
-  | 'completion'
-  | 'safety';
+  'outcome' | 'protocol' | 'completion' | 'safety';
 
 /**
  * 一つの採点条件と、その根拠。

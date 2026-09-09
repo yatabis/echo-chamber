@@ -33,9 +33,7 @@ const DISALLOWED_CONTROL_CHARACTERS =
 
 type Fetcher = (input: string, init: RequestInit) => Promise<Response>;
 type SupportedContentType =
-  | 'text/html'
-  | 'application/xhtml+xml'
-  | 'text/plain';
+  'text/html' | 'application/xhtml+xml' | 'text/plain';
 
 interface CloudflareWebPageReaderOptions {
   fetcher?: Fetcher;

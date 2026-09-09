@@ -43,9 +43,9 @@ export interface ModelCognitiveModuleRunnerOptions<TOutput> {
 /**
  * 専用system promptと共有contextから構造化された結果を返す。
  */
-export class ModelCognitiveModuleRunner<TOutput>
-  implements CognitiveModuleRunner<TOutput>
-{
+export class ModelCognitiveModuleRunner<
+  TOutput,
+> implements CognitiveModuleRunner<TOutput> {
   private readonly maxOutputTokens: number;
 
   /** @param options module model、phase別system prompt、output contract */

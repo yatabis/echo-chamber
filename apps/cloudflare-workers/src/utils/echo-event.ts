@@ -15,8 +15,7 @@ export interface DiscordEchoEventConfig {
   channelId: string;
 }
 
-export interface DiscordEchoEventPortOptions
-  extends ConsoleEchoEventPortOptions {
+export interface DiscordEchoEventPortOptions extends ConsoleEchoEventPortOptions {
   getDiscordConfig(): DiscordEchoEventConfig | null;
   beforeRequest?(): void | Promise<void>;
 }
@@ -30,14 +29,12 @@ export interface EchoEventArchive {
   ): Promise<void>;
 }
 
-export interface ArchiveEchoEventPortOptions
-  extends ConsoleEchoEventPortOptions {
+export interface ArchiveEchoEventPortOptions extends ConsoleEchoEventPortOptions {
   eventArchive: EchoEventArchive;
 }
 
 export interface CloudflareEchoEventPortOptions
-  extends DiscordEchoEventPortOptions,
-    ArchiveEchoEventPortOptions {}
+  extends DiscordEchoEventPortOptions, ArchiveEchoEventPortOptions {}
 
 const DISCORD_MESSAGE_MAX_LENGTH = 2000;
 

@@ -32,8 +32,7 @@ export interface ModelImageContentPart {
  * provider 非依存の message content part。
  */
 export type ModelMessageContentPart =
-  | ModelTextContentPart
-  | ModelImageContentPart;
+  ModelTextContentPart | ModelImageContentPart;
 
 /**
  * モデルへそのまま渡せるメッセージ content。
