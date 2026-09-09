@@ -1,12 +1,7 @@
 export type EchoEventSeverity = 'debug' | 'info' | 'warn' | 'error';
 
 export type EchoEventCategory =
-  | 'session'
-  | 'model'
-  | 'tool'
-  | 'memory'
-  | 'system'
-  | 'usage';
+  'session' | 'model' | 'tool' | 'memory' | 'system' | 'usage';
 
 export type EchoEventStream = 'thought' | 'system' | 'analysis';
 

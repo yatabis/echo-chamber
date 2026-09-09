@@ -9,9 +9,7 @@ export interface TokenLimitConfig {
 type TokenLimitEnv = object;
 
 type TokenLimitConfigKey =
-  | 'dailyHardLimit'
-  | 'dailySoftLimit'
-  | 'hardLimitBufferFactor';
+  'dailyHardLimit' | 'dailySoftLimit' | 'hardLimitBufferFactor';
 
 const TOKEN_LIMIT_ENV_KEYS = {
   dailyHardLimit: 'DAILY_HARD_TOKEN_LIMIT',

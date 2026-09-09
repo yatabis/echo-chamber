@@ -43,8 +43,7 @@ export type MemoryStoreCognitiveModuleOutput = z.infer<
 
 /** Memory Moduleが実行phaseに応じて返す出力。 */
 export type MemoryCognitiveModuleOutput =
-  | MemoryRecallCognitiveModuleOutput
-  | MemoryStoreCognitiveModuleOutput;
+  MemoryRecallCognitiveModuleOutput | MemoryStoreCognitiveModuleOutput;
 
 /** Emotion Moduleが毎回返す更新後の感情状態。 */
 export type EmotionCognitiveModuleOutput = z.infer<typeof emotionSchema>;

@@ -511,8 +511,7 @@ export class Echo extends DurableObject<Env> {
     let alarmReason: string | undefined;
     let eventRetentionCleanup: EventRetentionCleanupResult | undefined;
     let memoryReembeddingMaintenance:
-      | MemoryReembeddingMaintenanceResult
-      | undefined;
+      MemoryReembeddingMaintenanceResult | undefined;
 
     try {
       await emitEchoEvent(this.events, {
@@ -689,8 +688,7 @@ export class Echo extends DurableObject<Env> {
     reason: string | undefined;
     eventRetentionCleanup: EventRetentionCleanupResult | undefined;
     memoryReembeddingMaintenance:
-      | MemoryReembeddingMaintenanceResult
-      | undefined;
+      MemoryReembeddingMaintenanceResult | undefined;
     alarmStartedAt: number;
     runResult: RunExecutionResult;
   }): Promise<void> {
@@ -1390,9 +1388,7 @@ export class Echo extends DurableObject<Env> {
   ): {
     shouldRun: boolean;
     reason:
-      | 'soft_limit_allows_run'
-      | 'soft_token_limit'
-      | 'next_wake_at_suppression';
+      'soft_limit_allows_run' | 'soft_token_limit' | 'next_wake_at_suppression';
     softLimit: number;
   } {
     // soft limit 未満なら通常起動。ただし直近の next_wake_at があるときは待機する。

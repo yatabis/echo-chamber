@@ -30,8 +30,10 @@ interface StoredEchoEventRow extends Record<string, SqlStorageValue> {
   payload_json: string;
 }
 
-interface StoredActionAnalysisDailyStatsRow
-  extends Record<string, SqlStorageValue> {
+interface StoredActionAnalysisDailyStatsRow extends Record<
+  string,
+  SqlStorageValue
+> {
   archive_day: string;
   event_count: number;
   session_count: number;
@@ -54,8 +56,10 @@ interface StoredActionAnalysisDailyStatsRow
   store_memory_completed_count: number;
 }
 
-interface StoredActionAnalysisToolStatsRow
-  extends Record<string, SqlStorageValue> {
+interface StoredActionAnalysisToolStatsRow extends Record<
+  string,
+  SqlStorageValue
+> {
   archive_day: string;
   tool_name: string;
   called_count: number;
@@ -63,8 +67,10 @@ interface StoredActionAnalysisToolStatsRow
   failed_count: number;
 }
 
-interface StoredActionAnalysisSessionRow
-  extends Record<string, SqlStorageValue> {
+interface StoredActionAnalysisSessionRow extends Record<
+  string,
+  SqlStorageValue
+> {
   started_at_ms: number;
 }
 
