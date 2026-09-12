@@ -1,0 +1,12 @@
+[package]
+name = "echo-mlx"
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+echo-mlx-sys.workspace = true
+
+[lints]
+workspace = true

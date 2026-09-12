@@ -16,6 +16,7 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 const MAX_COMMAND_OUTPUT_LENGTH = 8_000;
 const STATE_DIRECTORY = join(tmpdir(), 'echo-chamber-codex-quality-gate');
+const NATIVE_WORKSPACE_PATH = 'native/echo-inference';
 const QUALITY_CHECKS = [
   {
     label: 'lint',
@@ -37,6 +38,47 @@ const QUALITY_CHECKS = [
     command: 'pnpm',
     args: ['test:run'],
   },
+];
+const NATIVE_QUALITY_CHECKS = [
+  {
+    label: 'native format',
+    command: 'cargo',
+    args: ['fmt', '--all', '--', '--check'],
+    cwd: NATIVE_WORKSPACE_PATH,
+  },
+  {
+    label: 'native state tests',
+    command: 'cargo',
+    args: ['test', '-p', 'echo-inference-state', '--all-features'],
+    cwd: NATIVE_WORKSPACE_PATH,
+  },
+];
+const NATIVE_MLX_QUALITY_CHECKS = [
+  {
+    label: 'native clippy',
+    command: 'cargo',
+    args: [
+      'clippy',
+      '--workspace',
+      '--all-targets',
+      '--all-features',
+      '--',
+      '-D',
+      'warnings',
+    ],
+    cwd: NATIVE_WORKSPACE_PATH,
+  },
+  {
+    label: 'native tests',
+    command: 'cargo',
+    args: ['test', '--workspace', '--all-features', '--', '--test-threads=1'],
+    cwd: NATIVE_WORKSPACE_PATH,
+  },
+];
+const MLX_ENVIRONMENT_VARIABLES = [
+  'MLX_C_INCLUDE_DIR',
+  'MLX_C_LIB_DIR',
+  'MLX_LIB_DIR',
 ];
 
 /**
@@ -122,26 +164,49 @@ async function hashUntrackedFiles(hash, pathsOutput, repositoryRoot) {
 }
 
 /**
- * Computes a digest of all non-ignored tracked, staged, and untracked changes.
+ * Computes a digest of HEAD plus non-ignored tracked, staged, and untracked
+ * changes. An optional path scope supports independently detecting Native
+ * workspace changes.
  *
  * @param {string} repositoryRoot Absolute repository root.
+ * @param {string[]} [pathspecs] Optional Git pathspec scope.
  * @returns {Promise<string>} SHA-256 worktree fingerprint.
  */
-async function createWorktreeFingerprint(repositoryRoot) {
-  const [status, unstagedDiff, stagedDiff, untrackedPaths] = await Promise.all([
-    runGit(
-      ['status', '--porcelain=v1', '-z', '--untracked-files=all'],
-      repositoryRoot
-    ),
-    runGit(['diff', '--binary', '--no-ext-diff'], repositoryRoot),
-    runGit(['diff', '--cached', '--binary', '--no-ext-diff'], repositoryRoot),
-    runGit(
-      ['ls-files', '--others', '--exclude-standard', '-z'],
-      repositoryRoot
-    ),
-  ]);
+async function createWorktreeFingerprint(repositoryRoot, pathspecs = []) {
+  const pathArguments = pathspecs.length === 0 ? [] : ['--', ...pathspecs];
+  const headArguments =
+    pathspecs.length === 0
+      ? ['rev-parse', 'HEAD']
+      : ['ls-tree', '-d', 'HEAD', '--', ...pathspecs];
+  const [head, status, unstagedDiff, stagedDiff, untrackedPaths] =
+    await Promise.all([
+      runGit(headArguments, repositoryRoot),
+      runGit(
+        [
+          'status',
+          '--porcelain=v1',
+          '-z',
+          '--untracked-files=all',
+          ...pathArguments,
+        ],
+        repositoryRoot
+      ),
+      runGit(
+        ['diff', '--binary', '--no-ext-diff', ...pathArguments],
+        repositoryRoot
+      ),
+      runGit(
+        ['diff', '--cached', '--binary', '--no-ext-diff', ...pathArguments],
+        repositoryRoot
+      ),
+      runGit(
+        ['ls-files', '--others', '--exclude-standard', '-z', ...pathArguments],
+        repositoryRoot
+      ),
+    ]);
   const hash = createHash('sha256');
 
+  hash.update(head);
   hash.update(status);
   hash.update(unstagedDiff);
   hash.update(stagedDiff);
@@ -184,14 +249,14 @@ function appendCommandOutput(current, chunk) {
 /**
  * Runs one repository quality command and captures bounded diagnostic output.
  *
- * @param {{label: string, command: string, args: string[]}} check Check command.
+ * @param {{label: string, command: string, args: string[], cwd?: string}} check Check command.
  * @param {string} repositoryRoot Absolute repository root.
  * @returns {Promise<{code: number, output: string}>} Exit code and output tail.
  */
 async function runQualityCheck(check, repositoryRoot) {
   return new Promise((resolve) => {
     const child = spawn(check.command, check.args, {
-      cwd: repositoryRoot,
+      cwd: join(repositoryRoot, check.cwd ?? ''),
       env: process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -237,10 +302,17 @@ function writeHookResponse(response) {
  */
 async function recordBaseline(input, repositoryRoot) {
   const statePath = createStatePath(input, repositoryRoot);
-  const fingerprint = await createWorktreeFingerprint(repositoryRoot);
+  const [fingerprint, nativeFingerprint] = await Promise.all([
+    createWorktreeFingerprint(repositoryRoot),
+    createWorktreeFingerprint(repositoryRoot, [NATIVE_WORKSPACE_PATH]),
+  ]);
 
   await mkdir(dirname(statePath), { recursive: true });
-  await writeFile(statePath, JSON.stringify({ fingerprint }), 'utf8');
+  await writeFile(
+    statePath,
+    JSON.stringify({ fingerprint, nativeFingerprint }),
+    'utf8'
+  );
   writeHookResponse({});
 }
 
@@ -248,13 +320,21 @@ async function recordBaseline(input, repositoryRoot) {
  * Loads a previously recorded worktree fingerprint, if one exists.
  *
  * @param {string} statePath Baseline state path.
- * @returns {Promise<string | null>} Saved fingerprint.
+ * @returns {Promise<{fingerprint: string, nativeFingerprint: string | null} | null>} Saved fingerprints.
  */
 async function readBaseline(statePath) {
   try {
     const state = JSON.parse(await readFile(statePath, 'utf8'));
 
-    return typeof state.fingerprint === 'string' ? state.fingerprint : null;
+    return typeof state.fingerprint === 'string'
+      ? {
+          fingerprint: state.fingerprint,
+          nativeFingerprint:
+            typeof state.nativeFingerprint === 'string'
+              ? state.nativeFingerprint
+              : null,
+        }
+      : null;
   } catch (error) {
     if (error && typeof error === 'object' && error.code === 'ENOENT') {
       return null;
@@ -277,19 +357,35 @@ async function readBaseline(statePath) {
  */
 async function enforceQualityGate(input, repositoryRoot) {
   const statePath = createStatePath(input, repositoryRoot);
-  const [baseline, current] = await Promise.all([
+  const [baseline, current, currentNative] = await Promise.all([
     readBaseline(statePath),
     createWorktreeFingerprint(repositoryRoot),
+    createWorktreeFingerprint(repositoryRoot, [NATIVE_WORKSPACE_PATH]),
   ]);
 
   await rm(statePath, { force: true });
 
-  if (baseline === current) {
+  if (baseline?.fingerprint === current) {
     writeHookResponse({});
     return;
   }
 
-  for (const check of QUALITY_CHECKS) {
+  const nativeChanged =
+    baseline?.nativeFingerprint === null ||
+    baseline === null ||
+    baseline.nativeFingerprint !== currentNative;
+  const mlxEnvironmentAvailable = MLX_ENVIRONMENT_VARIABLES.every((name) =>
+    process.env[name]?.trim()
+  );
+  const checks = [
+    ...QUALITY_CHECKS,
+    ...(nativeChanged ? NATIVE_QUALITY_CHECKS : []),
+    ...(nativeChanged && mlxEnvironmentAvailable
+      ? NATIVE_MLX_QUALITY_CHECKS
+      : []),
+  ];
+
+  for (const check of checks) {
     const result = await runQualityCheck(check, repositoryRoot);
 
     if (result.code !== 0) {

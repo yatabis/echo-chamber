@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "target": "es2021",
-    "lib": ["es2021", "dom", "dom.iterable"],
+    "lib": ["es2021", "es2022.error", "dom", "dom.iterable"],
     "jsx": "react-jsx",
     "module": "es2022",
     "moduleResolution": "bundler",
@@ -24,6 +24,9 @@
         "./packages/openai-adapter/src/index.ts"
       ],
       "@echo-chamber/openai-adapter/*": ["./packages/openai-adapter/src/*"],
+      "@echo-chamber/native-inference-adapter/*": [
+        "./packages/native-inference-adapter/src/*"
+      ],
       "@echo-chamber/discord-adapter": [
         "./packages/discord-adapter/src/index.ts"
       ],

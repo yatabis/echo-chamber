@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-08-01",
+  "model": "lmstudio-community/Qwen3.6-35B-A3B-MLX-4bit",
+  "candidateBinarySha256": "7dded3b1475c2bb4d6578ecd6343b4323a1e17f72e4b70644b6fa23deec17643",
+  "focusedGpuParity": {
+    "caseCount": 22,
+    "cases": [
+      "all-equal BF16 logits",
+      "structured tie-heavy BF16 logits",
+      "20 deterministic random tie-heavy BF16 rows"
+    ],
+    "expertIndicesExact": true,
+    "expertScoresExact": true
+  },
+  "residentRuntimeParity": {
+    "fixtureSha256": "600bfc53c5fbb4404e040088136c968826962fbe691d800c99f351568dce801c",
+    "generatedTokens": [1596, 1144],
+    "stateMaxAbsoluteDifferences": {
+      "rinPrefix": 0.0,
+      "mariePrefix": 0.0,
+      "rinGenerated": 0.0,
+      "marieContinuation": 0.0
+    },
+    "assertions": {
+      "fifoOrderExact": true,
+      "schedulerContinuedAfterFailedRequest": true,
+      "cancelledRequestNeverExecuted": true,
+      "rinAndMarieStatesAreDistinct": true,
+      "invalidLineageRejectedAfterLease": true,
+      "failedRequestPreservedRinRevision": true,
+      "sameResidentEngineForEverySuccess": true
+    },
+    "exact": true
+  },
+  "retentionLimit": "The complete terminal event stream was not retained."
+}

@@ -1,0 +1,32 @@
+[workspace]
+members = [
+  "crates/echo-inference",
+  "crates/echo-inference-state",
+  "crates/echo-mlx",
+  "crates/echo-mlx-sys",
+]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+publish = false
+rust-version = "1.93"
+version = "0.1.0"
+
+[workspace.dependencies]
+bindgen = "0.72.1"
+echo-inference-state = { path = "crates/echo-inference-state" }
+echo-mlx = { path = "crates/echo-mlx" }
+echo-mlx-sys = { path = "crates/echo-mlx-sys" }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = { version = "1.0.149", features = ["preserve_order"] }
+sha2 = "0.10.9"
+tokenizers = { version = "0.23.1", default-features = false, features = ["fancy-regex"] }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+warnings = "deny"
+
+[workspace.lints.clippy]
+all = "deny"
+pedantic = "deny"

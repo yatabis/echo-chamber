@@ -1,0 +1,300 @@
+{
+  "schema_version": 1,
+  "oracle": "mlx_lm.sample_utils with explicit mlx random keys",
+  "history_scope": "generated_output",
+  "presence_context_size": 4096,
+  "logits": [
+    0.8, 2.4010905121026913, 3.1582157806491558, 2.672938921951725,
+    1.167349477933005, -0.6279414852025718, -1.8445616260846653,
+    -1.9169919833687414, -0.8685465192532867, 0.702952720460881,
+    1.932416236017752, 2.1309658038560113, 1.1395388102684707,
+    -0.5876872634776455, -2.212652462367115, -2.9387378025876325,
+    -2.4153525361530885, -0.9156376201256134, 0.8032462844424471,
+    1.8860237059000153, 1.8147246436056765, 0.6717247546261023,
+    -0.9036193296780203, -2.0425889602191045, -2.0919415990091337,
+    -0.9491804471980712, 0.88269935086251, 2.5489796837904763,
+    3.2762629372749563, 2.764181132433633, 1.3362240267509629,
+    -0.2271023906836992, -1.0876849697590594, -0.7781623018842551,
+    0.5591238491491403, 2.2443938285988594, 3.4070920523405674,
+    3.4302613551550047, 2.2661288062946094, 0.46202281104925225,
+    -1.116643674717268, -1.7252113373404565, -1.1168596171010674,
+    0.3341556292735106, 1.8258281886843577, 2.5396693384634395,
+    2.060223472390733, 0.5889394984397321, -1.156678609429078,
+    -2.3073095404200377, -2.283858255808396, -1.0920536687177615,
+    0.6805222726685084, 2.163458125505574, 2.6462071866589483,
+    1.9388655995440982, 0.46721203189288407, -0.9463653539193979,
+    -1.5043291449058342, -0.8429585896141254, 0.7796987669910451,
+    2.612772392515961, 3.792786348888235, 3.7814595023519235
+  ],
+  "history_tokens": [
+    3, 5, 5, 8, 13, 21, 34, 55, 2, 3, 5, 8, 13, 21, 34, 55, 1, 1, 2, 3, 5, 8,
+    13, 21
+  ],
+  "config": {
+    "temperature": 0.7,
+    "top_p": 0.8,
+    "top_k": 20,
+    "min_p": 0.0,
+    "repetition_penalty": 1.0,
+    "presence_penalty": 1.5,
+    "seed": 0
+  },
+  "cases": [
+    {
+      "seed": 0,
+      "expected_token": 35
+    },
+    {
+      "seed": 1,
+      "expected_token": 37
+    },
+    {
+      "seed": 2,
+      "expected_token": 27
+    },
+    {
+      "seed": 3,
+      "expected_token": 29
+    },
+    {
+      "seed": 4,
+      "expected_token": 28
+    },
+    {
+      "seed": 5,
+      "expected_token": 35
+    },
+    {
+      "seed": 6,
+      "expected_token": 63
+    },
+    {
+      "seed": 7,
+      "expected_token": 63
+    },
+    {
+      "seed": 8,
+      "expected_token": 37
+    },
+    {
+      "seed": 9,
+      "expected_token": 38
+    },
+    {
+      "seed": 10,
+      "expected_token": 63
+    },
+    {
+      "seed": 11,
+      "expected_token": 62
+    },
+    {
+      "seed": 12,
+      "expected_token": 36
+    },
+    {
+      "seed": 13,
+      "expected_token": 36
+    },
+    {
+      "seed": 14,
+      "expected_token": 62
+    },
+    {
+      "seed": 15,
+      "expected_token": 36
+    },
+    {
+      "seed": 16,
+      "expected_token": 37
+    },
+    {
+      "seed": 17,
+      "expected_token": 62
+    },
+    {
+      "seed": 18,
+      "expected_token": 37
+    },
+    {
+      "seed": 19,
+      "expected_token": 37
+    },
+    {
+      "seed": 20,
+      "expected_token": 62
+    },
+    {
+      "seed": 21,
+      "expected_token": 62
+    },
+    {
+      "seed": 22,
+      "expected_token": 62
+    },
+    {
+      "seed": 23,
+      "expected_token": 62
+    },
+    {
+      "seed": 24,
+      "expected_token": 27
+    },
+    {
+      "seed": 25,
+      "expected_token": 38
+    },
+    {
+      "seed": 26,
+      "expected_token": 54
+    },
+    {
+      "seed": 27,
+      "expected_token": 37
+    },
+    {
+      "seed": 28,
+      "expected_token": 62
+    },
+    {
+      "seed": 29,
+      "expected_token": 63
+    },
+    {
+      "seed": 30,
+      "expected_token": 63
+    },
+    {
+      "seed": 31,
+      "expected_token": 63
+    },
+    {
+      "seed": 32,
+      "expected_token": 62
+    },
+    {
+      "seed": 33,
+      "expected_token": 36
+    },
+    {
+      "seed": 34,
+      "expected_token": 29
+    },
+    {
+      "seed": 35,
+      "expected_token": 36
+    },
+    {
+      "seed": 36,
+      "expected_token": 63
+    },
+    {
+      "seed": 37,
+      "expected_token": 61
+    },
+    {
+      "seed": 38,
+      "expected_token": 46
+    },
+    {
+      "seed": 39,
+      "expected_token": 63
+    },
+    {
+      "seed": 40,
+      "expected_token": 28
+    },
+    {
+      "seed": 41,
+      "expected_token": 36
+    },
+    {
+      "seed": 42,
+      "expected_token": 28
+    },
+    {
+      "seed": 43,
+      "expected_token": 61
+    },
+    {
+      "seed": 44,
+      "expected_token": 37
+    },
+    {
+      "seed": 45,
+      "expected_token": 63
+    },
+    {
+      "seed": 46,
+      "expected_token": 63
+    },
+    {
+      "seed": 47,
+      "expected_token": 29
+    },
+    {
+      "seed": 48,
+      "expected_token": 36
+    },
+    {
+      "seed": 49,
+      "expected_token": 61
+    },
+    {
+      "seed": 50,
+      "expected_token": 36
+    },
+    {
+      "seed": 51,
+      "expected_token": 36
+    },
+    {
+      "seed": 52,
+      "expected_token": 61
+    },
+    {
+      "seed": 53,
+      "expected_token": 46
+    },
+    {
+      "seed": 54,
+      "expected_token": 37
+    },
+    {
+      "seed": 55,
+      "expected_token": 37
+    },
+    {
+      "seed": 56,
+      "expected_token": 36
+    },
+    {
+      "seed": 57,
+      "expected_token": 62
+    },
+    {
+      "seed": 58,
+      "expected_token": 29
+    },
+    {
+      "seed": 59,
+      "expected_token": 63
+    },
+    {
+      "seed": 60,
+      "expected_token": 61
+    },
+    {
+      "seed": 61,
+      "expected_token": 62
+    },
+    {
+      "seed": 62,
+      "expected_token": 54
+    },
+    {
+      "seed": 63,
+      "expected_token": 54
+    }
+  ]
+}

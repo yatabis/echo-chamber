@@ -92,7 +92,7 @@ Store durable local evaluation results, server logs, smoke runs, and machine-loc
 
 - External services use stateful synthetic implementations of the production TypeScript port contracts. No real Discord, Cloudflare Durable Object storage, embedding search, note database, or Zenn network request occurs.
 - True mid-generation external interruption is not supported by the current product runtime, so the evaluator records that capability gap and measures only the implemented next-session behavior.
-- Gated Delta Network recurrent-state continuation is not measured. The current Chat Completions adapter has no contract that binds recurrent state to the exact replayed token and key/value-cache boundary.
+- Gated Delta Network recurrent-state continuation is not part of the primary scored behavior evaluator. Separate native live gates bind complete recurrent and key/value state to one serialized instance owner; the Rapid-MLX probe below instead exercises its session-aligned prefix-cache contract.
 - Multi-token prediction (MTP speculative decoding) and PFlash prompt compression are disabled. Token-prefix caching is enabled: every fixture/repetition receives a unique cache session ID, the process-local cache is cleared before that fixture starts, and only the growing exact prefix inside that one session can be reused. This makes the timing closer to the current E.C.H.O. runtime while preventing state leakage between scored fixtures.
 - No EAT improvement can be claimed until a trained model is evaluated against its matching base model and the resulting observations are compared explicitly.
 
@@ -168,6 +168,93 @@ ECHO_EVAL_TARGETS_FILE=/absolute/path/to/evaluation-targets.json \
 ECHO_SESSION_PREFIX_CACHE_PROBE_OUTPUT=/absolute/path/to/session-prefix-cache-result.json \
 pnpm eval:session-prefix-cache
 ```
+
+## Native versus Rapid-MLX long-session gate
+
+This explicit live gate compares one initial tool call plus eight tool-result
+continuations on the local Qwen3.6-35B-A3B artifact. It runs one warmup and
+three measured sessions per engine by default and admits native only when:
+
+- every logical step and per-step prompt growth matches;
+- every completion count and final output hash matches;
+- native reuses the exact preceding committed state at every step;
+- Rapid-MLX reuses the checkpoint expected from its 2,048-token aligned,
+  next-request publication policy;
+- final visible TTFT and total time are no more than five percent slower than
+  Rapid-MLX.
+
+This is a production-contract comparison. It deliberately retains
+Rapid-MLX's tool-parser prompt injection and both engines' different cache
+publication policies, records their prompt-token difference, and does not
+mislabel the result as a token-identical kernel benchmark. The separate
+short-context gate remains the matched prompt/decode comparison.
+
+Rapid-MLX uses
+`cache={mode:auto, session_id, session_slot:rolling}` in this gate.
+`gdn_state_id` is intentionally omitted: it retains recurrent-only state, not
+the complete GDN-plus-KV boundary, and combining it with the session cache
+would overwrite recurrent state before the residual prompt suffix is
+processed.
+
+```sh
+ECHO_LONG_COMPARISON_NATIVE_INFERENCE_BIN=/absolute/path/to/echo-inference \
+ECHO_LONG_COMPARISON_MODEL=/absolute/path/to/Qwen3.6-35B-A3B-MLX-4bit \
+ECHO_LONG_COMPARISON_RAPID_MLX_BIN=/absolute/path/to/rapid-mlx \
+ECHO_LONG_COMPARISON_RAPID_MLX_CWD=/absolute/path/to/rapid-mlx-repository \
+ECHO_LONG_COMPARISON_OUTPUT=/absolute/path/to/native-rapid-long-session.json \
+ECHO_NATIVE_LIBRARY_PATH=/absolute/path/to/mlx-c/build:/absolute/path/to/mlx/lib \
+pnpm eval:native-rapid-long-session-performance
+```
+
+## Native production-workflow gate
+
+This live gate connects the stateful Native adapter to the existing E.C.H.O.
+runtime workflow harness. It uses the current Rin production prompt, the
+canonical runtime tool catalog, the real agent loop, and the harness's
+stateful synthetic chat, memory, note, and context ports. It does not start the
+future local application or SQLite persistence layer, so its timings measure
+model requests and workflow execution rather than a complete local deployment.
+
+One resident native process hosts one stable model/state owner per workflow.
+Within a harness session, tool-result requests use `continuation`; the next
+harness session for the same existence uses `new_session`. Token streaming is
+disabled. After every workflow, the gate publishes the single
+`current.safetensors` snapshot outside the workflow elapsed time and then
+removes all evaluation state during cleanup.
+
+The artifact retains every scored workflow trace and bounded Native runtime
+metrics. It reports newly processed and cached tokens, input/decode/request
+timings, decode throughput, Metal memory, the actual state transition selected
+by the adapter, and snapshot size. Admission requires all behavior checks and
+session completions to pass, continuation cache reuse to be observed, and at
+least one production-shaped request of 8,192 or more newly processed tokens to
+execute through multiple adaptive-prefill model calls.
+
+```sh
+ECHO_NATIVE_WORKFLOW_INFERENCE_BIN=/absolute/path/to/echo-inference \
+ECHO_NATIVE_WORKFLOW_MODEL=/absolute/path/to/Qwen3.6-35B-A3B-MLX-4bit \
+ECHO_NATIVE_WORKFLOW_OUTPUT=/absolute/path/to/native-runtime-workflows.json \
+ECHO_NATIVE_LIBRARY_PATH=/absolute/path/to/mlx-c/build:/absolute/path/to/mlx/lib \
+pnpm eval:native-runtime-workflow
+```
+
+The default generation profile is reproducible `controlled-greedy`. Set
+`ECHO_NATIVE_WORKFLOW_PROFILE=production-sampling` to use the current Qwen
+non-thinking deployment sampling values. `ECHO_NATIVE_WORKFLOW_FILTER` accepts
+a JavaScript regular expression over workflow IDs; `ECHO_NATIVE_WORKFLOW_SEED`
+and `ECHO_NATIVE_WORKFLOW_MAX_TURNS` control the recorded seed schedule and
+per-session agent-loop ceiling. The optional
+`ECHO_NATIVE_WORKFLOW_STATE_MODE=fresh-session-ablation` creates a new Native
+state owner at every harness session. It exists only to isolate the behavioral
+effect of cross-session GDN carry and is not a production candidate.
+`ECHO_NATIVE_WORKFLOW_STATE_MODE=recurrent-only-ablation` keeps one stable
+owner and the ordinary `new_session` transition, but clears the short-range
+GDN convolution history while retaining the recurrent matrix. The runner sets
+the corresponding Native startup policy itself and verifies the policy echoed
+by the engine. `convolution-only-ablation` retains the convolution history and
+clears the recurrent matrix, completing the two-component boundary ablation.
+All ablation modes are diagnostic only; omitting the variable retains complete
+GDN state.
 
 ## Rescoring a saved result
 

@@ -1,0 +1,13 @@
+[package]
+name = "echo-mlx-sys"
+edition.workspace = true
+links = "mlxc"
+publish.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[build-dependencies]
+bindgen.workspace = true
+
+[lints]
+workspace = true

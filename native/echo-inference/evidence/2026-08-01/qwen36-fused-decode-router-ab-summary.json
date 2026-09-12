@@ -1,0 +1,158 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-08-01",
+  "model": "lmstudio-community/Qwen3.6-35B-A3B-MLX-4bit",
+  "promptTokens": 112,
+  "generatedTokens": 128,
+  "warmupsPerEngine": 1,
+  "measuredRunsPerEngine": 5,
+  "baseline": {
+    "description": "preceding exact selected-score-only fusion",
+    "binarySha256": "019961689d8429e1bc46622a57abec4197aefd7f36e87f7d97b91f9a8e8566ac"
+  },
+  "candidate": {
+    "description": "exact fused post-linear decode router",
+    "binarySha256": "7dded3b1475c2bb4d6578ecd6343b4323a1e17f72e4b70644b6fa23deec17643"
+  },
+  "fullProductionPath": [
+    {
+      "order": ["baseline", "candidate"],
+      "baseline": {
+        "internalMsPerToken": [
+          12.6398671875, 12.6127047578125, 12.598107421875, 12.6167369765625,
+          12.605810546875
+        ],
+        "externalTokensPerSecond": [
+          79.40117966070035, 79.64711521538396, 79.5678962021131,
+          79.53837261273027, 79.59078225083391
+        ],
+        "medianInternalMsPerToken": 12.6127047578125,
+        "medianExternalTokensPerSecond": 79.5678962021131
+      },
+      "candidate": {
+        "internalMsPerToken": [
+          12.2627724609375, 12.2111217421875, 12.2558115234375, 12.20962271875,
+          12.3157425078125
+        ],
+        "externalTokensPerSecond": [
+          81.60147717949636, 81.91450979285547, 81.62176886458293,
+          81.89048589428997, 81.39457970985227
+        ],
+        "medianInternalMsPerToken": 12.2558115234375,
+        "medianExternalTokensPerSecond": 81.62176886458293
+      },
+      "derived": {
+        "internalMsPerTokenSaved": 0.35689323437500065,
+        "internalImprovementPercent": 2.8296328283902437,
+        "externalThroughputImprovementPercent": 2.5812831060063686
+      }
+    },
+    {
+      "order": ["candidate", "baseline"],
+      "candidate": {
+        "internalMsPerToken": [
+          12.21894075, 12.1955055390625, 12.20413834375, 12.306683265625,
+          12.2588815078125
+        ],
+        "externalTokensPerSecond": [
+          81.88580206430973, 81.98575303873818, 81.95841017636096,
+          81.49451745762143, 81.84007639950278
+        ],
+        "medianInternalMsPerToken": 12.21894075,
+        "medianExternalTokensPerSecond": 81.88580206430973
+      },
+      "baseline": {
+        "internalMsPerToken": [
+          12.6008326796875, 13.195953125, 12.6015771484375, 12.511501625,
+          12.54891015625
+        ],
+        "externalTokensPerSecond": [
+          79.67591976478037, 75.93061902941773, 79.37410704129579,
+          79.96934300304075, 79.74946946555548
+        ],
+        "medianInternalMsPerToken": 12.6008326796875,
+        "medianExternalTokensPerSecond": 79.67591976478037
+      },
+      "derived": {
+        "internalMsPerTokenSaved": 0.38189192968749985,
+        "internalImprovementPercent": 3.0306880457440593,
+        "externalThroughputImprovementPercent": 2.7735886903513376
+      }
+    }
+  ],
+  "fullProductionOutputSha256": "7ad36ec149c73fb6b130c9d67a740bdc235eefea3bd598fa40f51a29ca609acc",
+  "routerDependencyIsolation": {
+    "validModelOutput": false,
+    "dependency": "sum normalized expert scores and multiply input before returning",
+    "baselineBinarySha256": "f8593f6d029bf7be2bf1eab73198730fcf40f1a5cb5d4911f6adc97d0563987d",
+    "candidateBinarySha256": "8b07dec0f442a83073dbf7513feeadfca74344381c459b0a0f288786f4c3bde6",
+    "blocks": [
+      {
+        "order": ["baseline", "candidate"],
+        "baseline": {
+          "internalMsPerToken": [
+            8.3865625, 8.3376829375, 8.3378408203125, 8.3981311875,
+            8.3324739609375
+          ],
+          "externalTokensPerSecond": [
+            119.29325793309347, 119.98983858021167, 119.94033197032196,
+            119.07735679805593, 120.12417714796774
+          ],
+          "medianInternalMsPerToken": 8.3378408203125,
+          "medianExternalTokensPerSecond": 119.94033197032196
+        },
+        "candidate": {
+          "internalMsPerToken": [
+            8.1529150390625, 8.0962252578125, 8.1495380859375, 8.273687171875,
+            8.157210609375
+          ],
+          "externalTokensPerSecond": [
+            122.67718810114117, 123.63701146952324, 122.83600273409343,
+            120.88112348720819, 122.73776741700068
+          ],
+          "medianInternalMsPerToken": 8.1529150390625,
+          "medianExternalTokensPerSecond": 122.73776741700068
+        },
+        "derived": {
+          "internalMsPerTokenSaved": 0.18492578125000136,
+          "internalImprovementPercent": 2.217909711102765,
+          "externalThroughputImprovementPercent": 2.332355931256649
+        }
+      },
+      {
+        "order": ["candidate", "baseline"],
+        "candidate": {
+          "internalMsPerToken": [
+            10.296904296875, 10.096322921875, 8.1347457734375, 8.1660869140625,
+            8.11390853125
+          ],
+          "externalTokensPerSecond": [
+            96.95721049115555, 98.90480767306364, 123.0789160756959,
+            122.5692689896993, 123.27268099032126
+          ],
+          "medianInternalMsPerToken": 8.1660869140625,
+          "medianExternalTokensPerSecond": 122.5692689896993
+        },
+        "baseline": {
+          "internalMsPerToken": [
+            8.3326787109375, 8.3385013046875, 8.400220703125, 8.33981315625,
+            8.395534828125
+          ],
+          "externalTokensPerSecond": [
+            120.04826034592097, 119.98226718775501, 119.15300042735583,
+            119.99789767462735, 119.18992609897984
+          ],
+          "medianInternalMsPerToken": 8.33981315625,
+          "medianExternalTokensPerSecond": 119.98226718775501
+        },
+        "derived": {
+          "internalMsPerTokenSaved": 0.17372624218750055,
+          "internalImprovementPercent": 2.083095135738228,
+          "externalThroughputImprovementPercent": 2.1561534571571284
+        }
+      }
+    ],
+    "outputSha256": "55b5c22090bfadd49348561bf726b25ad7cd66a7189ada81515facfe8dcc7560"
+  },
+  "retentionLimit": "Warmup timings and complete protocol responses were not retained; all measured timing values and output digests are included."
+}

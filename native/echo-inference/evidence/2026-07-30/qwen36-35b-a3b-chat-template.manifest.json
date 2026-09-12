@@ -1,0 +1,220 @@
+{
+  "schema_version": 1,
+  "chat_template_sha256": "e84f32a23fdda27689f868aa4a1a5621f41133e51a48d7f3efcbea2839574259",
+  "eos_token": "<|im_end|>",
+  "eos_token_id": 248046,
+  "cases": [
+    {
+      "name": "text_only_non_thinking",
+      "input": [
+        {
+          "role": "user",
+          "content": "1 + 1 はいくつですか？"
+        }
+      ],
+      "tools": [],
+      "rendered": "<|im_start|>user\n1 + 1 はいくつですか？<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+      "token_ids": [
+        248045, 846, 198, 16, 478, 220, 16, 200960, 45220, 56657, 173399, 10992,
+        248046, 198, 248045, 74455, 198, 248068, 271, 248069, 271
+      ]
+    },
+    {
+      "name": "echo_startup_tool_round_trip",
+      "input": [
+        {
+          "role": "developer",
+          "content": "<persona>Test persona</persona>"
+        },
+        {
+          "role": "developer",
+          "content": "<runtime_context>\nCurrent datetime: 2026年07月31日 12:00:00\n</runtime_context>"
+        },
+        {
+          "type": "tool_call",
+          "call_id": "check_notifications",
+          "tool_name": "check_notifications",
+          "input": "{}"
+        },
+        {
+          "type": "tool_result",
+          "call_id": "check_notifications",
+          "output": "{\"notifications\":[]}"
+        }
+      ],
+      "tools": [
+        {
+          "name": "check_notifications",
+          "description": "Check pending notifications.",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          },
+          "strict": true
+        },
+        {
+          "name": "finish_thinking",
+          "description": "Finish this thinking session.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "reason": {
+                "type": "string"
+              },
+              "next_wake_at": {
+                "type": ["string", "null"]
+              }
+            },
+            "required": ["reason"],
+            "additionalProperties": false
+          },
+          "strict": true
+        }
+      ],
+      "rendered": "<|im_start|>system\n# Tools\n\nYou have access to the following functions:\n\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"check_notifications\", \"description\": \"Check pending notifications.\", \"parameters\": {\"type\": \"object\", \"properties\": {}, \"additionalProperties\": false}, \"strict\": true}}\n{\"type\": \"function\", \"function\": {\"name\": \"finish_thinking\", \"description\": \"Finish this thinking session.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"reason\": {\"type\": \"string\"}, \"next_wake_at\": {\"type\": [\"string\", \"null\"]}}, \"required\": [\"reason\"], \"additionalProperties\": false}, \"strict\": true}}\n</tools>\n\nIf you choose to call a function ONLY reply in the following format with NO suffix:\n\n<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n<parameter=example_parameter_2>\nThis is the value for the second parameter\nthat can span\nmultiple lines\n</parameter>\n</function>\n</tool_call>\n\n<IMPORTANT>\nReminder:\n- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags\n- Required parameters MUST be specified\n- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after\n- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls\n</IMPORTANT><|im_end|>\n<|im_start|>user\n<persona>Test persona</persona><|im_end|>\n<|im_start|>user\n<runtime_context>\nCurrent datetime: 2026年07月31日 12:00:00\n</runtime_context><|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n<function=check_notifications>\n</function>\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\n{\"notifications\":[]}\n</tool_response><|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+      "token_ids": [
+        248045, 8678, 198, 2, 13455, 271, 2523, 599, 2528, 310, 279, 2614, 5568,
+        25, 271, 27, 15449, 29, 198, 4754, 1267, 763, 328, 1628, 487, 328, 1628,
+        763, 5046, 591, 763, 328, 1960, 65268, 487, 328, 4532, 763, 328, 3840,
+        14836, 21292, 10152, 328, 13390, 763, 5046, 1267, 763, 328, 1640, 487,
+        328, 12811, 763, 15969, 328, 34325, 7654, 763, 867, 2069, 328, 6418,
+        763, 804, 3307, 198, 4754, 1267, 763, 328, 1628, 487, 328, 1628, 763,
+        5046, 591, 763, 328, 29166, 5673, 15275, 487, 328, 4532, 763, 328,
+        24846, 411, 7047, 3669, 10152, 328, 13390, 763, 5046, 1267, 763, 328,
+        1640, 487, 328, 12811, 763, 5046, 19290, 763, 5046, 1267, 763, 328, 889,
+        13933, 328, 3480, 1611, 706, 3625, 763, 5046, 1267, 763, 4241, 889, 487,
+        328, 2827, 1293, 36892, 328, 6081, 763, 4241, 19290, 7664, 328, 34325,
+        7654, 763, 867, 2069, 328, 6418, 763, 804, 3307, 198, 510, 15449, 29,
+        271, 2592, 488, 4992, 310, 1562, 264, 709, 25835, 9559, 303, 279, 2614,
+        3443, 440, 5486, 19900, 25, 271, 248058, 198, 27, 1628, 28, 8422, 8901,
+        1224, 29, 198, 27, 15704, 28, 8422, 24109, 62, 16, 29, 198, 927, 62, 16,
+        198, 510, 15704, 29, 198, 27, 15704, 28, 8422, 24109, 62, 17, 29, 198,
+        1919, 369, 279, 869, 364, 279, 2018, 5555, 198, 8761, 628, 9111, 198,
+        34493, 4965, 198, 510, 15704, 29, 198, 510, 1628, 29, 198, 248059, 271,
+        27, 95328, 29, 198, 92065, 25, 198, 12, 5534, 6526, 26834, 1732, 279,
+        5024, 3443, 25, 449, 8906, 361, 1628, 28, 1076, 1419, 1628, 29, 2424,
+        1902, 381, 23283, 2785, 220, 248058, 248059, 11535, 9212, 198, 12,
+        12296, 4868, 26834, 381, 5024, 198, 12, 1394, 1189, 3300, 9801, 31626,
+        364, 678, 709, 1562, 303, 5629, 3992, 54588, 279, 709, 1562, 11, 694,
+        4045, 1238, 198, 12, 1368, 1017, 369, 874, 709, 1562, 2420, 11, 4087,
+        279, 3296, 1040, 4472, 440, 678, 1428, 6337, 321, 635, 524, 3184, 279,
+        1156, 883, 709, 6526, 198, 510, 95328, 29, 248046, 198, 248045, 846,
+        198, 7676, 1225, 64, 29, 2198, 27049, 510, 68206, 29, 248046, 198,
+        248045, 846, 198, 27, 21564, 8207, 29, 198, 5237, 8606, 25, 220, 17, 15,
+        17, 21, 95859, 15, 22, 96212, 18, 16, 95971, 220, 16, 17, 25, 15, 15,
+        25, 15, 15, 198, 510, 21564, 8207, 29, 248046, 198, 248045, 74455, 198,
+        248068, 271, 248069, 271, 248058, 198, 27, 1628, 28, 1960, 65268, 29,
+        198, 510, 1628, 29, 198, 248059, 248046, 198, 248045, 846, 198, 248066,
+        198, 4754, 36923, 763, 64040, 198, 248067, 248046, 198, 248045, 74455,
+        198, 248068, 271, 248069, 271
+      ]
+    },
+    {
+      "name": "assistant_text_and_multiple_tool_results",
+      "input": [
+        {
+          "role": "system",
+          "content": "Reply in Japanese."
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "通知を確認してください。"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": "確認します。"
+        },
+        {
+          "type": "tool_call",
+          "call_id": "check_notifications",
+          "tool_name": "check_notifications",
+          "input": "{\"channels\":[\"discord\",\"email\"],\"limit\":20}"
+        },
+        {
+          "type": "tool_result",
+          "call_id": "check_notifications",
+          "output": "{\"discord\":1}"
+        },
+        {
+          "type": "tool_result",
+          "call_id": "check_notifications",
+          "output": "{\"email\":0}"
+        }
+      ],
+      "tools": [
+        {
+          "name": "check_notifications",
+          "description": "Check pending notifications.",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          },
+          "strict": true
+        },
+        {
+          "name": "finish_thinking",
+          "description": "Finish this thinking session.",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "reason": {
+                "type": "string"
+              },
+              "next_wake_at": {
+                "type": ["string", "null"]
+              }
+            },
+            "required": ["reason"],
+            "additionalProperties": false
+          },
+          "strict": true
+        }
+      ],
+      "rendered": "<|im_start|>system\n# Tools\n\nYou have access to the following functions:\n\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"check_notifications\", \"description\": \"Check pending notifications.\", \"parameters\": {\"type\": \"object\", \"properties\": {}, \"additionalProperties\": false}, \"strict\": true}}\n{\"type\": \"function\", \"function\": {\"name\": \"finish_thinking\", \"description\": \"Finish this thinking session.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"reason\": {\"type\": \"string\"}, \"next_wake_at\": {\"type\": [\"string\", \"null\"]}}, \"required\": [\"reason\"], \"additionalProperties\": false}, \"strict\": true}}\n</tools>\n\nIf you choose to call a function ONLY reply in the following format with NO suffix:\n\n<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n<parameter=example_parameter_2>\nThis is the value for the second parameter\nthat can span\nmultiple lines\n</parameter>\n</function>\n</tool_call>\n\n<IMPORTANT>\nReminder:\n- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags\n- Required parameters MUST be specified\n- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after\n- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls\n</IMPORTANT>\n\nReply in Japanese.<|im_end|>\n<|im_start|>user\n通知を確認してください。<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n確認します。<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n<function=check_notifications>\n<parameter=channels>\n[\"discord\", \"email\"]\n</parameter>\n<parameter=limit>\n20\n</parameter>\n</function>\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\n{\"discord\":1}\n</tool_response>\n<tool_response>\n{\"email\":0}\n</tool_response><|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+      "token_ids": [
+        248045, 8678, 198, 2, 13455, 271, 2523, 599, 2528, 310, 279, 2614, 5568,
+        25, 271, 27, 15449, 29, 198, 4754, 1267, 763, 328, 1628, 487, 328, 1628,
+        763, 5046, 591, 763, 328, 1960, 65268, 487, 328, 4532, 763, 328, 3840,
+        14836, 21292, 10152, 328, 13390, 763, 5046, 1267, 763, 328, 1640, 487,
+        328, 12811, 763, 15969, 328, 34325, 7654, 763, 867, 2069, 328, 6418,
+        763, 804, 3307, 198, 4754, 1267, 763, 328, 1628, 487, 328, 1628, 763,
+        5046, 591, 763, 328, 29166, 5673, 15275, 487, 328, 4532, 763, 328,
+        24846, 411, 7047, 3669, 10152, 328, 13390, 763, 5046, 1267, 763, 328,
+        1640, 487, 328, 12811, 763, 5046, 19290, 763, 5046, 1267, 763, 328, 889,
+        13933, 328, 3480, 1611, 706, 3625, 763, 5046, 1267, 763, 4241, 889, 487,
+        328, 2827, 1293, 36892, 328, 6081, 763, 4241, 19290, 7664, 328, 34325,
+        7654, 763, 867, 2069, 328, 6418, 763, 804, 3307, 198, 510, 15449, 29,
+        271, 2592, 488, 4992, 310, 1562, 264, 709, 25835, 9559, 303, 279, 2614,
+        3443, 440, 5486, 19900, 25, 271, 248058, 198, 27, 1628, 28, 8422, 8901,
+        1224, 29, 198, 27, 15704, 28, 8422, 24109, 62, 16, 29, 198, 927, 62, 16,
+        198, 510, 15704, 29, 198, 27, 15704, 28, 8422, 24109, 62, 17, 29, 198,
+        1919, 369, 279, 869, 364, 279, 2018, 5555, 198, 8761, 628, 9111, 198,
+        34493, 4965, 198, 510, 15704, 29, 198, 510, 1628, 29, 198, 248059, 271,
+        27, 95328, 29, 198, 92065, 25, 198, 12, 5534, 6526, 26834, 1732, 279,
+        5024, 3443, 25, 449, 8906, 361, 1628, 28, 1076, 1419, 1628, 29, 2424,
+        1902, 381, 23283, 2785, 220, 248058, 248059, 11535, 9212, 198, 12,
+        12296, 4868, 26834, 381, 5024, 198, 12, 1394, 1189, 3300, 9801, 31626,
+        364, 678, 709, 1562, 303, 5629, 3992, 54588, 279, 709, 1562, 11, 694,
+        4045, 1238, 198, 12, 1368, 1017, 369, 874, 709, 1562, 2420, 11, 4087,
+        279, 3296, 1040, 4472, 440, 678, 1428, 6337, 321, 635, 524, 3184, 279,
+        1156, 883, 709, 6526, 198, 510, 95328, 29, 271, 20206, 303, 10452, 13,
+        248046, 198, 248045, 846, 198, 98129, 181399, 172808, 1710, 248046, 198,
+        248045, 74455, 198, 248068, 271, 248069, 271, 113780, 74688, 1710,
+        248046, 198, 248045, 74455, 198, 248068, 271, 248069, 271, 248058, 198,
+        27, 1628, 28, 1960, 65268, 29, 198, 27, 15704, 28, 31354, 29, 198, 1143,
+        41164, 487, 328, 2256, 1293, 198, 510, 15704, 29, 198, 27, 15704, 28,
+        9226, 29, 198, 17, 15, 198, 510, 15704, 29, 198, 510, 1628, 29, 198,
+        248059, 248046, 198, 248045, 846, 198, 248066, 198, 4754, 41164, 763,
+        16, 92, 198, 248067, 198, 248066, 198, 4754, 2256, 763, 15, 92, 198,
+        248067, 248046, 198, 248045, 74455, 198, 248068, 271, 248069, 271
+      ]
+    }
+  ]
+}

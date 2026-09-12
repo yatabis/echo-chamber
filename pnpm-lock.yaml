@@ -146,6 +146,19 @@ importers:
         specifier: ^6.4.3
         version: 6.4.3(@types/node@24.13.3)
 
+  apps/local-runtime:
+    dependencies:
+      '@echo-chamber/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@echo-chamber/native-inference-adapter':
+        specifier: workspace:*
+        version: link:../../packages/native-inference-adapter
+    devDependencies:
+      vite-node:
+        specifier: 3.2.4
+        version: 3.2.4(@types/node@24.13.3)
+
   packages/cloudflare-runtime:
     dependencies:
       '@echo-chamber/core':
@@ -184,12 +197,25 @@ importers:
       '@echo-chamber/core':
         specifier: workspace:*
         version: link:../core
+      '@echo-chamber/native-inference-adapter':
+        specifier: workspace:*
+        version: link:../native-inference-adapter
       '@echo-chamber/openai-adapter':
         specifier: workspace:*
         version: link:../openai-adapter
       openai:
         specifier: 6.49.0
         version: 6.49.0(ws@8.21.0)(zod@4.5.4)
+
+  packages/native-inference-adapter:
+    dependencies:
+      '@echo-chamber/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      vite-node:
+        specifier: 3.2.4
+        version: 3.2.4(@types/node@24.13.3)
 
   packages/openai-adapter:
     dependencies:
@@ -1471,6 +1497,10 @@ packages:
     engines: {node: ^6 || ^7 || ^8 || ^9 || ^10 || ^11 || ^12 || >=13.7}
     hasBin: true
 
+  cac@6.7.14:
+    resolution: {integrity: sha512-b6Ilus+c3RrdDk+JhLKUAQfzzgLEPy6wcXqS7f/xe1EETvsDP6GORG7SFuOs6cID5YkqchW/LXZbX5bc8j7ZcQ==}
+    engines: {node: '>=8'}
+
   cacheable@2.5.0:
     resolution: {integrity: sha512-60cyAOytib/OzBw1JNSoSV/boK1AtHryDIjvVBk7XbN4ugfkM3+Sry7fEjNgPMGgOjuaZPAp8ruZ0Cxafwyq9g==}
 
@@ -1538,6 +1568,9 @@ packages:
 
   error-stack-parser-es@1.0.5:
     resolution: {integrity: sha512-5qucVt2XcuGMcEGgWI7i+yZpmpByQ8J1lHhcL7PwqCwu9FPP3VUXzT4ltHe5i2z9dePwEHcDVOAfSnHsOlCXRA==}
+
+  es-module-lexer@1.7.0:
+    resolution: {integrity: sha512-jEQoCwk8hyb2AZziIOLhDqpm5+2ww5uIE6lkO/6jcOCusfk6LhMHpXXfBLXTZ7Ydyt0j4VoUQv6uGNYbdW+kBA==}
 
   es-module-lexer@2.3.2:
     resolution: {integrity: sha512-poHGpORABojJJucnV9KbOavETW8lBVnphkW77ER5/BQ5Fz7oXSoCNek7IH3vR5nRjdsEz926ibFYX8KtLQmdyw==}
@@ -2099,6 +2132,11 @@ packages:
     resolution: {integrity: sha512-Pp6GSwGP/NrPIrxVFAIkOQeyw8lFenOHijQWkUTrDvrF4ALqylP2C/KCkeS9dpUM3KvYRQhna5vt7IL95+ZQ9w==}
     peerDependencies:
       react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+
+  vite-node@3.2.4:
+    resolution: {integrity: sha512-EbKSKh+bh1E1IFxeO0pg1n4dvoOTt0UDiXMd/qn++r98+jPO1xtJilvXldeuQ8giIB5IkpjCgMleHMNEsGH6pg==}
+    engines: {node: ^18.0.0 || ^20.0.0 || >=22.0.0}
+    hasBin: true
 
   vite@6.4.3:
     resolution: {integrity: sha512-NTKlcQjlAK7MlQoyb6LgaqHc8sso/pVyUJYWMws3jg21uTJw/LddqIFPcPqP6PzpgbIcZyKI85sFE4HBrQDA8A==}
@@ -3287,6 +3325,8 @@ snapshots:
       node-releases: 2.0.54
       update-browserslist-db: 1.3.2(browserslist@4.28.9)
 
+  cac@6.7.14: {}
+
   cacheable@2.5.0:
     dependencies:
       '@cacheable/memory': 2.2.0
@@ -3323,6 +3363,10 @@ snapshots:
     optionalDependencies:
       supports-color: 10.1.0
 
+  debug@4.4.3:
+    dependencies:
+      ms: 2.1.3
+
   debug@4.4.3(supports-color@10.1.0):
     dependencies:
       ms: 2.1.3
@@ -3338,6 +3382,8 @@ snapshots:
   electron-to-chromium@1.5.422: {}
 
   error-stack-parser-es@1.0.5: {}
+
+  es-module-lexer@1.7.0: {}
 
   es-module-lexer@2.3.2: {}
 
@@ -3950,6 +3996,27 @@ snapshots:
   use-sync-external-store@1.6.0(react@18.3.1):
     dependencies:
       react: 18.3.1
+
+  vite-node@3.2.4(@types/node@24.13.3):
+    dependencies:
+      cac: 6.7.14
+      debug: 4.4.3
+      es-module-lexer: 1.7.0
+      pathe: 2.0.3
+      vite: 6.4.3(@types/node@24.13.3)
+    transitivePeerDependencies:
+      - '@types/node'
+      - jiti
+      - less
+      - lightningcss
+      - sass
+      - sass-embedded
+      - stylus
+      - sugarss
+      - supports-color
+      - terser
+      - tsx
+      - yaml
 
   vite@6.4.3(@types/node@24.13.3):
     dependencies:
