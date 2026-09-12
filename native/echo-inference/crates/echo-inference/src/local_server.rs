@@ -524,6 +524,7 @@ fn run_command_loop(
     max_late_join_batch_size: usize,
 ) -> Result<(), LocalServerError> {
     let mut deferred = VecDeque::new();
+    let mut tool_catalogs = SessionToolCatalogs::default();
     loop {
         let command = if let Some(command) = deferred.pop_front() {
             command
@@ -550,6 +551,7 @@ fn run_command_loop(
                     events,
                     cohort,
                     registry,
+                    &mut tool_catalogs,
                     &mut deferred,
                     max_active_batch_size,
                     max_late_join_batch_size,
@@ -606,6 +608,7 @@ fn run_generate_cohort(
     events: &SyncSender<WireEvent>,
     cohort: Vec<AcceptedGenerate>,
     registry: &RequestRegistry,
+    tool_catalogs: &mut SessionToolCatalogs,
     deferred: &mut VecDeque<AcceptedCommand>,
     max_active_batch_size: usize,
     max_late_join_batch_size: usize,
@@ -615,6 +618,7 @@ fn run_generate_cohort(
         commands,
         events,
         registry,
+        tool_catalogs,
         deferred,
         rows: Vec::with_capacity(max_active_batch_size),
     };
@@ -737,8 +741,42 @@ fn run_snapshot(
     }
 }
 
+/// Process-local tool metadata follows the same successful commits as KV/GDN
+/// state. Restored owners establish a new catalog with their next new session.
+#[derive(Default)]
+struct SessionToolCatalogs {
+    committed: HashMap<InstanceId, Vec<EchoToolContract>>,
+}
+
+impl SessionToolCatalogs {
+    /// Resolves output types without adding tool definitions to a continuation's
+    /// exact prompt suffix.
+    fn prepare(
+        &self,
+        instance_id: &InstanceId,
+        state_transition: RequestState,
+        provided: Vec<EchoToolContract>,
+    ) -> Vec<EchoToolContract> {
+        match state_transition {
+            RequestState::Continuation => {
+                self.committed.get(instance_id).cloned().unwrap_or_default()
+            }
+            RequestState::Initial | RequestState::NewSession => provided,
+        }
+    }
+
+    /// Failed or cancelled generations must leave the preceding catalog intact,
+    /// including when the attempted generation starts a different session.
+    fn finish(&mut self, instance_id: &InstanceId, tools: &[EchoToolContract], committed: bool) {
+        if committed {
+            self.committed.insert(instance_id.clone(), tools.to_vec());
+        }
+    }
+}
+
 struct StdioGenerationObserver<'a> {
     request_id: String,
+    instance_id: InstanceId,
     tools: Vec<EchoToolContract>,
     cancellation: Arc<AtomicBool>,
     eos_token_id: u32,
@@ -751,6 +789,7 @@ struct StdioGenerationObserver<'a> {
 impl<'a> StdioGenerationObserver<'a> {
     fn new(
         request_id: String,
+        instance_id: InstanceId,
         tools: Vec<EchoToolContract>,
         cancellation: Arc<AtomicBool>,
         eos_token_id: u32,
@@ -759,6 +798,7 @@ impl<'a> StdioGenerationObserver<'a> {
     ) -> Self {
         Self {
             request_id,
+            instance_id,
             tools,
             cancellation,
             eos_token_id,
@@ -809,6 +849,7 @@ struct StdioBatchGenerationCoordinator<'a> {
     commands: &'a Receiver<AcceptedCommand>,
     events: &'a SyncSender<WireEvent>,
     registry: &'a RequestRegistry,
+    tool_catalogs: &'a mut SessionToolCatalogs,
     deferred: &'a mut VecDeque<AcceptedCommand>,
     rows: Vec<StdioGenerationObserver<'a>>,
 }
@@ -857,9 +898,13 @@ impl StdioBatchGenerationCoordinator<'_> {
                 prompt_tokens: encoded.token_ids.len(),
             },
         )?;
+        let tools = self
+            .tool_catalogs
+            .prepare(&instance_id, state_transition, prompt.tools);
         self.rows.push(StdioGenerationObserver::new(
             request_id,
-            prompt.tools,
+            instance_id.clone(),
+            tools,
             cancellation,
             self.tokenizer.eos_token_id(),
             stream_tokens.then(|| self.tokenizer.decode_stream()),
@@ -940,6 +985,8 @@ impl BatchGenerationObserver for StdioBatchGenerationCoordinator<'_> {
         }
         let request_id = row.request_id.clone();
         let tools = std::mem::take(&mut row.tools);
+        self.tool_catalogs
+            .finish(&row.instance_id, &tools, outcome.is_ok());
         row.finished = true;
         remove_registration(self.registry, &request_id);
         send_generation_outcome(self.events, self.tokenizer, &request_id, &tools, outcome)
@@ -1092,6 +1139,83 @@ impl From<RuntimeError> for LocalServerError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn typed_tool(property_type: &str) -> EchoToolContract {
+        EchoToolContract {
+            name: "advance_probe".into(),
+            description: "Exercises output types across session boundaries.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": { "step": { "type": property_type } },
+                "required": ["step"]
+            }),
+            output_schema: None,
+            strict: true,
+        }
+    }
+
+    fn parsed_step(tools: &[EchoToolContract]) -> serde_json::Value {
+        let parsed = parse_qwen_output_with_tools(
+            "<tool_call><function=advance_probe><parameter=step>2</parameter></function></tool_call>",
+            "test:continuation",
+            tools,
+        );
+        assert!(parsed.warning.is_none());
+        let [EchoOutputItem::ToolCall { input, .. }] = parsed.output.as_slice() else {
+            panic!("expected one parsed tool call");
+        };
+        serde_json::from_str::<serde_json::Value>(input).expect("tool JSON")["step"].clone()
+    }
+
+    #[test]
+    fn continuation_keeps_committed_parameter_types_for_each_instance() {
+        let rin = InstanceId::new("rin").expect("instance");
+        let marie = InstanceId::new("marie").expect("instance");
+        let mut catalogs = SessionToolCatalogs::default();
+        catalogs.finish(&rin, &[typed_tool("integer")], true);
+        catalogs.finish(&marie, &[typed_tool("string")], true);
+        for _ in 0..3 {
+            let tools = catalogs.prepare(&rin, RequestState::Continuation, Vec::new());
+            assert_eq!(parsed_step(&tools), serde_json::json!(2));
+            catalogs.finish(&rin, &tools, true);
+            let tools = catalogs.prepare(&marie, RequestState::Continuation, Vec::new());
+            assert_eq!(parsed_step(&tools), serde_json::json!("2"));
+        }
+    }
+
+    #[test]
+    fn failed_new_session_preserves_the_preceding_parameter_types() {
+        let instance = InstanceId::new("rin").expect("instance");
+        let mut catalogs = SessionToolCatalogs::default();
+        catalogs.finish(&instance, &[typed_tool("integer")], true);
+        let replacement = catalogs.prepare(
+            &instance,
+            RequestState::NewSession,
+            vec![typed_tool("string")],
+        );
+        assert_eq!(parsed_step(&replacement), serde_json::json!("2"));
+        catalogs.finish(&instance, &replacement, false);
+        let continuation = catalogs.prepare(&instance, RequestState::Continuation, Vec::new());
+        assert_eq!(parsed_step(&continuation), serde_json::json!(2));
+        catalogs.finish(&instance, &replacement, true);
+        let continuation = catalogs.prepare(&instance, RequestState::Continuation, Vec::new());
+        assert_eq!(parsed_step(&continuation), serde_json::json!("2"));
+    }
+
+    #[test]
+    fn successful_session_without_tools_drops_the_previous_catalog() {
+        let instance = InstanceId::new("rin").expect("instance");
+        let mut catalogs = SessionToolCatalogs::default();
+        catalogs.finish(&instance, &[typed_tool("integer")], true);
+        let replacement = catalogs.prepare(&instance, RequestState::NewSession, Vec::new());
+        assert!(replacement.is_empty());
+        catalogs.finish(&instance, &replacement, true);
+        assert!(
+            catalogs
+                .prepare(&instance, RequestState::Continuation, Vec::new())
+                .is_empty()
+        );
+    }
 
     fn accepted_generate(request_id: &str) -> AcceptedCommand {
         AcceptedCommand::Generate(AcceptedGenerate {
