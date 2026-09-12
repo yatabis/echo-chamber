@@ -1,7 +1,11 @@
 import type { ChannelNotificationSummary } from '@echo-chamber/core/ports/notification';
 import { formatDatetimeForAgent } from '@echo-chamber/core/utils/datetime';
 
-import { getChannelMessages, getCurrentUser } from './api';
+import {
+  getChannelMessages,
+  getCurrentUser,
+  type DiscordBeforeRequest,
+} from './api';
 
 import type { APIMessage } from 'discord-api-types/v10';
 
@@ -14,11 +18,18 @@ import type { APIMessage } from 'discord-api-types/v10';
  */
 export async function getUnreadMessageCount(
   token: string,
-  channelId: string
+  channelId: string,
+  beforeRequest?: DiscordBeforeRequest
 ): Promise<number> {
   const limit = 100;
-  const user = await getCurrentUser(token);
-  const messages = await getChannelMessages(token, channelId, { limit });
+  const user =
+    beforeRequest === undefined
+      ? await getCurrentUser(token)
+      : await getCurrentUser(token, beforeRequest);
+  const messages =
+    beforeRequest === undefined
+      ? await getChannelMessages(token, channelId, { limit })
+      : await getChannelMessages(token, channelId, { limit }, beforeRequest);
   return getUnreadCount(messages, user.id);
 }
 
@@ -31,11 +42,18 @@ export async function getUnreadMessageCount(
  */
 export async function getNotificationDetails(
   token: string,
-  channelId: string
+  channelId: string,
+  beforeRequest?: DiscordBeforeRequest
 ): Promise<Omit<ChannelNotificationSummary, 'channel'>> {
   const limit = 100;
-  const user = await getCurrentUser(token);
-  const messages = await getChannelMessages(token, channelId, { limit });
+  const user =
+    beforeRequest === undefined
+      ? await getCurrentUser(token)
+      : await getCurrentUser(token, beforeRequest);
+  const messages =
+    beforeRequest === undefined
+      ? await getChannelMessages(token, channelId, { limit })
+      : await getChannelMessages(token, channelId, { limit }, beforeRequest);
   const latestMessage = messages[0];
 
   return {

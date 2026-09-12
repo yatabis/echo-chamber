@@ -48,7 +48,7 @@ export function requireLongSessionStepToolCall(
   const call = event.output.find(
     (item): item is LongSessionToolCall => item.type === 'tool_call'
   );
-  if (call === undefined || call.tool_name !== LONG_SESSION_TOOL.name) {
+  if (call?.tool_name !== LONG_SESSION_TOOL.name) {
     throw new Error(
       `request ${event.request_id} omitted ${LONG_SESSION_TOOL.name}`
     );

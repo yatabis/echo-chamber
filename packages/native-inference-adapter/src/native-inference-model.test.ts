@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
+import { canonicalRuntimeTools } from '@echo-chamber/core/agent/runtime-tools/catalog';
 import { runAgentSession } from '@echo-chamber/core/agent/session';
+import type { AgentSessionTurnBoundaryHandler } from '@echo-chamber/core/agent/session';
 import type {
   EchoEvent,
   EchoEventPort,
@@ -342,10 +344,15 @@ describe('NativeInferenceModel', () => {
   it('connects the core no-tool retry to an empty Native continuation', async () => {
     const { model, transport } = setupModel();
     let generation = 0;
-    const sessionRecord = {
-      content: 'No-tool recovery reached an explicit finish call.',
-      emotion: { valence: 0.1, arousal: 0.2, labels: ['calm'] },
-    };
+    const nextWakeAt = '2026-09-13T00:00:00Z';
+    const finishTool = canonicalRuntimeTools.find(
+      (tool) => tool.name === 'finish_thinking'
+    );
+    if (finishTool === undefined)
+      throw new Error('finish_thinking is required');
+    const onTurnBoundary = vi
+      .fn<AgentSessionTurnBoundaryHandler>()
+      .mockResolvedValue([]);
     transport.onSend = (wire, current): void => {
       if (wire.type === 'open_state') {
         current.emit({
@@ -374,7 +381,7 @@ describe('NativeInferenceModel', () => {
               tool_name: 'finish_thinking',
               input: JSON.stringify({
                 reason: 'done',
-                session_record: sessionRecord,
+                next_wake_at: nextWakeAt,
               }),
             },
           ],
@@ -389,18 +396,110 @@ describe('NativeInferenceModel', () => {
       tools: [
         {
           name: 'finish_thinking',
-          contract: TOOL,
+          contract: finishTool.contract,
           execute: async (): Promise<string> =>
             Promise.resolve('{"success":true}'),
         },
       ],
+      onTurnBoundary,
     });
 
     expect(result).toMatchObject({
-      context: sessionRecord,
+      nextWakeAt,
       terminationReason: 'finish_thinking',
     });
     expect(generation).toBe(2);
+    expect(onTurnBoundary).toHaveBeenCalledTimes(2);
+    expect(onTurnBoundary).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        terminationReason: null,
+        resolvedInput: [],
+      })
+    );
+    expect(onTurnBoundary).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        terminationReason: 'finish_thinking',
+        resolvedInput: [
+          {
+            type: 'tool_result',
+            callId: 'call-finish',
+            output: '{"success":true}',
+          },
+        ],
+      })
+    );
+  });
+
+  it('retains the tool schema serialization failure for diagnostics', async () => {
+    const { model, transport } = setupModel();
+    const serializationError = new Error('schema serialization failed');
+    transport.onSend = autoResponder();
+    await model.openState({
+      persistence: 'durable',
+      snapshotRoot: '/state/rin',
+    });
+
+    await expect(
+      model.generate({
+        ...request('inspect schema'),
+        tools: [
+          {
+            ...TOOL,
+            inputSchema: {
+              toJSON(): never {
+                throw serializationError;
+              },
+            },
+          },
+        ],
+      })
+    ).rejects.toMatchObject({ cause: serializationError });
+    expect(transport.commands.some((wire) => wire.type === 'generate')).toBe(
+      false
+    );
+  });
+
+  it('retains both completion and token listener failures for diagnostics', async () => {
+    const listenerError = new Error('token listener failed');
+    const { model, transport } = setupModel(() => {
+      throw listenerError;
+    });
+    transport.onSend = (wire, current): void => {
+      if (wire.type === 'open_state') {
+        autoResponder()(wire, current);
+      } else if (wire.type === 'generate') {
+        current.emit({
+          event: 'token',
+          request_id: wire.request_id,
+          index: 0,
+          token_id: 248_046,
+          terminal: true,
+        });
+        const event = completed(wire);
+        event.response.instance_id = 'another-owner';
+        current.emit(event);
+      }
+    };
+    await model.openState({
+      persistence: 'durable',
+      snapshotRoot: '/state/rin',
+    });
+
+    await expect(
+      model.generate(request('inspect completion'))
+    ).rejects.toMatchObject({
+      cause: {
+        message: 'native response instance another-owner does not match rin',
+      },
+      errors: [
+        {
+          message: 'native response instance another-owner does not match rin',
+        },
+        listenerError,
+      ],
+    });
   });
 
   it('accepts committed state before surfacing a terminal token listener error', async () => {

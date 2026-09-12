@@ -217,7 +217,7 @@ function requireToolCall(
     (item): item is Extract<ModelOutputItem, { type: 'tool_call' }> =>
       item.type === 'tool_call'
   );
-  if (toolCall === undefined || toolCall.toolName !== TOOL.name) {
+  if (toolCall?.toolName !== TOOL.name) {
     throw new Error(
       `new session returned no expected tool call: ${JSON.stringify(output)}`
     );

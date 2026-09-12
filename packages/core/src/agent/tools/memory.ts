@@ -1,14 +1,13 @@
 import { z } from 'zod';
 
-import { emotionSchema } from '../../echo/schemas';
-import { MEMORY_TYPES } from '../../echo/types';
+import {
+  emotionSchema,
+  memoryQuerySchema,
+  memoryStoreInputSchema,
+  memoryTypeSchema,
+} from '../../echo/schemas';
 
 import { createToolResultSchema, defineToolSpecification } from './shared';
-
-const MAX_MEMORY_CONTENT_LENGTH = 500;
-const MAX_MEMORY_QUERY_LENGTH = 500;
-
-const memoryTypeSchema = z.enum(MEMORY_TYPES);
 
 const memorySearchResultSchema = z.object({
   content: z.string(),
@@ -17,40 +16,22 @@ const memorySearchResultSchema = z.object({
   createdAt: z.string(),
 });
 
+/** Main が必要に応じて長期記憶を保存するための tool contract。 */
 export const storeMemoryToolSpec = defineToolSpecification({
   name: 'store_memory',
   description:
-    '将来のセマンティック検索のために、感情的コンテキストを伴う記憶を保存する。意味のある体験、会話、または感情的な重要性を持つ瞬間を保存するために使用せよ。システムはセマンティック検索のためにエンベディングを使用し、容量がいっぱいになると最も古い記憶を削除して自動的に管理する。',
-  parameters: {
-    content: z
-      .string()
-      .min(1)
-      .max(MAX_MEMORY_CONTENT_LENGTH)
-      .trim()
-      .describe(
-        `関連するすべての詳細を含む記憶の完全な内容。最大${MAX_MEMORY_CONTENT_LENGTH}文字。`
-      ),
-    type: memoryTypeSchema.describe(
-      '記憶のタイプ。semantic: 事実や一般的な知識（「東京は日本の首都」など）。episode: 特定の体験や出来事（「今日ユーザーと楽しい会話をした」など）。'
-    ),
-    emotion: emotionSchema.describe('この記憶に付随する感情'),
-  },
+    'Main が将来のセマンティック検索に残す価値があると必要に応じて判断した場合に、記憶を保存できる。利用は任意である。現在の感情状態はシステムが自動的に関連付ける。システムはセマンティック検索のためにエンベディングを使用し、容量がいっぱいになると最も古い記憶を削除して自動的に管理する。',
+  parameters: memoryStoreInputSchema.shape,
   outputSchema: createToolResultSchema({}),
 });
 
+/** Main が必要に応じて長期記憶を検索するための tool contract。 */
 export const searchMemoryToolSpec = defineToolSpecification({
   name: 'search_memory',
   description:
-    'セマンティック類似性を使用して関連する記憶を検索する。過去の経験を思い出したり、関連する記憶を見つけたり、正確なキーワードではなく概念的にクエリに一致する記憶を取得するために使用せよ。セマンティック類似性でソートされた最大5件の最も関連性の高い記憶を返す。',
+    'Main が過去の経験や関連情報を参照する必要があると判断した場合に、セマンティック類似性を使用して記憶を検索できる。利用は任意である。セマンティック類似性でソートされた最大5件の最も関連性の高い記憶を返す。',
   parameters: {
-    query: z
-      .string()
-      .min(1)
-      .max(MAX_MEMORY_QUERY_LENGTH)
-      .trim()
-      .describe(
-        '検索クエリ。埋め込み化され、コサイン類似度を使用して保存された記憶と比較される。'
-      ),
+    query: memoryQuerySchema,
     type: memoryTypeSchema
       .optional()
       .describe(

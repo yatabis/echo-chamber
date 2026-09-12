@@ -32,8 +32,7 @@ export interface ModelImageContentPart {
  * provider 非依存の message content part。
  */
 export type ModelMessageContentPart =
-  | ModelTextContentPart
-  | ModelImageContentPart;
+  ModelTextContentPart | ModelImageContentPart;
 
 /**
  * モデルへそのまま渡せるメッセージ content。
@@ -114,6 +113,14 @@ export interface ModelUsage {
   totalTokens: number;
 }
 
+/** Provider-neutral strict JSON Schema response contract。 */
+export interface ModelStructuredOutputFormat {
+  type: 'json_schema';
+  name: string;
+  schema: Record<string, unknown>;
+  strict: true;
+}
+
 /**
  * 1ターンぶんのモデル呼び出し要求。
  */
@@ -122,6 +129,9 @@ export interface ModelRequest {
   tools: ModelToolContract[];
   previousResponseToken?: string;
   turnIndex?: number;
+  responseFormat?: ModelStructuredOutputFormat;
+  maxOutputTokens?: number;
+  signal?: AbortSignal;
 }
 
 /**

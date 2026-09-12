@@ -1,3 +1,4 @@
+import OpenAI from 'openai';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { EchoEventPort } from '@echo-chamber/core/ports/echo-event';
@@ -25,12 +26,19 @@ import type {
 const mockCreateResponse = vi.fn();
 
 vi.mock('openai', () => {
-  return {
-    default: vi.fn(() => ({
+  // Vitest 4 requires mocks invoked with `new` to use a constructable implementation.
+  function MockOpenAI(): {
+    responses: { create: typeof mockCreateResponse };
+  } {
+    return {
       responses: {
         create: mockCreateResponse,
       },
-    })),
+    };
+  }
+
+  return {
+    default: vi.fn(MockOpenAI),
   };
 });
 
@@ -58,6 +66,38 @@ const thinkDeeplyTool = {
 describe('OpenAIResponsesModel', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+  });
+
+  it('SDK retry設定と各HTTP attemptのadmission hookをcallerが指定できる', async () => {
+    const beforeRequest = vi.fn();
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('{}'));
+    new OpenAIResponsesModel({
+      apiKey: 'test-key',
+      maxRetries: 0,
+      beforeRequest,
+    });
+
+    expect(OpenAI).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: 'test-key',
+        maxRetries: 0,
+      })
+    );
+    const constructorCalls = vi.mocked(OpenAI).mock.calls as unknown as [
+      { fetch?: typeof fetch },
+    ][];
+    const constructorOptions = constructorCalls[0]?.[0];
+    if (constructorOptions?.fetch === undefined) {
+      throw new Error('Expected guarded OpenAI fetch');
+    }
+    expect(typeof constructorOptions.fetch).toBe('function');
+    await constructorOptions.fetch('https://api.openai.test', {});
+
+    expect(beforeRequest).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    fetchMock.mockRestore();
   });
 
   it('createResponse は provider-neutral request を Responses API 形式へ変換する', async () => {
@@ -223,6 +263,57 @@ describe('OpenAIResponsesModel', () => {
     );
   });
 
+  it('provider-neutral strict JSON Schema と output/deadline 制約を渡す', async () => {
+    const model = new OpenAIResponsesModel({ apiKey: 'test-key' });
+    const signal = new AbortController().signal;
+    const schema = {
+      type: 'object',
+      properties: { answer: { type: 'string' } },
+      required: ['answer'],
+      additionalProperties: false,
+    };
+
+    mockCreateResponse.mockResolvedValue({
+      output: [],
+      usage: {
+        input_tokens: 0,
+        input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
+        output_tokens: 0,
+        output_tokens_details: { reasoning_tokens: 0 },
+        total_tokens: 0,
+      },
+    });
+
+    await model.generate({
+      input: [],
+      tools: [],
+      responseFormat: {
+        type: 'json_schema',
+        name: 'answer_contract',
+        strict: true,
+        schema,
+      },
+      maxOutputTokens: 512,
+      signal,
+    });
+
+    expect(mockCreateResponse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        max_output_tokens: 512,
+        text: {
+          format: {
+            type: 'json_schema',
+            name: 'answer_contract',
+            strict: true,
+            schema,
+          },
+          verbosity: 'medium',
+        },
+      }),
+      { signal }
+    );
+  });
+
   it('generate は OpenAI response を core model response へ変換する', async () => {
     const model = new OpenAIResponsesModel({
       apiKey: 'test-key',
@@ -331,6 +422,102 @@ describe('OpenAIResponsesModel', () => {
         turnIndex: 2,
       },
     });
+  });
+
+  it('exchange eventではWeb call/resultだけを伏せ、live payloadと非Web値を保つ', async () => {
+    const rawUrl = 'https://public.example/page?token=RESPONSES_WEB_ARG';
+    const webResult = JSON.stringify({
+      success: true,
+      source: {
+        requestedUrl: rawUrl,
+        finalUrl: 'https://public.example/final',
+        title: 'RESPONSES_PRIVATE_TITLE',
+        httpStatus: 200,
+        contentType: 'text/html',
+        redirectCount: 1,
+      },
+      document: {
+        text: 'RESPONSES_WEB_RESULT',
+        returnedCharacters: 20,
+        extractedCharacters: 40,
+        truncated: false,
+        links: [{ text: 'private', url: 'https://public.example/private' }],
+      },
+    });
+    const firstProviderResponse = {
+      id: 'response_web_1',
+      output: [
+        {
+          type: 'function_call',
+          call_id: 'web-call',
+          name: 'read_web_page',
+          arguments: JSON.stringify({ url: rawUrl }),
+          status: 'completed',
+        },
+      ],
+      usage: {
+        input_tokens: 1,
+        input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
+        output_tokens: 1,
+        output_tokens_details: { reasoning_tokens: 0 },
+        total_tokens: 2,
+      },
+    };
+    mockCreateResponse
+      .mockResolvedValueOnce(firstProviderResponse)
+      .mockResolvedValueOnce({
+        id: 'response_web_2',
+        output: [],
+        usage: {
+          input_tokens: 1,
+          input_tokens_details: {
+            cached_tokens: 0,
+            cache_write_tokens: 0,
+          },
+          output_tokens: 1,
+          output_tokens_details: { reasoning_tokens: 0 },
+          total_tokens: 2,
+        },
+      });
+    const model = new OpenAIResponsesModel({
+      apiKey: 'test-key',
+      events: mockEvents,
+    });
+
+    await model.generate({ input: [], tools: [] });
+    await model.generate({
+      input: [
+        { type: 'tool_result', callId: 'web-call', output: webResult },
+        {
+          type: 'tool_call',
+          callId: 'other-call',
+          toolName: 'think_deeply',
+          input: 'RESPONSES_NON_WEB_CANARY',
+        },
+        {
+          type: 'tool_result',
+          callId: 'other-call',
+          output: 'RESPONSES_NON_WEB_CANARY',
+        },
+      ],
+      tools: [],
+    });
+
+    const exchangeEvents = mockEmit.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.type === 'model.exchange.recorded');
+    const serializedEvents = JSON.stringify(exchangeEvents);
+    expect(serializedEvents).not.toContain('RESPONSES_WEB_ARG');
+    expect(serializedEvents).not.toContain('RESPONSES_WEB_RESULT');
+    expect(serializedEvents).not.toContain('RESPONSES_PRIVATE_TITLE');
+    expect(serializedEvents).toContain('RESPONSES_NON_WEB_CANARY');
+
+    expect(JSON.stringify(mockCreateResponse.mock.calls[1]?.[0])).toContain(
+      'RESPONSES_WEB_RESULT'
+    );
+    expect(JSON.stringify(firstProviderResponse)).toContain(
+      'RESPONSES_WEB_ARG'
+    );
   });
 
   it('usage がない response はゼロ usage として扱う', async () => {
@@ -665,7 +852,7 @@ describe('formatMessage', () => {
         ] as unknown as ResponseOutputMessage['content'],
       };
 
-      expect(() => formatMessage(message)).toThrowError(
+      expect(() => formatMessage(message)).toThrow(
         'Unexpected contentType: unknown'
       );
     });

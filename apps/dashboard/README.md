@@ -8,8 +8,9 @@ Cloudflare Worker 経由で配信されることを前提に、TanStack Router �
 
 - Dashboard UI (`src/App.tsx`)
 - 一覧→詳細の画面遷移（`rin` / `marie`）
+- Cognitive Domain state、ノート、メモリ、usage の表示
 - ノート検索、メモリページング、usage 7/30日切替
-- `@echo-chamber/core` の DTO 型を利用した表示
+- `@echo-chamber/contracts` の DTO 型を利用した表示
 
 ## データソース
 

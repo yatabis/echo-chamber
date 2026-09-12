@@ -1,4 +1,3 @@
-import type { PromptContextSnapshot } from '@echo-chamber/core/agent/prompt-builder';
 import type { Note } from '@echo-chamber/core/echo/types';
 import type { ChatMessage } from '@echo-chamber/core/ports/chat';
 import type { MemorySearchResult } from '@echo-chamber/core/ports/memory';
@@ -6,6 +5,7 @@ import type { ChannelNotificationSummary } from '@echo-chamber/core/ports/notifi
 
 import type {
   EvaluationCheck,
+  RuntimeContextSnapshot,
   RuntimeInstructionMode,
   TraceCall,
   TraceEvent,
@@ -29,7 +29,7 @@ export interface RuntimeScenarioFixture {
   title: string;
   instructionMode: RuntimeInstructionMode;
   originScenarioId?: string;
-  latestContext: PromptContextSnapshot | null;
+  latestContext: RuntimeContextSnapshot | null;
   relatedMemories: MemorySearchResult[];
   notifications: ChannelNotificationSummary[];
   chatMessages: Record<string, ChatMessage[]>;

@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ModelRequest } from '@echo-chamber/core/ports/model';
 import {
@@ -505,6 +505,38 @@ describe('LocalNativeInferenceRuntime', () => {
       'snapshot',
       'shutdown',
     ]);
+  });
+
+  it('retains state-open and cleanup failures for diagnostics', async () => {
+    const snapshotDirectory = await createSnapshotDirectory();
+    const transport = new FakeTransport();
+    const client = new NativeInferenceClient(transport);
+    const cleanupError = new Error('owner cleanup failed');
+    vi.spyOn(client, 'shutdown').mockRejectedValue(cleanupError);
+    transport.ready();
+    transport.onSend = (command, current): void => {
+      if (command.type === 'open_state') {
+        current.emit({
+          event: 'failed',
+          request_id: command.request_id,
+          phase: 'open_state',
+          error: 'safetensors metadata mismatch',
+        });
+      }
+    };
+
+    await expect(
+      startWithClient(snapshotDirectory, client)
+    ).rejects.toMatchObject({
+      cause: cleanupError,
+      errors: [
+        {
+          message:
+            'native inference open_state failed: safetensors metadata mismatch',
+        },
+        cleanupError,
+      ],
+    });
   });
 
   it('fails closed and shuts down when opening current state fails', async () => {

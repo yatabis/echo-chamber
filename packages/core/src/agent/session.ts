@@ -1,23 +1,40 @@
 import { emitEchoEvent } from '../ports/echo-event';
+import { WEB_PAGE_READER_ERROR_CODES } from '../ports/web-page-reader';
 import { getErrorMessage } from '../utils/error';
 
 import {
   finishThinkingInputSchema,
   type FinishThinkingInput,
-  type FinishThinkingSessionRecord,
 } from './tools/thinking';
+import {
+  READ_WEB_PAGE_BUDGET_ERROR_MESSAGE,
+  READ_WEB_PAGE_INTERNAL_ERROR_MESSAGE,
+  READ_WEB_PAGE_MAX_CALLS_PER_SESSION,
+  READ_WEB_PAGE_TOOL_NAME,
+} from './tools/web';
 
 import type { EchoEventPort } from '../ports/echo-event';
 import type {
   ModelInputItem,
   ModelMessage,
   ModelMessageContentPart,
+  ModelOutputItem,
   ModelPort,
   ModelResponse,
   ModelToolCall,
   ModelToolContract,
+  ModelToolResult,
   ModelUsage,
 } from '../ports/model';
+
+const WEB_PAGE_READER_ERROR_CODE_SET = new Set<string>(
+  WEB_PAGE_READER_ERROR_CODES
+);
+const WEB_PAGE_CONTENT_TYPES = new Set([
+  'text/html',
+  'application/xhtml+xml',
+  'text/plain',
+]);
 
 /**
  * agent session が実行できる tool の最小契約。
@@ -30,6 +47,32 @@ export interface AgentSessionTool {
   execute(input: string): Promise<string>;
 }
 
+/** A terminal reason visible at the final resolved model-turn boundary. */
+export type AgentSessionTerminationReason = 'finish_thinking' | 'max_turns';
+
+/**
+ * One model turn after every requested tool has produced its model-visible
+ * result.
+ *
+ * `responseOutput` preserves the assistant output and tool calls, while
+ * `resolvedInput` is the exact input that the main model would receive next.
+ * A terminal boundary is still emitted so higher-level orchestration can run
+ * end-of-session work; any input it returns at that boundary is intentionally
+ * not sent to another main-model turn.
+ */
+export interface AgentSessionTurnBoundary {
+  turnIndex: number;
+  responseOutput: readonly ModelOutputItem[];
+  toolCalls: readonly ModelToolCall[];
+  resolvedInput: readonly ModelInputItem[];
+  terminationReason: AgentSessionTerminationReason | null;
+}
+
+/** Higher-level work that can enrich the next main-model turn at a boundary. */
+export type AgentSessionTurnBoundaryHandler = (
+  boundary: AgentSessionTurnBoundary
+) => Promise<readonly ModelInputItem[]>;
+
 /**
  * provider 非依存 session を実行するための入力。
  */
@@ -39,19 +82,38 @@ export interface RunAgentSessionInput {
   initialInput: ModelInputItem[];
   events?: EchoEventPort;
   maxTurns?: number;
+  onTurnBoundary?: AgentSessionTurnBoundaryHandler;
 }
 
 /**
  * session 全体の実行結果。
- * usage 集計に加えて、`finish_thinking` が返した session record と
- * 次回起動時刻、provider 側の継続 token、終了理由を返す。
+ * usage 集計に加えて、次回起動時刻、provider 側の継続 token、終了理由を返す。
  */
 export interface AgentSessionResult {
   usage: ModelUsage;
-  context?: FinishThinkingSessionRecord;
   nextWakeAt: string | null;
   responseToken?: string;
-  terminationReason: 'finish_thinking' | 'max_turns';
+  terminationReason: AgentSessionTerminationReason;
+}
+
+/**
+ * Session の途中失敗でも、provider が既に計上した usage を呼び出し元へ返す。
+ *
+ * `cause` は制御判断用に保持し、usage は成功済み model response のみを含む。
+ */
+export class AgentSessionExecutionError extends Error {
+  override readonly name = 'AgentSessionExecutionError';
+  readonly cause: unknown;
+
+  /** @param cause session を停止させた元の失敗 */
+  constructor(
+    cause: unknown,
+    readonly usage: ModelUsage,
+    readonly responseToken: string | undefined
+  ) {
+    super(`Agent session failed: ${getErrorMessage(cause)}`);
+    this.cause = cause;
+  }
 }
 
 /**
@@ -114,6 +176,42 @@ function findTool(
   return tools.find((tool) => tool.name === toolName);
 }
 
+function createUnexpectedToolFailure(
+  toolName: string,
+  error: unknown
+): {
+  message: string;
+  metadata: Record<string, unknown>;
+  output: string;
+} {
+  if (toolName === READ_WEB_PAGE_TOOL_NAME) {
+    return {
+      message: READ_WEB_PAGE_INTERNAL_ERROR_MESSAGE,
+      metadata: { code: 'internal_error', retryable: false },
+      output: JSON.stringify({
+        success: false,
+        code: 'internal_error',
+        error: READ_WEB_PAGE_INTERNAL_ERROR_MESSAGE,
+        retryable: false,
+      }),
+    };
+  }
+
+  const message = getErrorMessage(error);
+  return {
+    message,
+    metadata: {},
+    output: JSON.stringify({ success: false, error: message }),
+  };
+}
+
+function createToolErrorAuditMetadata(
+  toolName: string,
+  error: unknown
+): Record<string, unknown> {
+  return toolName === READ_WEB_PAGE_TOOL_NAME ? {} : { error };
+}
+
 /**
  * 1件の tool call を実行し、そのまま次ターンへ返せる文字列結果に変換する。
  * 未登録 tool や handler 例外も JSON 文字列へ正規化して返す。
@@ -132,7 +230,7 @@ export async function executeAgentToolCall(
       callId: toolCall.callId,
       toolName: toolCall.toolName,
       turnIndex,
-      input: toolCall.input,
+      input: createToolInputAuditValue(toolCall),
     },
   });
 
@@ -173,8 +271,9 @@ export async function executeAgentToolCall(
         turnIndex,
         durationMs: Date.now() - startedAt,
         success,
-        error: parsedOutput.error,
-        ...(parsedOutput.diagnostics === undefined
+        ...createToolErrorAuditMetadata(toolCall.toolName, parsedOutput.error),
+        ...(toolCall.toolName === READ_WEB_PAGE_TOOL_NAME ||
+        parsedOutput.diagnostics === undefined
           ? {}
           : { diagnostics: parsedOutput.diagnostics }),
         outputLength: sanitizedOutput.length,
@@ -183,7 +282,7 @@ export async function executeAgentToolCall(
     });
     return sanitizedOutput;
   } catch (error) {
-    const message = getErrorMessage(error);
+    const failure = createUnexpectedToolFailure(toolCall.toolName, error);
     await emitEchoEvent(events, {
       type: 'tool.failed',
       severity: 'warn',
@@ -194,14 +293,40 @@ export async function executeAgentToolCall(
         turnIndex,
         durationMs: Date.now() - startedAt,
         success: false,
-        error: message,
+        ...createToolErrorAuditMetadata(toolCall.toolName, failure.message),
+        ...failure.metadata,
       },
     });
-    return JSON.stringify({
-      success: false,
-      error: message,
-    });
+    return failure.output;
   }
+}
+
+/**
+ * tool.calledへ載せるinputを作る。Web URLだけは生値を保存しない。
+ */
+function createToolInputAuditValue(toolCall: ModelToolCall): unknown {
+  if (toolCall.toolName !== READ_WEB_PAGE_TOOL_NAME) {
+    return toolCall.input;
+  }
+
+  const parsedInput = parseToolInput(toolCall.input);
+  const url = getStringProperty(parsedInput, 'url');
+  const maxCharacters = parsedInput?.maxCharacters;
+  let hasQuery = false;
+  if (url !== undefined) {
+    try {
+      hasQuery = new URL(url).search !== '';
+    } catch {
+      hasQuery = url.includes('?');
+    }
+  }
+
+  return {
+    redacted: true,
+    urlLength: url?.length ?? 0,
+    hasQuery,
+    ...(typeof maxCharacters === 'number' ? { maxCharacters } : {}),
+  };
 }
 
 function parseToolOutput(output: string): {
@@ -258,6 +383,10 @@ function createToolEventMetadata(
   toolCall: ModelToolCall,
   parsedOutput: { record?: Record<string, unknown> }
 ): Record<string, unknown> {
+  if (toolCall.toolName === READ_WEB_PAGE_TOOL_NAME) {
+    return createWebToolEventMetadata(parsedOutput.record);
+  }
+
   const operation = getToolOperation(toolCall.toolName);
   if (operation === undefined) {
     return {};
@@ -267,6 +396,52 @@ function createToolEventMetadata(
     operation,
     ...getToolEntityMetadata(toolCall, parsedOutput),
   };
+}
+
+/**
+ * Web tool resultからURLや本文を含まない監査metadataだけを選ぶ。
+ */
+function createWebToolEventMetadata(
+  output: Record<string, unknown> | undefined
+): Record<string, unknown> {
+  if (output === undefined) {
+    return {};
+  }
+
+  const source = getRecordProperty(output, 'source');
+  const document = getRecordProperty(output, 'document');
+  const links = document?.links;
+
+  return compactRecord({
+    code: getAllowedStringProperty(
+      output,
+      'code',
+      WEB_PAGE_READER_ERROR_CODE_SET
+    ),
+    retryable: getBooleanProperty(output, 'retryable'),
+    httpStatus: getNumberProperty(source, 'httpStatus'),
+    contentType: getAllowedStringProperty(
+      source,
+      'contentType',
+      WEB_PAGE_CONTENT_TYPES
+    ),
+    redirectCount: getNumberProperty(source, 'redirectCount'),
+    returnedCharacters: getNumberProperty(document, 'returnedCharacters'),
+    extractedCharacters: getNumberProperty(document, 'extractedCharacters'),
+    truncated: getBooleanProperty(document, 'truncated'),
+    linkCount: Array.isArray(links) ? links.length : undefined,
+  });
+}
+
+/**
+ * undefined値を監査metadataから除く。
+ */
+function compactRecord(
+  record: Record<string, unknown>
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(record).filter(([, value]) => value !== undefined)
+  );
 }
 
 function getToolOperation(toolName: string): string | undefined {
@@ -334,22 +509,107 @@ function getStringProperty(
   return typeof value === 'string' ? value : undefined;
 }
 
+function getAllowedStringProperty(
+  record: Record<string, unknown> | undefined,
+  key: string,
+  allowedValues: ReadonlySet<string>
+): string | undefined {
+  const value = getStringProperty(record, key);
+  return value !== undefined && allowedValues.has(value) ? value : undefined;
+}
+
+function getRecordProperty(
+  record: Record<string, unknown> | undefined,
+  key: string
+): Record<string, unknown> | undefined {
+  const value = record?.[key];
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function getNumberProperty(
+  record: Record<string, unknown> | undefined,
+  key: string
+): number | undefined {
+  const value = record?.[key];
+  return typeof value === 'number' ? value : undefined;
+}
+
+function getBooleanProperty(
+  record: Record<string, unknown> | undefined,
+  key: string
+): boolean | undefined {
+  const value = record?.[key];
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+/**
+ * 一つのagent sessionだけで有効なread_web_page call counterを付ける。
+ * 判定と加算はwrapped executeがPromiseを返す前に同期的に完了する。
+ */
+function createSessionTools(
+  tools: readonly AgentSessionTool[]
+): readonly AgentSessionTool[] {
+  let readWebPageCalls = 0;
+
+  return tools.map((tool) => {
+    if (tool.name !== READ_WEB_PAGE_TOOL_NAME) {
+      return tool;
+    }
+
+    return {
+      ...tool,
+      async execute(input: string): Promise<string> {
+        if (readWebPageCalls >= READ_WEB_PAGE_MAX_CALLS_PER_SESSION) {
+          return JSON.stringify({
+            success: false,
+            code: 'budget_exceeded',
+            error: READ_WEB_PAGE_BUDGET_ERROR_MESSAGE,
+            retryable: false,
+          });
+        }
+
+        readWebPageCalls += 1;
+        return tool.execute(input);
+      },
+    };
+  });
+}
+
 function getToolCalls(response: ModelResponse): ModelToolCall[] {
   return response.output.filter((item) => item.type === 'tool_call');
 }
 
 /**
- * `finish_thinking` 呼び出し列から、有効な入力 payload を抜き出す。
- * tool 名だけでは終了扱いにせず、schema に合致した入力を持つ場合だけ完了とみなす。
+ * `finish_thinking` 呼び出し列から、実行に成功した有効な入力 payload を抜き出す。
+ * tool 名だけでは終了扱いにせず、schema に合致した入力と成功結果の両方がある場合だけ完了とみなす。
  *
  * @param toolCalls 現在ターンでモデルが返した tool call 一覧
- * @returns 正常終了に使える finish_thinking 入力。見つからない、または不正なら `null`
+ * @param resolvedInput tool 実行後の model-visible input
+ * @returns 正常終了に使える finish_thinking 入力。見つからない、不正、または実行失敗なら `null`
  */
 function parseFinishThinkingInput(
-  toolCalls: readonly ModelToolCall[]
+  toolCalls: readonly ModelToolCall[],
+  resolvedInput: readonly ModelInputItem[]
 ): FinishThinkingInput | null {
   for (const toolCall of toolCalls) {
     if (toolCall.toolName !== 'finish_thinking') {
+      continue;
+    }
+
+    const toolResult = resolvedInput.find(
+      (item): item is ModelToolResult =>
+        'type' in item &&
+        item.type === 'tool_result' &&
+        item.callId === toolCall.callId
+    );
+    if (
+      toolResult === undefined ||
+      parseToolOutput(toolResult.output).success !== true
+    ) {
       continue;
     }
 
@@ -366,6 +626,32 @@ function parseFinishThinkingInput(
   }
 
   return null;
+}
+
+/** 現在 turn の明示終了または max-turn 終了を正規化する。 */
+function getSessionTerminationReason(
+  finishThinking: FinishThinkingInput | null,
+  turn: number,
+  maxTurns: number
+): AgentSessionTerminationReason | null {
+  if (finishThinking !== null) {
+    return 'finish_thinking';
+  }
+  if (turn === maxTurns) {
+    return 'max_turns';
+  }
+  return null;
+}
+
+/** Optional boundary handler の未指定時を空 input に正規化する。 */
+async function createBoundaryAdditionalInput(
+  handler: AgentSessionTurnBoundaryHandler | undefined,
+  boundary: AgentSessionTurnBoundary
+): Promise<readonly ModelInputItem[]> {
+  if (handler === undefined) {
+    return [];
+  }
+  return await handler(boundary);
 }
 
 /**
@@ -631,84 +917,113 @@ export async function runAgentSession(
   input: RunAgentSessionInput
 ): Promise<AgentSessionResult> {
   const maxTurns = input.maxTurns ?? 10;
+  const sessionTools = createSessionTools(input.tools);
   let currentInput = input.initialInput;
   let previousResponseToken: string | undefined;
   let totalUsage = ZERO_MODEL_USAGE;
 
-  for (let turn = 1; turn <= maxTurns; turn += 1) {
-    // Agent turns are sequential; event emission belongs to the same turn.
-    // eslint-disable-next-line no-await-in-loop
-    await emitEchoEvent(input.events, {
-      type: 'model.turn.started',
-      severity: 'debug',
-      summary: `model turn ${turn} started`,
-      payload: {
+  try {
+    for (let turn = 1; turn <= maxTurns; turn += 1) {
+      // Agent turns are sequential; event emission belongs to the same turn.
+      // eslint-disable-next-line no-await-in-loop
+      await emitEchoEvent(input.events, {
+        type: 'model.turn.started',
+        severity: 'debug',
+        summary: `model turn ${turn} started`,
+        payload: {
+          turnIndex: turn,
+          inputItemCount: currentInput.length,
+        },
+      });
+
+      const turnStartedAt = Date.now();
+      // Agent turns are inherently sequential because each model response
+      // depends on the previous turn's tool outputs.
+      // eslint-disable-next-line no-await-in-loop
+      const response = await input.model.generate({
+        input: currentInput,
+        tools: getToolContracts(sessionTools),
+        previousResponseToken,
         turnIndex: turn,
-        inputItemCount: currentInput.length,
-      },
-    });
+      });
 
-    const turnStartedAt = Date.now();
-    // Agent turns are inherently sequential because each model response
-    // depends on the previous turn's tool outputs.
-    // eslint-disable-next-line no-await-in-loop
-    const response = await input.model.generate({
-      input: currentInput,
-      tools: getToolContracts(input.tools),
-      previousResponseToken,
-      turnIndex: turn,
-    });
+      totalUsage = accumulateModelUsage(totalUsage, response.usage);
+      previousResponseToken = response.responseToken;
 
-    totalUsage = accumulateModelUsage(totalUsage, response.usage);
-    previousResponseToken = response.responseToken;
+      const toolCalls = getToolCalls(response);
+      const warnings = toolCalls.length === 0 ? ['no_tool_calls'] : [];
+      // Agent turns are sequential; event emission belongs to the same turn.
+      // eslint-disable-next-line no-await-in-loop
+      await emitEchoEvent(input.events, {
+        type: 'model.turn.completed',
+        severity: warnings.length > 0 ? 'warn' : 'debug',
+        summary: `model turn ${turn} completed`,
+        payload: {
+          turnIndex: turn,
+          durationMs: Date.now() - turnStartedAt,
+          outputItemCount: response.output.length,
+          toolCallCount: toolCalls.length,
+          warnings,
+          usage: response.usage,
+        },
+      });
 
-    const toolCalls = getToolCalls(response);
-    const warnings = toolCalls.length === 0 ? ['no_tool_calls'] : [];
-    // Agent turns are sequential; event emission belongs to the same turn.
-    // eslint-disable-next-line no-await-in-loop
-    await emitEchoEvent(input.events, {
-      type: 'model.turn.completed',
-      severity: warnings.length > 0 ? 'warn' : 'debug',
-      summary: `model turn ${turn} completed`,
-      payload: {
-        turnIndex: turn,
-        durationMs: Date.now() - turnStartedAt,
-        outputItemCount: response.output.length,
-        toolCallCount: toolCalls.length,
-        warnings,
-        usage: response.usage,
-      },
-    });
+      // The loop stays alive until finish_thinking appears explicitly,
+      // even when the model returned no tool calls in this turn.
 
-    // The loop stays alive until finish_thinking appears explicitly,
-    // even when the model returned no tool calls in this turn.
-
-    const finishThinking = parseFinishThinkingInput(toolCalls);
-
-    // Tool results, or an empty carry-over when no tools were used,
-    // become the next model input for the following turn.
-    // eslint-disable-next-line no-await-in-loop
-    currentInput = await createNextInput(
-      toolCalls,
-      input.tools,
-      input.events,
-      turn
-    );
-    if (finishThinking !== null) {
-      return {
-        context: finishThinking.session_record,
-        nextWakeAt: finishThinking.next_wake_at ?? null,
-        usage: totalUsage,
-        responseToken: previousResponseToken,
-        terminationReason: 'finish_thinking',
-      };
+      // Tool results, or an empty carry-over when no tools were used, become
+      // the resolved boundary before higher-level orchestration may add input.
+      // eslint-disable-next-line no-await-in-loop
+      const resolvedInput = await createNextInput(
+        toolCalls,
+        sessionTools,
+        input.events,
+        turn
+      );
+      const finishThinking = parseFinishThinkingInput(toolCalls, resolvedInput);
+      const terminationReason = getSessionTerminationReason(
+        finishThinking,
+        turn,
+        maxTurns
+      );
+      // The boundary handler is sequential because its output may become the
+      // next main-model input and terminal work must finish before returning.
+      // eslint-disable-next-line no-await-in-loop
+      const additionalInput = await createBoundaryAdditionalInput(
+        input.onTurnBoundary,
+        {
+          turnIndex: turn,
+          responseOutput: response.output,
+          toolCalls,
+          resolvedInput,
+          terminationReason,
+        }
+      );
+      currentInput = [...resolvedInput, ...additionalInput];
+      if (finishThinking !== null) {
+        return {
+          nextWakeAt: finishThinking.next_wake_at ?? null,
+          usage: totalUsage,
+          responseToken: previousResponseToken,
+          terminationReason: 'finish_thinking',
+        };
+      }
     }
-  }
 
-  return {
-    nextWakeAt: null,
-    usage: totalUsage,
-    responseToken: previousResponseToken,
-    terminationReason: 'max_turns',
-  };
+    return {
+      nextWakeAt: null,
+      usage: totalUsage,
+      responseToken: previousResponseToken,
+      terminationReason: 'max_turns',
+    };
+  } catch (error) {
+    if (error instanceof AgentSessionExecutionError) {
+      throw error;
+    }
+    throw new AgentSessionExecutionError(
+      error,
+      totalUsage,
+      previousResponseToken
+    );
+  }
 }

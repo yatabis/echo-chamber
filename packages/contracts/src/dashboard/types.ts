@@ -6,7 +6,8 @@ import type {
   dashboardActionAnalysisPeriodSchema,
   dashboardActionAnalysisResponseSchema,
   dashboardActionAnalysisToolSummarySchema,
-  dashboardContextSnapshotSchema,
+  dashboardCognitiveMemorySchema,
+  dashboardCognitiveModuleStatusSchema,
   dashboardInstanceSummarySchema,
   dashboardEchoEventSchema,
   dashboardEchoEventSeveritySchema,
@@ -46,8 +47,11 @@ export type DashboardRuntimeConfig = z.infer<
 >;
 export type Note = z.infer<typeof noteSchema>;
 export type EchoMemory = z.infer<typeof echoMemorySchema>;
-export type DashboardContextSnapshot = z.infer<
-  typeof dashboardContextSnapshotSchema
+export type DashboardCognitiveMemory = z.infer<
+  typeof dashboardCognitiveMemorySchema
+>;
+export type DashboardCognitiveModuleStatus = z.infer<
+  typeof dashboardCognitiveModuleStatusSchema
 >;
 export type EchoStatus = z.infer<typeof echoStatusSchema>;
 export type DashboardEchoEventSeverity = z.infer<

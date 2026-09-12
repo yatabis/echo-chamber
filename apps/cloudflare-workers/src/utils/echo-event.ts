@@ -15,9 +15,9 @@ export interface DiscordEchoEventConfig {
   channelId: string;
 }
 
-export interface DiscordEchoEventPortOptions
-  extends ConsoleEchoEventPortOptions {
+export interface DiscordEchoEventPortOptions extends ConsoleEchoEventPortOptions {
   getDiscordConfig(): DiscordEchoEventConfig | null;
+  beforeRequest?(): void | Promise<void>;
 }
 
 export interface EchoEventArchive {
@@ -29,14 +29,12 @@ export interface EchoEventArchive {
   ): Promise<void>;
 }
 
-export interface ArchiveEchoEventPortOptions
-  extends ConsoleEchoEventPortOptions {
+export interface ArchiveEchoEventPortOptions extends ConsoleEchoEventPortOptions {
   eventArchive: EchoEventArchive;
 }
 
 export interface CloudflareEchoEventPortOptions
-  extends DiscordEchoEventPortOptions,
-    ArchiveEchoEventPortOptions {}
+  extends DiscordEchoEventPortOptions, ArchiveEchoEventPortOptions {}
 
 const DISCORD_MESSAGE_MAX_LENGTH = 2000;
 
@@ -120,7 +118,7 @@ export class DiscordEchoEventPort implements EchoEventPort {
       return;
     }
 
-    await sendChannelMessage(config.token, config.channelId, {
+    const body = {
       content: truncateDiscordMessage(
         formatDiscordEventMessage(event, {
           source: this.options.source,
@@ -128,7 +126,20 @@ export class DiscordEchoEventPort implements EchoEventPort {
           sessionId: this.options.getSessionId(),
         })
       ),
-    });
+    };
+    if (this.options.beforeRequest === undefined) {
+      await sendChannelMessage(config.token, config.channelId, body);
+      return;
+    }
+
+    await sendChannelMessage(
+      config.token,
+      config.channelId,
+      body,
+      async (): Promise<void> => {
+        await this.options.beforeRequest?.();
+      }
+    );
   }
 }
 

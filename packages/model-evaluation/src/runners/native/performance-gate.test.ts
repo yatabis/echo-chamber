@@ -105,8 +105,7 @@ interface RapidMlxStreamingParams extends ChatCompletionCreateParamsStreaming {
   repetition_penalty: number;
 }
 
-interface RapidMlxBufferedParams
-  extends ChatCompletionCreateParamsNonStreaming {
+interface RapidMlxBufferedParams extends ChatCompletionCreateParamsNonStreaming {
   chat_template_kwargs: { enable_thinking: false };
   top_k: number;
   min_p: number;

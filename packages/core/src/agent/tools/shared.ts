@@ -22,6 +22,8 @@ export function defineToolSpecification<
 export const toolErrorResultSchema = z.object({
   success: z.literal(false),
   error: z.string(),
+  code: z.string().optional(),
+  retryable: z.boolean().optional(),
 });
 
 function createToolSuccessResultSchema<Shape extends z.ZodRawShape>(

@@ -354,5 +354,5 @@ function parseToolInput(input: string): { key?: unknown } {
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
     throw new Error(`real-model tool input is not an object: ${input}`);
   }
-  return parsed as { key?: unknown };
+  return parsed;
 }

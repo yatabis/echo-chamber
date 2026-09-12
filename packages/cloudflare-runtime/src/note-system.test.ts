@@ -6,22 +6,47 @@ import {
   MAX_NOTE_TITLE_LENGTH,
 } from '@echo-chamber/core/echo/note-constraints';
 
-import { MAX_NOTE_COUNT, NoteSystem } from './note-system';
+import { MAX_NOTE_COUNT, NoteSystem, type NoteStorage } from './note-system';
 
 type StorageMap = Map<string, unknown>;
 
-interface MockStorage extends Partial<DurableObjectStorage> {
+interface MockStorage extends NoteStorage {
   _data: StorageMap;
-  get: ReturnType<typeof vi.fn>;
-  put: ReturnType<typeof vi.fn>;
-  delete: ReturnType<typeof vi.fn>;
-  list: ReturnType<typeof vi.fn>;
+  listMock: ReturnType<typeof vi.fn>;
 }
 
 function createMockStorage(): MockStorage {
   const data: StorageMap = new Map<string, unknown>();
+  const listMock = vi.fn(
+    async ({
+      prefix,
+      reverse,
+      limit,
+    }: {
+      prefix?: string;
+      reverse?: boolean;
+      limit?: number;
+    } = {}) => {
+      const result = new Map<string, unknown>();
+      const entries = [...data.entries()]
+        .filter(([key]) => prefix === undefined || key.startsWith(prefix))
+        .sort(([left], [right]) =>
+          reverse === true
+            ? right.localeCompare(left)
+            : left.localeCompare(right)
+        )
+        .slice(0, limit);
+
+      for (const [key, value] of entries) {
+        result.set(key, value);
+      }
+      return Promise.resolve(result);
+    }
+  );
+
   return {
     _data: data,
+    listMock,
     get: vi.fn(async (key: string) => Promise.resolve(data.get(key))),
     put: vi.fn(async (key: string, value: unknown) => {
       data.set(key, value);
@@ -31,32 +56,7 @@ function createMockStorage(): MockStorage {
       const deleted = data.delete(key);
       return Promise.resolve(deleted);
     }),
-    list: vi.fn(
-      async ({
-        prefix,
-        reverse,
-        limit,
-      }: {
-        prefix?: string;
-        reverse?: boolean;
-        limit?: number;
-      } = {}) => {
-        const result = new Map<string, unknown>();
-        const entries = [...data.entries()]
-          .filter(([key]) => prefix === undefined || key.startsWith(prefix))
-          .sort(([left], [right]) =>
-            reverse === true
-              ? right.localeCompare(left)
-              : left.localeCompare(right)
-          )
-          .slice(0, limit);
-
-        for (const [key, value] of entries) {
-          result.set(key, value);
-        }
-        return Promise.resolve(result);
-      }
-    ),
+    list: listMock,
   };
 }
 
@@ -82,7 +82,7 @@ describe('NoteSystem', () => {
     vi.resetAllMocks();
     storage = createMockStorage();
     noteSystem = new NoteSystem({
-      storage: storage as DurableObjectStorage,
+      storage,
     });
   });
 
@@ -135,7 +135,7 @@ describe('NoteSystem', () => {
           title: '   ',
           content: 'Discuss timeline',
         })
-      ).rejects.toThrowError('Title is required');
+      ).rejects.toThrow('Title is required');
     });
 
     it('長すぎるtitleはバリデーションエラー', async () => {
@@ -144,7 +144,7 @@ describe('NoteSystem', () => {
           title: 'a'.repeat(MAX_NOTE_TITLE_LENGTH + 1),
           content: 'Discuss timeline',
         })
-      ).rejects.toThrowError(
+      ).rejects.toThrow(
         `Title must be at most ${MAX_NOTE_TITLE_LENGTH} characters`
       );
     });
@@ -155,7 +155,7 @@ describe('NoteSystem', () => {
           title: 'Meeting',
           content: 'a'.repeat(MAX_NOTE_CONTENT_LENGTH + 1),
         })
-      ).rejects.toThrowError(
+      ).rejects.toThrow(
         `Content must be at most ${MAX_NOTE_CONTENT_LENGTH} characters`
       );
     });
@@ -200,7 +200,7 @@ describe('NoteSystem', () => {
 
       expect(summary.count).toBe(2);
       expect(typeof summary.latestUpdatedAt).toBe('string');
-      expect(storage.list).toHaveBeenLastCalledWith({
+      expect(storage.listMock).toHaveBeenLastCalledWith({
         limit: MAX_NOTE_COUNT,
         prefix: 'note:item:',
         reverse: true,
@@ -225,7 +225,7 @@ describe('NoteSystem', () => {
     });
 
     it('空白IDはバリデーションエラー', async () => {
-      await expect(noteSystem.getNote('   ')).rejects.toThrowError(
+      await expect(noteSystem.getNote('   ')).rejects.toThrow(
         'Note ID is required'
       );
     });
@@ -269,7 +269,7 @@ describe('NoteSystem', () => {
     });
 
     it('空白queryはバリデーションエラー', async () => {
-      await expect(noteSystem.searchNotes('   ')).rejects.toThrowError(
+      await expect(noteSystem.searchNotes('   ')).rejects.toThrow(
         'Query is required'
       );
     });
@@ -277,7 +277,7 @@ describe('NoteSystem', () => {
     it('長すぎるqueryはバリデーションエラー', async () => {
       await expect(
         noteSystem.searchNotes('a'.repeat(MAX_NOTE_QUERY_LENGTH + 1))
-      ).rejects.toThrowError(
+      ).rejects.toThrow(
         `Query must be at most ${MAX_NOTE_QUERY_LENGTH} characters`
       );
     });
@@ -334,11 +334,11 @@ describe('NoteSystem', () => {
         noteSystem.updateNote('   ', {
           title: 'updated',
         })
-      ).rejects.toThrowError('Note ID is required');
+      ).rejects.toThrow('Note ID is required');
     });
 
     it('title/contentが両方ない更新はバリデーションエラー', async () => {
-      await expect(noteSystem.updateNote('note-1', {})).rejects.toThrowError(
+      await expect(noteSystem.updateNote('note-1', {})).rejects.toThrow(
         'Either title or content is required'
       );
     });
@@ -393,7 +393,7 @@ describe('NoteSystem', () => {
     });
 
     it('空白IDはバリデーションエラー', async () => {
-      await expect(noteSystem.deleteNote('   ')).rejects.toThrowError(
+      await expect(noteSystem.deleteNote('   ')).rejects.toThrow(
         'Note ID is required'
       );
     });
@@ -415,7 +415,7 @@ describe('NoteSystem', () => {
           title: 'Overflow note',
           content: 'This should fail',
         })
-      ).rejects.toThrowError('Note capacity reached (max 200)');
+      ).rejects.toThrow('Note capacity reached (max 200)');
     });
 
     it('201件目失敗後も件数は200件のまま', async () => {
@@ -424,9 +424,7 @@ describe('NoteSystem', () => {
         title: 'Overflow note',
         content: 'This should fail',
       });
-      await expect(overflow).rejects.toThrowError(
-        'Note capacity reached (max 200)'
-      );
+      await expect(overflow).rejects.toThrow('Note capacity reached (max 200)');
 
       const notes = await noteSystem.listNotes();
       expect(notes).toHaveLength(MAX_NOTE_COUNT);

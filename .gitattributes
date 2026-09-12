@@ -1,0 +1,2 @@
+# Preserve Wrangler's generated types byte-for-byte for `wrangler types --check`.
+apps/cloudflare-workers/worker-configuration.d.ts -whitespace

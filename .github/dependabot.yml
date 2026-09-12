@@ -1,0 +1,50 @@
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+
+    # Keep routine upgrades reviewable while major migrations remain deliberate work.
+    open-pull-requests-limit: 2
+
+    allow:
+      - dependency-name: '*'
+        update-types:
+          - version-update:semver-minor
+          - version-update:semver-patch
+
+    groups:
+      production-version-updates:
+        applies-to: version-updates
+        dependency-type: production
+        patterns:
+          - '*'
+      development-version-updates:
+        applies-to: version-updates
+        dependency-type: development
+        patterns:
+          - '*'
+      production-security-updates:
+        applies-to: security-updates
+        dependency-type: production
+        patterns:
+          - '*'
+      development-security-updates:
+        applies-to: security-updates
+        dependency-type: development
+        patterns:
+          - '*'
+
+  # SHA-pinned actions need an explicit update path to receive upstream fixes.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 1
+
+    groups:
+      github-actions-updates:
+        patterns:
+          - '*'

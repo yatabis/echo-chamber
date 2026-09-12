@@ -26,13 +26,16 @@ class MockREST {
   readonly setToken = vi.fn<(token: string) => MockREST>().mockReturnThis();
 }
 
-vi.mock('@discordjs/rest', () => ({
-  REST: vi.fn().mockImplementation(() => {
+vi.mock('@discordjs/rest', () => {
+  // Vitest 4 requires mocks invoked with `new` to use a constructable implementation.
+  function MockRESTConstructor(): MockREST {
     const rest = new MockREST();
     restInstances.push(rest);
     return rest;
-  }),
-}));
+  }
+
+  return { REST: vi.fn(MockRESTConstructor) };
+});
 
 function getRestInstance(): MockREST {
   const rest = restInstances[0];
@@ -45,6 +48,7 @@ function getRestInstance(): MockREST {
 
 describe('discord api helpers', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     restInstances.length = 0;
     nextGetResult = undefined;
     nextPostResult = undefined;
@@ -130,5 +134,25 @@ describe('discord api helpers', () => {
     });
     expect(rest.setToken).toHaveBeenCalledWith('token');
     expect(rest.get).toHaveBeenCalledWith('/users/@me');
+  });
+
+  it('makeRequest hook は SDK の各 HTTP attempt 直前に実行する', async () => {
+    const beforeRequest = vi.fn();
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('{}'));
+
+    await getCurrentUser('token', beforeRequest);
+
+    const constructorCalls = vi.mocked(REST).mock.calls;
+    const options = constructorCalls[constructorCalls.length - 1]?.[0];
+    if (options?.makeRequest === undefined) {
+      throw new Error('Expected guarded Discord makeRequest');
+    }
+    await options.makeRequest('https://discord.com/api/v10/users/@me', {});
+
+    expect(beforeRequest).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    fetchMock.mockRestore();
   });
 });

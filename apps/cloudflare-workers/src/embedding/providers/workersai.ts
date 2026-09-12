@@ -38,7 +38,7 @@ export class WorkersAIEmbeddingService implements EmbeddingService {
 
   async embed(text: string): Promise<number[]> {
     const startedAt = Date.now();
-    const response = await this.ai.run(this.model as Parameters<Ai['run']>[0], {
+    const response = await this.ai.run(this.model, {
       text,
     });
 

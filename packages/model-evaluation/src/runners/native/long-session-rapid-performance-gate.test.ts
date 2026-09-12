@@ -114,8 +114,7 @@ interface RapidCacheControl {
   session_slot: SessionCacheSlot;
 }
 
-interface RapidLongSessionNonStreamingParams
-  extends ChatCompletionCreateParamsNonStreaming {
+interface RapidLongSessionNonStreamingParams extends ChatCompletionCreateParamsNonStreaming {
   cache: RapidCacheControl;
   chat_template_kwargs: { enable_thinking: false };
   top_k: number;
@@ -123,8 +122,7 @@ interface RapidLongSessionNonStreamingParams
   repetition_penalty: number;
 }
 
-interface RapidLongSessionStreamingParams
-  extends ChatCompletionCreateParamsStreaming {
+interface RapidLongSessionStreamingParams extends ChatCompletionCreateParamsStreaming {
   cache: RapidCacheControl;
   chat_template_kwargs: { enable_thinking: false };
   top_k: number;
@@ -414,10 +412,7 @@ async function runNativeRound(
     previous = attempt.event;
   }
 
-  if (
-    finalTiming === undefined ||
-    finalTiming.event.text.trim() !== LONG_SESSION_FINAL_TEXT
-  ) {
+  if (finalTiming?.event.text.trim() !== LONG_SESSION_FINAL_TEXT) {
     throw new Error('native final long-session output did not match fixture');
   }
   const finalStep = cacheSteps[cacheSteps.length - 1];
@@ -532,7 +527,7 @@ function requireRapidStepToolCall(
     (candidate): candidate is ChatCompletionMessageFunctionToolCall =>
       candidate.type === 'function'
   );
-  if (call === undefined || call.function.name !== LONG_SESSION_TOOL.name) {
+  if (call?.function.name !== LONG_SESSION_TOOL.name) {
     throw new Error(`Rapid-MLX step ${step} omitted ${LONG_SESSION_TOOL.name}`);
   }
   const input: unknown = JSON.parse(call.function.arguments);

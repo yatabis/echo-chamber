@@ -122,6 +122,7 @@ describe('DiscordEchoEventPort', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-03-21T00:00:00.000Z'));
+    vi.clearAllMocks();
     mockSendChannelMessage.mockResolvedValue({});
   });
 
@@ -131,10 +132,12 @@ describe('DiscordEchoEventPort', () => {
   });
 
   it('session category の event は info でも Discord に送る', async () => {
+    const beforeRequest = vi.fn();
     const events = new DiscordEchoEventPort({
       source: 'test-source',
       getInstanceId: (): string => 'rin',
       getSessionId: (): string => 'session-1',
+      beforeRequest,
       getDiscordConfig: (): DiscordEchoEventConfig => ({
         token: 'discord-token',
         channelId: 'thinking-channel',
@@ -155,8 +158,16 @@ describe('DiscordEchoEventPort', () => {
       {
         content:
           '**[INFO] session.started**\nthinking session started\nsource: test-source\ninstance: rin\nsession: session-1',
-      }
+      },
+      expect.any(Function)
     );
+    const forwardedBeforeRequest: unknown =
+      mockSendChannelMessage.mock.calls[0]?.[3];
+    if (typeof forwardedBeforeRequest !== 'function') {
+      throw new Error('Expected Discord request admission hook');
+    }
+    await (forwardedBeforeRequest as () => void | Promise<void>)();
+    expect(beforeRequest).toHaveBeenCalledTimes(1);
   });
 
   it('system stream を持つ warn event は Discord に送る', async () => {
@@ -263,7 +274,10 @@ describe('CompositeEchoEventPort', () => {
   it('途中の port が失敗しても残りの port へ event を流す', async () => {
     const firstError = new Error('first failed');
     const first = {
-      emit: vi.fn(async () => Promise.reject(firstError)),
+      emit: vi.fn(async (): Promise<void> => {
+        await Promise.resolve();
+        throw firstError;
+      }),
     };
     const second = {
       emit: vi.fn(async () => Promise.resolve()),
@@ -288,6 +302,7 @@ describe('createCloudflareEchoEventPort', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-03-21T00:00:00.000Z'));
+    vi.clearAllMocks();
     mockSendChannelMessage.mockResolvedValue({});
   });
 

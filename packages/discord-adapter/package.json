@@ -15,8 +15,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@discordjs/rest": "2.5.1",
+    "@discordjs/rest": "2.6.3",
     "@echo-chamber/core": "workspace:*",
-    "discord-api-types": "0.38.16"
+    "discord-api-types": "0.38.55"
   }
 }

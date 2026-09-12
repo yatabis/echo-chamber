@@ -3,6 +3,8 @@ import type { NotificationPort } from '@echo-chamber/core/ports/notification';
 
 import { getNotificationDetails } from './notification-utils';
 
+import type { DiscordBeforeRequest } from './api';
+
 interface DiscordNotificationChannel extends ChatChannel {
   discordChannelId: string;
 }
@@ -10,6 +12,7 @@ interface DiscordNotificationChannel extends ChatChannel {
 export interface DiscordNotificationPortOptions {
   token: string;
   channels: readonly DiscordNotificationChannel[];
+  beforeRequest?: DiscordBeforeRequest;
 }
 
 /**
@@ -32,10 +35,16 @@ export function createDiscordNotificationPort(
             displayName: channel.displayName,
             description: channel.description,
           },
-          ...(await getNotificationDetails(
-            options.token,
-            channel.discordChannelId
-          )),
+          ...(options.beforeRequest === undefined
+            ? await getNotificationDetails(
+                options.token,
+                channel.discordChannelId
+              )
+            : await getNotificationDetails(
+                options.token,
+                channel.discordChannelId,
+                options.beforeRequest
+              )),
         }))
       );
     },

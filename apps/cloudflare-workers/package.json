@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "deploy": "wrangler deploy --config wrangler.jsonc",
-    "dev": "wrangler types --strict-vars=false --config wrangler.jsonc && wrangler dev --config wrangler.jsonc",
-    "start": "wrangler dev --config wrangler.jsonc",
+    "dev": "wrangler types --strict-vars=false --config wrangler.jsonc && wrangler dev --config wrangler.jsonc --name echo-chamber-local-dev",
+    "start": "wrangler dev --config wrangler.jsonc --name echo-chamber-local-dev",
     "cf-typegen": "wrangler types --strict-vars=false --config wrangler.jsonc",
     "test:run": "vitest run --config vitest.config.ts",
     "test:coverage": "vitest run --coverage --config vitest.config.ts",
@@ -18,9 +18,9 @@
     "@echo-chamber/core": "workspace:*",
     "@echo-chamber/discord-adapter": "workspace:*",
     "@echo-chamber/openai-adapter": "workspace:*",
-    "hono": "4.7.11",
-    "jose": "6.2.3",
-    "openai": "6.46.0",
-    "zod": "4.0.5"
+    "hono": "4.13.7",
+    "jose": "6.2.12",
+    "openai": "6.49.0",
+    "zod": "4.5.4"
   }
 }

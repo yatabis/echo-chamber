@@ -10,6 +10,7 @@ import {
   addReactionToMessage,
   getChannelMessages,
   sendChannelMessage,
+  type DiscordBeforeRequest,
 } from './api';
 
 import type { APIAttachment } from 'discord-api-types/v10';
@@ -21,6 +22,7 @@ export interface DiscordChatChannel extends ChatChannel {
 export interface DiscordChatPortOptions {
   token: string;
   channels: readonly DiscordChatChannel[];
+  beforeRequest?: DiscordBeforeRequest;
 }
 
 function getChannelOrThrow(
@@ -86,13 +88,20 @@ export function createDiscordChatPort(
       limit: number
     ): Promise<ChatMessage[]> {
       const channel = getChannelOrThrow(options.channels, channelKey);
-      const messages = await getChannelMessages(
-        options.token,
-        channel.discordChannelId,
-        {
-          limit,
-        }
-      );
+      const requestOptions = { limit };
+      const messages =
+        options.beforeRequest === undefined
+          ? await getChannelMessages(
+              options.token,
+              channel.discordChannelId,
+              requestOptions
+            )
+          : await getChannelMessages(
+              options.token,
+              channel.discordChannelId,
+              requestOptions,
+              options.beforeRequest
+            );
 
       return messages.reverse().map((message) => ({
         messageId: message.id,
@@ -112,9 +121,17 @@ export function createDiscordChatPort(
 
     async sendMessage(channelKey: string, message: string): Promise<void> {
       const channel = getChannelOrThrow(options.channels, channelKey);
-      await sendChannelMessage(options.token, channel.discordChannelId, {
-        content: message,
-      });
+      const body = { content: message };
+      if (options.beforeRequest === undefined) {
+        await sendChannelMessage(options.token, channel.discordChannelId, body);
+      } else {
+        await sendChannelMessage(
+          options.token,
+          channel.discordChannelId,
+          body,
+          options.beforeRequest
+        );
+      }
     },
 
     async addReaction(
@@ -123,12 +140,24 @@ export function createDiscordChatPort(
       reaction: string
     ): Promise<void> {
       const channel = getChannelOrThrow(options.channels, channelKey);
-      await addReactionToMessage(
-        options.token,
-        channel.discordChannelId,
-        messageId,
-        reaction
-      );
+      if (options.beforeRequest === undefined) {
+        await addReactionToMessage(
+          options.token,
+          channel.discordChannelId,
+          messageId,
+          reaction
+        );
+      } else {
+        await addReactionToMessage(
+          options.token,
+          channel.discordChannelId,
+          messageId,
+          {
+            reaction,
+            beforeRequest: options.beforeRequest,
+          }
+        );
+      }
     },
   };
 }

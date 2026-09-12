@@ -16,6 +16,21 @@ The numerical path and retained performance work are described in
 `evidence/`; those dated reports remain historical evidence and may describe
 the older state protocol used when they were recorded.
 
+## Application integration boundary
+
+The current Core thinking engine requires the
+[Cognitive Module workflow](../../docs/cognitive-module-architecture.md).
+Connecting that workflow to Native remains a separate integration step:
+its system-owned Memory/Emotion exchanges need an admitted continuation
+encoding, and its structured-output format, per-request output limit, and
+abort signal need Native adapter support. Auxiliary activation boundaries
+and local domain persistence also remain to be connected.
+
+The current Native module probes exercise synthetic module tool loops.
+Passing the Node suites and Native state-store tests establishes those
+covered contracts; the current Core Cognitive workflow still needs its own
+integration tests and real-model validation.
+
 ## Current state contract
 
 One independently named state lane owns exactly one current composite
@@ -39,7 +54,8 @@ The local E.C.H.O. composition opens three stable lanes per existence:
 
 Memory and emotion may generate in parallel from their own KV/GDN states.
 They never commit into `main`, never snapshot, and do not consume each other's
-same-turn result. The main thought path integrates both outputs.
+same-turn result. The module-workload probe exercises a main thought path
+that consumes both outputs.
 
 The three request transitions are:
 

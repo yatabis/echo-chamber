@@ -51,6 +51,8 @@ Cloudflare Worker / Durable Object の実装本体です。
 
 - ローカル環境変数は `apps/cloudflare-workers/.dev.vars` を利用します。
 - ルートの `pnpm dev` / `pnpm start` / `pnpm deploy` はこの workspace のコマンドを呼び出します。
+- Workers AI binding はローカル模擬されず、ローカル開発でも remote binding として利用量が発生し得ます。
+- `pnpm dev` / `pnpm start` はローカル開発セッションだけ Worker 名 `echo-chamber-local-dev` を使用し、Wrangler の preview token で保護します。`pnpm deploy` は引き続き `wrangler.jsonc` の Worker 名 `echo-chamber` を使用します。
 - ルートの `pnpm test:run` / `pnpm test:coverage` もこの workspace のテストを実行します。
 - `wrangler.jsonc` 変更時は `pnpm cf-typegen` を実行してください。
 - `ENVIRONMENT=local` 以外では Cloudflare Access JWT を必須とし、production / preview の hostname ごとに別の AUD を検証します。Access 関連 binding の欠落や未知の hostname は `403 Forbidden` になります。

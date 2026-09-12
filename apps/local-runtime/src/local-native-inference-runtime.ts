@@ -161,7 +161,8 @@ export class LocalNativeInferenceRuntime {
       } catch (shutdownError) {
         throw new AggregateError(
           [startupError, toError(shutdownError)],
-          'local Native inference startup and cleanup both failed'
+          'local Native inference startup and cleanup both failed',
+          { cause: shutdownError }
         );
       }
       throw startupError;
@@ -358,8 +359,7 @@ const DEFAULT_DEPENDENCIES: LocalNativeInferenceRuntimeDependencies = {
 };
 
 type OperationOutcome<T> =
-  | { ok: true; value: T }
-  | { ok: false; error: unknown };
+  { ok: true; value: T } | { ok: false; error: unknown };
 
 interface Deferred<T> {
   promise: Promise<T>;

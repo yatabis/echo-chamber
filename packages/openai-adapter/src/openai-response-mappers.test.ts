@@ -226,7 +226,7 @@ describe('extractOutputMessageText', () => {
       ] as unknown as ResponseOutputMessage['content'],
     };
 
-    expect(() => extractOutputMessageText(message)).toThrowError(
+    expect(() => extractOutputMessageText(message)).toThrow(
       'Unexpected contentType: unknown'
     );
   });

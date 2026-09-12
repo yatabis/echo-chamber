@@ -14,6 +14,7 @@ import {
   toModelUsage,
   toResponseInputItem,
 } from './openai-response-mappers';
+import { projectResponsesWebToolExchange } from './web-tool-audit';
 
 import type {
   EasyInputMessage,
@@ -32,6 +33,25 @@ export interface OpenAIResponsesModelOptions {
   model?: string;
   events?: EchoEventPort;
   reasoningEffort?: ReasoningEffort;
+  /** SDK内部retry回数。applicationがretryを所有するcallerは0を指定する。 */
+  maxRetries?: number;
+  /** SDK retryを含む各HTTP attempt直前のadmission hook。 */
+  beforeRequest?(): void | Promise<void>;
+}
+
+/** OpenAI SDKの各HTTP attemptを呼び出し側のadmission gateへ接続する。 */
+function createRequestFetch(
+  beforeRequest: OpenAIResponsesModelOptions['beforeRequest']
+): typeof fetch | undefined {
+  if (beforeRequest === undefined) {
+    return undefined;
+  }
+  const runtimeFetch: typeof fetch = async (input, init) =>
+    await globalThis.fetch(input, init);
+  return async (input, init) => {
+    await beforeRequest();
+    return await runtimeFetch(input, init);
+  };
 }
 
 /**
@@ -43,6 +63,7 @@ export class OpenAIResponsesModel implements ModelPort {
   private readonly model: string;
   private readonly events: EchoEventPort | undefined;
   private readonly reasoningEffort: ReasoningEffort;
+  private webToolCallIds = new Set<string>();
 
   /**
    * OpenAI Responses API を使う `ModelPort` adapter を構築する。
@@ -50,8 +71,19 @@ export class OpenAIResponsesModel implements ModelPort {
    * @param options API キー、モデル名、任意の event 送信先
    */
   constructor(options: OpenAIResponsesModelOptions) {
+    const requestFetch = createRequestFetch(
+      options.beforeRequest === undefined
+        ? undefined
+        : async (): Promise<void> => {
+            await options.beforeRequest?.();
+          }
+    );
     this.client = new OpenAI({
       apiKey: options.apiKey,
+      ...(options.maxRetries === undefined
+        ? {}
+        : { maxRetries: options.maxRetries }),
+      ...(requestFetch === undefined ? {} : { fetch: requestFetch }),
     });
     this.model = options.model ?? 'gpt-5.6';
     this.events = options.events;
@@ -65,9 +97,13 @@ export class OpenAIResponsesModel implements ModelPort {
    * @returns OpenAI Responses API が返した生の `Response`
    */
   async createResponse(request: ModelRequest): Promise<Response> {
-    const response = await this.client.responses.create(
-      this.createResponseParams(request)
-    );
+    const responseParams = this.createResponseParams(request);
+    const response =
+      request.signal === undefined
+        ? await this.client.responses.create(responseParams)
+        : await this.client.responses.create(responseParams, {
+            signal: request.signal,
+          });
 
     if (!response.usage) {
       await this.emitProviderWarning(request, {
@@ -90,6 +126,7 @@ export class OpenAIResponsesModel implements ModelPort {
   ): ResponseCreateParamsNonStreaming {
     return {
       input: request.input.map(toResponseInputItem),
+      max_output_tokens: request.maxOutputTokens,
       model: this.model,
       parallel_tool_calls: true,
       previous_response_id: request.previousResponseToken,
@@ -99,9 +136,7 @@ export class OpenAIResponsesModel implements ModelPort {
       store: true,
       stream: false,
       text: {
-        format: {
-          type: 'text',
-        },
+        format: request.responseFormat ?? { type: 'text' },
         verbosity: 'medium',
       },
       tool_choice: 'auto',
@@ -119,7 +154,12 @@ export class OpenAIResponsesModel implements ModelPort {
   async generate(request: ModelRequest): Promise<ModelResponse> {
     const responseParams = this.createResponseParams(request);
 
-    const response = await this.client.responses.create(responseParams);
+    const response =
+      request.signal === undefined
+        ? await this.client.responses.create(responseParams)
+        : await this.client.responses.create(responseParams, {
+            signal: request.signal,
+          });
 
     if (!response.usage) {
       await this.emitProviderWarning(request, {
@@ -139,7 +179,8 @@ export class OpenAIResponsesModel implements ModelPort {
   }
 
   /**
-   * raw API payload を debug event として記録する。
+   * API payloadの監査用コピーをdebug eventとして記録する。
+   * read_web_pageだけはURLと取得本文をmetadataへ置換する。
    *
    * @param request provider-neutral request
    * @param responseParams Responses API request body
@@ -150,6 +191,13 @@ export class OpenAIResponsesModel implements ModelPort {
     responseParams: ResponseCreateParamsNonStreaming,
     response: Response
   ): Promise<void> {
+    const audit = projectResponsesWebToolExchange(
+      responseParams,
+      response,
+      this.webToolCallIds
+    );
+    this.webToolCallIds = audit.webToolCallIds;
+
     await emitEchoEvent(this.events, {
       type: 'model.exchange.recorded',
       severity: 'debug',
@@ -158,8 +206,8 @@ export class OpenAIResponsesModel implements ModelPort {
         provider: 'openai.responses',
         model: this.model,
         turnIndex: request.turnIndex,
-        request: responseParams,
-        response,
+        request: audit.request,
+        response: audit.response,
       },
     });
   }

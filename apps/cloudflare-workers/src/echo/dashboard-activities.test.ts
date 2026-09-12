@@ -22,6 +22,36 @@ function createEvent(
 }
 
 describe('buildDashboardSessionLogsResponse', () => {
+  it('session 完了時に commit 済み Cognitive phase 数を返す', () => {
+    const response = buildDashboardSessionLogsResponse({
+      archiveDay: '2026-06-01',
+      events: [
+        createEvent({
+          id: 'session-completed',
+          type: 'session.completed',
+          category: 'session',
+          payload: {
+            committedCognitivePhases: 4,
+            nextWakeAt: null,
+            terminationReason: 'finish_thinking',
+            totalTokens: 120,
+          },
+          streams: ['thought', 'system', 'analysis'],
+        }),
+      ],
+    });
+
+    expect(response.sessionLogs[0]?.activities[0]).toMatchObject({
+      id: 'session-completed',
+      details: {
+        committedCognitivePhases: 4,
+        terminationReason: 'finish_thinking',
+        totalTokens: 120,
+      },
+      title: 'Finished thinking',
+    });
+  });
+
   it('tool called / completed を dashboard 上の 1 activity に畳む', () => {
     const response = buildDashboardSessionLogsResponse({
       archiveDay: '2026-06-01',
@@ -192,6 +222,114 @@ describe('buildDashboardSessionLogsResponse', () => {
         kind: 'issue',
         title: 'Memory search failed',
         tone: 'warning',
+      },
+    ]);
+  });
+
+  it('Cognitive commit / failure を operator-facing activity にする', () => {
+    const response = buildDashboardSessionLogsResponse({
+      archiveDay: '2026-06-01',
+      events: [
+        createEvent({
+          id: 'cognitive-commit',
+          type: 'cognitive.phase.committed',
+          category: 'memory',
+          payload: {
+            boundaryId: 'activation-1:2:post_main',
+            committedVersion: 1,
+            memoryUpdates: 1,
+            phase: 'post_main',
+          },
+        }),
+        createEvent({
+          id: 'cognitive-failure',
+          type: 'cognitive.phase.failed',
+          category: 'memory',
+          createdAt: '2026-06-01T12:00:01.000Z',
+          payload: {
+            boundaryId: 'activation-2:1:pre_main',
+            commitError: 'sqlite disk full',
+            memory: {
+              attempts: 2,
+              error: 'temporary failure',
+              reason: 'retry_exhausted',
+              status: 'failed',
+            },
+            phase: 'pre_main',
+          },
+          severity: 'error',
+        }),
+      ],
+    });
+
+    expect(
+      response.sessionLogs[0]?.activities.map((activity) => ({
+        id: activity.id,
+        kind: activity.kind,
+        title: activity.title,
+        tone: activity.tone,
+      }))
+    ).toEqual([
+      {
+        id: 'cognitive-commit',
+        kind: 'knowledge',
+        title: 'Cognitive phase committed',
+        tone: 'positive',
+      },
+      {
+        id: 'cognitive-failure',
+        kind: 'issue',
+        title: 'Cognitive phase failed',
+        tone: 'critical',
+      },
+    ]);
+    expect(response.sessionLogs[0]?.activities[1]?.details).toMatchObject({
+      commitError: 'sqlite disk full',
+    });
+  });
+
+  it('Cognitive model の本文を Main と同じ activity に保ち、module を識別する', () => {
+    const response = buildDashboardSessionLogsResponse({
+      archiveDay: '2026-06-01',
+      events: [
+        createEvent({
+          id: 'memory-output',
+          type: 'model.output.emitted',
+          category: 'model',
+          payload: {
+            cognitiveModule: 'memory',
+            content: '{"query":"前回の設計判断"}',
+            model: 'gpt-5.6-luna',
+            provider: 'openai.responses',
+            turnIndex: 1,
+          },
+          streams: ['thought', 'analysis'],
+        }),
+        createEvent({
+          id: 'main-output',
+          type: 'model.output.emitted',
+          category: 'model',
+          createdAt: '2026-06-01T12:00:01.000Z',
+          payload: {
+            content: '次の行動を検討する。',
+            model: 'gpt-5.6-sol',
+            provider: 'openai.responses',
+            turnIndex: 1,
+          },
+          streams: ['thought', 'analysis'],
+        }),
+      ],
+    });
+
+    expect(response.sessionLogs[0]?.activities).toMatchObject([
+      {
+        body: '{"query":"前回の設計判断"}',
+        details: { cognitiveModule: 'memory' },
+        title: 'Memory Module',
+      },
+      {
+        body: '次の行動を検討する。',
+        title: 'Echo',
       },
     ]);
   });

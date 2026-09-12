@@ -1,7 +1,8 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { defineWorkersConfig } from '@cloudflare/vitest-pool-workers/config';
+import { cloudflareTest } from '@cloudflare/vitest-plugin';
+import { defineConfig } from 'vitest/config';
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 const packagesDir = path.resolve(appDir, '../../packages');
@@ -13,7 +14,17 @@ const contractsSrcDir = path.resolve(packagesDir, 'contracts/src');
 const discordAdapterSrcDir = path.resolve(packagesDir, 'discord-adapter/src');
 const openaiAdapterSrcDir = path.resolve(packagesDir, 'openai-adapter/src');
 
-export default defineWorkersConfig({
+export default defineConfig({
+  plugins: [
+    cloudflareTest({
+      wrangler: {
+        configPath: './wrangler.test.jsonc',
+      },
+      miniflare: {
+        compatibilityFlags: ['nodejs_compat'],
+      },
+    }),
+  ],
   resolve: {
     alias: [
       {
@@ -35,16 +46,6 @@ export default defineWorkersConfig({
     ],
   },
   test: {
-    poolOptions: {
-      workers: {
-        wrangler: {
-          configPath: './wrangler.test.jsonc',
-        },
-        miniflare: {
-          compatibilityFlags: ['nodejs_compat'],
-        },
-      },
-    },
     globals: true,
     watch: true,
     reporters: ['verbose', 'html'],

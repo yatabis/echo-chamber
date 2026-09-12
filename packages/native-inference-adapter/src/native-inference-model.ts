@@ -283,7 +283,8 @@ export class NativeInferenceModel implements ModelPort {
         } catch (completionError) {
           throw new AggregateError(
             [completionError, error.listenerError],
-            'native generation committed after a token listener error, but completion handling also failed'
+            'native generation committed after a token listener error, but completion handling also failed',
+            { cause: completionError }
           );
         }
         throw error.listenerError;
@@ -633,7 +634,8 @@ function fingerprintTools(
     return JSON.stringify(wire);
   } catch (error) {
     throw new Error(
-      `native tool catalog is not JSON-serializable (${source.length} tools): ${String(error)}`
+      `native tool catalog is not JSON-serializable (${source.length} tools): ${String(error)}`,
+      { cause: error }
     );
   }
 }

@@ -77,8 +77,7 @@ export class NativeTokenListenerCompletionError extends Error {
 }
 
 type NativeLifecycleEvent =
-  | NativeStateOpenedEvent
-  | NativeSnapshotPublishedEvent;
+  NativeStateOpenedEvent | NativeSnapshotPublishedEvent;
 
 interface PendingLifecycle {
   expectedEvent: NativeLifecycleEvent['event'];

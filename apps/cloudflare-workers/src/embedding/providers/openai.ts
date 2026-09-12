@@ -19,7 +19,10 @@ export class OpenAIEmbeddingService implements EmbeddingService {
    * @param events embedding 生成イベントの送信先
    */
   constructor(env: Env, events?: EchoEventPort) {
-    this.client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+    this.client = new OpenAI({
+      apiKey: env.OPENAI_API_KEY,
+      maxRetries: 0,
+    });
     this.events = events;
   }
 

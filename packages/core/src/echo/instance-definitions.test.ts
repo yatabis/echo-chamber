@@ -14,6 +14,10 @@ const expectedInstanceRuntimeSettings = {
       model: 'gpt-5.6-sol',
       reasoningEffort: 'none',
     },
+    cognitiveModules: {
+      model: 'gpt-5.6-luna',
+      reasoningEffort: 'low',
+    },
     tokenLimits: {
       dailyHardLimit: 500_000,
       dailySoftLimit: 300_000,
@@ -24,6 +28,10 @@ const expectedInstanceRuntimeSettings = {
     mainLlm: {
       provider: 'openai',
       model: 'gpt-5.6-terra',
+      reasoningEffort: 'low',
+    },
+    cognitiveModules: {
+      model: 'gpt-5.6-luna',
       reasoningEffort: 'low',
     },
     tokenLimits: {
@@ -60,6 +68,7 @@ describe('echo instance definitions', () => {
 
       expect({
         mainLlm: definition.mainLlm,
+        cognitiveModules: definition.cognitiveModules,
         tokenLimits: definition.tokenLimits,
       }).toEqual(expectedInstanceRuntimeSettings[instanceId]);
     }

@@ -2,30 +2,18 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   accumulateModelUsage,
+  AgentSessionExecutionError,
   executeAgentToolCall,
   runAgentSession,
   ZERO_MODEL_USAGE,
 } from './session';
 
-import type { FinishThinkingSessionRecord } from './tools/thinking';
 import type { EchoEventPort } from '../ports/echo-event';
 import type { ModelPort, ModelToolContract, ModelUsage } from '../ports/model';
 
 afterEach(() => {
   vi.useRealTimers();
 });
-
-function createSessionContext(): FinishThinkingSessionRecord {
-  return {
-    content:
-      'Responded to recent messages and left a concise recap for the next cycle.',
-    emotion: {
-      valence: 0.4,
-      arousal: 0.2,
-      labels: ['calm', 'satisfied'],
-    },
-  };
-}
 
 function createFinishThinkingInput(
   reason = 'done',
@@ -34,7 +22,6 @@ function createFinishThinkingInput(
   return JSON.stringify({
     reason,
     next_wake_at: nextWakeAt,
-    session_record: createSessionContext(),
   });
 }
 
@@ -283,6 +270,143 @@ describe('executeAgentToolCall', () => {
     });
   });
 
+  it('read_web_pageのeventには生URLと本文を残さない', async () => {
+    const emit = vi.fn<EchoEventPort['emit']>().mockResolvedValue(undefined);
+    const rawUrl = 'https://example.com/private-path?topic=secret-canary';
+    const execute = vi.fn().mockResolvedValue(
+      JSON.stringify({
+        success: true,
+        source: {
+          requestedUrl: rawUrl,
+          finalUrl: rawUrl,
+          retrievedAt: '2026-08-10T00:00:00.000Z',
+          httpStatus: 200,
+          redirectCount: 0,
+          contentType: 'text/html',
+          title: 'secret-title-canary',
+        },
+        document: {
+          format: 'markdown',
+          rendering: 'static',
+          text: 'secret-body-canary',
+          returnedCharacters: 18,
+          extractedCharacters: 18,
+          truncated: false,
+          truncationReasons: [],
+          links: [
+            {
+              text: 'secret-link',
+              url: 'https://example.org/secret-link-canary',
+            },
+          ],
+        },
+        trust: 'untrusted_external_content',
+      })
+    );
+
+    await executeAgentToolCall(
+      {
+        type: 'tool_call',
+        callId: 'call-web',
+        toolName: 'read_web_page',
+        input: JSON.stringify({ url: rawUrl, maxCharacters: 8_000 }),
+      },
+      [
+        {
+          name: 'read_web_page',
+          contract: createToolContract('read_web_page'),
+          execute,
+        },
+      ],
+      { emit },
+      1
+    );
+
+    const serializedEvents = JSON.stringify(
+      emit.mock.calls.map(([event]) => event)
+    );
+    expect(serializedEvents).not.toContain(rawUrl);
+    expect(serializedEvents).not.toContain('secret-title-canary');
+    expect(serializedEvents).not.toContain('secret-body-canary');
+    expect(serializedEvents).not.toContain('secret-link-canary');
+
+    const calledEvent = emit.mock.calls.find(
+      ([event]) => event.type === 'tool.called'
+    )?.[0];
+    expect(calledEvent).toMatchObject({
+      payload: {
+        callId: 'call-web',
+        toolName: 'read_web_page',
+        turnIndex: 1,
+        input: {
+          redacted: true,
+          urlLength: rawUrl.length,
+          hasQuery: true,
+          maxCharacters: 8_000,
+        },
+      },
+    });
+
+    const completedEvent = emit.mock.calls.find(
+      ([event]) => event.type === 'tool.completed'
+    )?.[0];
+    expect(completedEvent).toMatchObject({
+      payload: {
+        success: true,
+        httpStatus: 200,
+        contentType: 'text/html',
+        redirectCount: 0,
+        returnedCharacters: 18,
+        extractedCharacters: 18,
+        truncated: false,
+        linkCount: 1,
+      },
+    });
+  });
+
+  it('read_web_pageのfailure eventにはraw error文字列を残さない', async () => {
+    const emit = vi.fn<EchoEventPort['emit']>().mockResolvedValue(undefined);
+    const rawError = 'private URL leaked into adapter error: FAILURE_CANARY';
+    const output = JSON.stringify({
+      success: false,
+      code: 'http_status',
+      error: rawError,
+      retryable: true,
+    });
+
+    const result = await executeAgentToolCall(
+      {
+        type: 'tool_call',
+        callId: 'call-web-failure',
+        toolName: 'read_web_page',
+        input: JSON.stringify({ url: 'https://www.wikipedia.org/page' }),
+      },
+      [
+        {
+          name: 'read_web_page',
+          contract: createToolContract('read_web_page'),
+          execute: vi.fn().mockResolvedValue(output),
+        },
+      ],
+      { emit },
+      1
+    );
+
+    expect(result).toBe(output);
+    expect(JSON.stringify(emit.mock.calls)).not.toContain('FAILURE_CANARY');
+    const failedEvent = emit.mock.calls.find(
+      ([event]) => event.type === 'tool.failed'
+    )?.[0];
+    expect(failedEvent).toMatchObject({
+      payload: {
+        success: false,
+        code: 'http_status',
+        retryable: true,
+      },
+    });
+    expect(failedEvent?.payload).not.toHaveProperty('error');
+  });
+
   it('未登録ツールはエラー文字列を返す', async () => {
     const result = await executeAgentToolCall(
       {
@@ -374,7 +498,6 @@ describe('runAgentSession', () => {
     });
     expect(executeFinish).toHaveBeenCalledWith(createFinishThinkingInput());
     expect(result).toEqual({
-      context: createSessionContext(),
       nextWakeAt: null,
       usage: createUsage({ totalTokens: 15 }),
       responseToken: 'resp-2',
@@ -563,7 +686,6 @@ describe('runAgentSession', () => {
     });
     expect(executeFinish).toHaveBeenCalledWith(createFinishThinkingInput());
     expect(result).toEqual({
-      context: createSessionContext(),
       nextWakeAt: null,
       usage: createUsage({
         cachedInputTokens: 111,
@@ -688,6 +810,121 @@ describe('runAgentSession', () => {
     });
   });
 
+  it('turn boundary hook の追加入力を tool result の後に次ターンへ渡す', async () => {
+    const firstOutput = [
+      {
+        type: 'tool_call' as const,
+        callId: 'call-think',
+        toolName: 'think_deeply',
+        input: '{"thought":"test"}',
+      },
+    ];
+    const terminalOutput = [
+      {
+        type: 'tool_call' as const,
+        callId: 'call-finish',
+        toolName: 'finish_thinking',
+        input: createFinishThinkingInput(),
+      },
+    ];
+    const generate = vi
+      .fn<ModelPort['generate']>()
+      .mockResolvedValueOnce({
+        output: firstOutput,
+        usage: createUsage({ totalTokens: 10 }),
+        responseToken: 'resp-1',
+      })
+      .mockResolvedValueOnce({
+        output: terminalOutput,
+        usage: createUsage({ totalTokens: 5 }),
+        responseToken: 'resp-2',
+      });
+    const onTurnBoundary = vi
+      .fn()
+      .mockResolvedValueOnce([
+        {
+          role: 'developer',
+          content: '<memory_module_result>ready</memory_module_result>',
+        },
+        {
+          role: 'developer',
+          content: '<emotion_module_result>ready</emotion_module_result>',
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          role: 'developer',
+          content: 'terminal input must not be sent to another model turn',
+        },
+      ]);
+
+    await runAgentSession({
+      model: { generate },
+      tools: [
+        {
+          name: 'think_deeply',
+          contract: createToolContract('think_deeply'),
+          execute: vi.fn().mockResolvedValue('{"success":true}'),
+        },
+        {
+          name: 'finish_thinking',
+          contract: createToolContract('finish_thinking'),
+          execute: vi.fn().mockResolvedValue('{"success":true}'),
+        },
+      ],
+      initialInput: [{ role: 'developer', content: 'test' }],
+      onTurnBoundary,
+    });
+
+    const firstResolvedInput = [
+      {
+        type: 'tool_result',
+        callId: 'call-think',
+        output: '{"success":true}',
+      },
+    ];
+    expect(onTurnBoundary).toHaveBeenNthCalledWith(1, {
+      turnIndex: 1,
+      responseOutput: firstOutput,
+      toolCalls: firstOutput,
+      resolvedInput: firstResolvedInput,
+      terminationReason: null,
+    });
+    expect(generate).toHaveBeenNthCalledWith(2, {
+      input: [
+        ...firstResolvedInput,
+        {
+          role: 'developer',
+          content: '<memory_module_result>ready</memory_module_result>',
+        },
+        {
+          role: 'developer',
+          content: '<emotion_module_result>ready</emotion_module_result>',
+        },
+      ],
+      tools: [
+        createToolContract('think_deeply'),
+        createToolContract('finish_thinking'),
+      ],
+      previousResponseToken: 'resp-1',
+      turnIndex: 2,
+    });
+    expect(onTurnBoundary).toHaveBeenNthCalledWith(2, {
+      turnIndex: 2,
+      responseOutput: terminalOutput,
+      toolCalls: terminalOutput,
+      resolvedInput: [
+        {
+          type: 'tool_result',
+          callId: 'call-finish',
+          output: '{"success":true}',
+        },
+      ],
+      terminationReason: 'finish_thinking',
+    });
+    expect(generate).toHaveBeenCalledTimes(2);
+  });
+
   it('finish_thinking を含む場合は tool 実行後に終了する', async () => {
     const generate = vi.fn<ModelPort['generate']>().mockResolvedValue({
       output: [
@@ -736,7 +973,6 @@ describe('runAgentSession', () => {
     expect(executeFinish).toHaveBeenCalled();
     expect(generate).toHaveBeenCalledTimes(1);
     expect(result).toEqual({
-      context: createSessionContext(),
       nextWakeAt: null,
       usage: createUsage({ totalTokens: 10 }),
       responseToken: 'resp-1',
@@ -777,7 +1013,6 @@ describe('runAgentSession', () => {
     });
 
     expect(result).toEqual({
-      context: createSessionContext(),
       nextWakeAt,
       usage: createUsage({ totalTokens: 10 }),
       responseToken: 'resp-1',
@@ -786,7 +1021,9 @@ describe('runAgentSession', () => {
   });
 
   it('無効な finish_thinking は継続し、有効な finish_thinking で終了する', async () => {
-    const invalidFinishInput = '{"reason":"done"}';
+    const invalidFinishInput = JSON.stringify({
+      next_wake_at: '2026-08-29T12:00:00.000Z',
+    });
     const generate = vi
       .fn<ModelPort['generate']>()
       .mockResolvedValueOnce({
@@ -848,12 +1085,215 @@ describe('runAgentSession', () => {
       turnIndex: 2,
     });
     expect(result).toEqual({
-      context: createSessionContext(),
       nextWakeAt: null,
       usage: createUsage({ totalTokens: 15 }),
       responseToken: 'resp-2',
       terminationReason: 'finish_thinking',
     });
+  });
+
+  it('入力が有効でも finish_thinking の実行に失敗した場合は継続する', async () => {
+    const generate = vi
+      .fn<ModelPort['generate']>()
+      .mockResolvedValueOnce({
+        output: [
+          {
+            type: 'tool_call',
+            callId: 'call-finish-failed',
+            toolName: 'finish_thinking',
+            input: createFinishThinkingInput('not ready'),
+          },
+        ],
+        usage: createUsage({ totalTokens: 10 }),
+        responseToken: 'resp-1',
+      })
+      .mockResolvedValueOnce({
+        output: [
+          {
+            type: 'tool_call',
+            callId: 'call-finish-succeeded',
+            toolName: 'finish_thinking',
+            input: createFinishThinkingInput('done for real'),
+          },
+        ],
+        usage: createUsage({ totalTokens: 5 }),
+        responseToken: 'resp-2',
+      });
+    const executeFinish = vi
+      .fn()
+      .mockResolvedValueOnce('{"success":false,"error":"completion rejected"}')
+      .mockResolvedValueOnce('{"success":true}');
+
+    const result = await runAgentSession({
+      model: { generate },
+      tools: [
+        {
+          name: 'finish_thinking',
+          contract: createToolContract('finish_thinking'),
+          execute: executeFinish,
+        },
+      ],
+      initialInput: [
+        {
+          role: 'developer',
+          content: 'test',
+        },
+      ],
+    });
+
+    expect(generate).toHaveBeenNthCalledWith(2, {
+      input: [
+        {
+          type: 'tool_result',
+          callId: 'call-finish-failed',
+          output: '{"success":false,"error":"completion rejected"}',
+        },
+      ],
+      tools: [createToolContract('finish_thinking')],
+      previousResponseToken: 'resp-1',
+      turnIndex: 2,
+    });
+    expect(result).toEqual({
+      nextWakeAt: null,
+      usage: createUsage({ totalTokens: 15 }),
+      responseToken: 'resp-2',
+      terminationReason: 'finish_thinking',
+    });
+  });
+
+  it('boundary failure でも課金済み Main usage と response token を保持する', async () => {
+    const boundaryFailure = new Error('cognitive boundary failed');
+    const generate = vi.fn<ModelPort['generate']>().mockResolvedValue({
+      output: [
+        {
+          type: 'tool_call',
+          callId: 'call-think',
+          toolName: 'think_deeply',
+          input: '{"thought":"inspect"}',
+        },
+      ],
+      usage: createUsage({ totalTokens: 7 }),
+      responseToken: 'resp-paid-turn',
+    });
+
+    const execution = runAgentSession({
+      model: { generate },
+      tools: [
+        {
+          name: 'think_deeply',
+          contract: createToolContract('think_deeply'),
+          execute: vi.fn().mockResolvedValue('{"success":true}'),
+        },
+      ],
+      initialInput: [],
+      onTurnBoundary: vi.fn().mockRejectedValue(boundaryFailure),
+    });
+
+    const error = await execution.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(AgentSessionExecutionError);
+    expect(error).toMatchObject({
+      cause: boundaryFailure,
+      usage: createUsage({ totalTokens: 7 }),
+      responseToken: 'resp-paid-turn',
+    });
+  });
+
+  it('並列read_web_pageはthinking session内で4件だけ実行する', async () => {
+    const generate = vi
+      .fn<ModelPort['generate']>()
+      .mockResolvedValueOnce({
+        output: Array.from({ length: 5 }, (_, index) => ({
+          type: 'tool_call' as const,
+          callId: `call-web-${index + 1}`,
+          toolName: 'read_web_page',
+          input: JSON.stringify({ url: `https://example.com/${index + 1}` }),
+        })),
+        usage: createUsage(),
+        responseToken: 'resp-web',
+      })
+      .mockResolvedValueOnce({
+        output: [
+          {
+            type: 'tool_call',
+            callId: 'call-finish',
+            toolName: 'finish_thinking',
+            input: createFinishThinkingInput(),
+          },
+        ],
+        usage: createUsage(),
+        responseToken: 'resp-finish',
+      });
+    const executeWeb = vi.fn().mockResolvedValue('{"success":true}');
+
+    await runAgentSession({
+      model: { generate },
+      tools: [
+        {
+          name: 'read_web_page',
+          contract: createToolContract('read_web_page'),
+          execute: executeWeb,
+        },
+        {
+          name: 'finish_thinking',
+          contract: createToolContract('finish_thinking'),
+          execute: vi.fn().mockResolvedValue('{"success":true}'),
+        },
+      ],
+      initialInput: [],
+    });
+
+    expect(executeWeb).toHaveBeenCalledTimes(4);
+    const secondRequest = generate.mock.calls[1]?.[0];
+    expect(secondRequest).toBeDefined();
+    expect(secondRequest?.input).toHaveLength(5);
+    const fifthResult = secondRequest?.input[4];
+    expect(fifthResult).toEqual({
+      type: 'tool_result',
+      callId: 'call-web-5',
+      output: JSON.stringify({
+        success: false,
+        code: 'budget_exceeded',
+        error:
+          'The read_web_page call limit for this thinking session was reached.',
+        retryable: false,
+      }),
+    });
+  });
+
+  it('read_web_pageの4件上限は新しいsessionでresetされる', async () => {
+    const executeWeb = vi.fn().mockResolvedValue('{"success":true}');
+    const tools = [
+      {
+        name: 'read_web_page',
+        contract: createToolContract('read_web_page'),
+        execute: executeWeb,
+      },
+    ];
+
+    const runOnce = async (): Promise<void> => {
+      const generate = vi.fn<ModelPort['generate']>().mockResolvedValue({
+        output: Array.from({ length: 4 }, (_, index) => ({
+          type: 'tool_call' as const,
+          callId: `call-web-${index + 1}`,
+          toolName: 'read_web_page',
+          input: JSON.stringify({ url: `https://example.com/${index + 1}` }),
+        })),
+        usage: createUsage(),
+        responseToken: 'resp-web',
+      });
+
+      await runAgentSession({
+        model: { generate },
+        tools,
+        initialInput: [],
+        maxTurns: 1,
+      });
+    };
+
+    await runOnce();
+    await runOnce();
+
+    expect(executeWeb).toHaveBeenCalledTimes(8);
   });
 
   it('maxTurns を超えたら終了理由を返す', async () => {
