@@ -342,6 +342,29 @@ command. Synthetic module tool loops validate lane ownership; the actual
 Cognitive activation lifecycle and domain storage require application-level
 tests.
 
+The opt-in `state_integrity` regression executes the production resident engine
+with local model weights and compares every committed layer's KV or GDN
+convolution/recurrent tensor. Before execution it freezes reference tensors in
+separate safetensors files; holding another MLX handle alone would not detect
+mutation of a shared backing buffer. It verifies:
+
+- cancellation after three provisional tokens in `continuation` and
+  `new_session`, plus an observer failure during `continuation`, leaves all
+  previously committed tensor values, shapes and dtypes unchanged;
+- each failed request releases its writer and retries to the same tokens and
+  tensor values as an uninterrupted execution from an independent reference;
+- cancelling one of six auxiliary rows preserves an idle Main state and gives
+  the five survivors the same tokens and tensors as a control batch whose
+  first row stops at the same boundary.
+
+Survivor comparisons preserve the six-to-five batch shape; they do not require
+numerical equality across different batch widths. The test uses token-level
+runtime requests and process-local lanes, so chat suffix validation, durable
+restart and Cognitive coordinator behavior require their separate tests.
+
+The [state-integrity command](../README.md#real-model-state-integrity-test)
+requires explicit model/GPU execution and is skipped by ordinary `cargo test`.
+
 ## Supported boundary
 
 - Rollback covers a complete request; selective rollback of a partial tool

@@ -178,8 +178,8 @@ development when those libraries are not installed in a loader-visible path;
 production packaging should use a stable loader-relative layout.
 
 MLX-linked tests require access to a Metal device. Ordinary tests do not load
-model weights; explicitly invoked real-model probes require a local model
-directory as well.
+model weights; explicitly invoked real-model probes and the state-integrity
+test below require a local model directory as well.
 
 ## Commands
 
@@ -490,6 +490,27 @@ pnpm --filter @echo-chamber/local-runtime probe:real-lifecycle \
   /absolute/path/to/Qwen3.6-35B-A3B-MLX-4bit \
   /absolute/path/to/empty-snapshot-directory
 ```
+
+## Real-model state integrity test
+
+The Rust `state_integrity` test compares every KV/GDN tensor after interrupted
+generation and retry, including cancellation of one row in a six-row batch.
+It freezes independent tensor references in temporary safetensors files so
+shared GPU buffers cannot hide a mutation. See the
+[validation contract](docs/architecture.md#validation) for the comparison
+conditions and coverage.
+
+Ordinary `cargo test` skips this model-dependent test. With the MLX environment
+configured, run it from `native/echo-inference`:
+
+```sh
+ECHO_NATIVE_TEST_MODEL=/absolute/path/to/model \
+  cargo test --release -p echo-inference --all-features state_integrity:: \
+  -- --ignored --nocapture --test-threads=1
+```
+
+Successful runs remove their temporary reference directory. Failed runs retain
+the directory printed in the log for diagnosis.
 
 ## Evidence
 

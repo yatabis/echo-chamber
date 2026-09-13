@@ -37,8 +37,11 @@ Main に未解決 call がなければ、空の再試行または確定済み ru
 | [Cognitive 結合テスト](../packages/native-inference-adapter/src/cognitive-continuation.test.ts)  | `pre_main → Main → pre_main → Main finish → post_main` の順序、tool/文章出力後の継続、domain commit 前の Main 停止、失敗時の usage 保持、prompt の分離 | ThinkingEngine・coordinator・runner・Native adapter/client は実装を使用。モデル応答・保存先・transport は fixture |
 | [公式 template の比較](../native/echo-inference/oracles/qwen35_cognitive_continuation_parity.py) | 既存 prefix と追加 suffix が、公式 Qwen template の全体入力と byte/token 単位で一致する                                                                | tool/文章での完了と Cognitive exchange の有無を組み合わせた fixture。GPU 生成は行わない                           |
 | [実モデル probe](../packages/native-inference-adapter/src/real-model-probe.ts)                   | 2 session・各2生成で、tool call の解析、結果を含む回答、resident prefix の再利用、state 長の更新を確認する                                             | Main は実モデル。`cognitive` モードの Memory/Emotion 結果と domain 状態は fixture                                 |
+| [state integrity テスト](../native/echo-inference/crates/echo-inference/src/state_integrity.rs)  | 途中キャンセル・observer 失敗後の全 KV/GDN テンソル保持、再試行、6並列から1件離脱した際の他 lane の独立性                                              | 実モデルを使う token-level runtime テスト。比較用テンソルは独立したファイルに保存する                             |
 
 実モデル probe は各 session の最初を含むすべての Main turn で handoff を渡す。初回の Memory recall は空で、継続時には観測した lookup 結果を含める。`plain` と `cognitive` の両入力について、greedy と production sampling を検証対象とする。
+
+state integrity テストはテンソルの値・shape・dtype を比較する。TypeScript probe が報告する state 長や再利用 token 数の一致だけでは、GDN テンソル全体の一致を確認したことにはならない。
 
 通常の Node テスト、Rust テスト、実モデル probe は実行条件が異なる。モデルと Metal を必要とする検証は明示的に実行する。環境設定とコマンドは[Native README](../native/echo-inference/README.md#build)を参照する。
 
