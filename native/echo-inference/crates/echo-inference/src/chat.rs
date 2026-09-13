@@ -104,12 +104,23 @@ pub struct EchoMessage {
 /// Tool call already present in E.C.H.O. input history.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct EchoToolCall {
+    /// Trusted-runtime provenance; generated model output never supplies it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<EchoToolCallOrigin>,
     /// Stable call identity used by E.C.H.O.; Qwen's template does not render it.
     pub call_id: String,
     /// Function name.
     pub tool_name: String,
     /// Raw JSON object passed to the function.
     pub input: String,
+}
+
+/// A tool exchange appended by runtime code after its result is committed.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EchoToolCallOrigin {
+    /// This is input history, not a request to execute a model-selected tool.
+    Runtime,
 }
 
 /// Tool result already present in E.C.H.O. input history.
@@ -250,6 +261,8 @@ struct ChatTemplateFixtureCase {
     tools: Vec<EchoToolContract>,
     rendered: String,
     token_ids: Vec<u32>,
+    #[serde(default)]
+    continuation: bool,
 }
 
 /// Qwen3.5-family tokenizer plus the one admitted E.C.H.O. chat-template path.
@@ -360,21 +373,23 @@ impl Qwen35ChatTokenizer {
         })
     }
 
-    /// Encodes one E.C.H.O. tool-result continuation against resident state.
+    /// Encodes Main results and committed runtime exchanges against resident state.
     ///
     /// This path never reconstructs the preceding assistant output from
     /// parsed values. The runtime guarantees that a successfully committed
     /// production turn ends in Qwen EOS, so the complete preceding token
     /// sequence does not need to be stored separately. The new input may
-    /// contain only tool results (or be empty for the existing no-tool retry
-    /// behavior). Ordinary user/developer input requires the separate
+    /// contain pending tool results followed by complete runtime-owned tool
+    /// exchanges, or be empty for the existing no-tool retry. With no new user
+    /// query, Qwen preserves thinking in every appended assistant exchange.
+    /// Ordinary user/developer input requires the separate
     /// new-session transition because Qwen may rewrite old thinking during a
     /// full template render.
     ///
     /// # Errors
     ///
     /// Returns [`ChatError`] when tools are redefined, the delta contains a
-    /// non-tool-result item, or tokenization fails.
+    /// malformed or unmarked exchange, a new message, or tokenization fails.
     pub fn encode_continuation(
         &self,
         prompt: &EchoChatPrompt,
@@ -452,10 +467,10 @@ pub fn run_chat_template_parity(
             path: fixture_path.to_path_buf(),
             source,
         })?;
-    if fixture.schema_version != 1 {
+    if !matches!(fixture.schema_version, 1 | 2) {
         return Err(ChatError::InvalidPrompt {
             detail: format!(
-                "chat-template fixture schema must be 1, observed {}",
+                "chat-template fixture schema must be 1 or 2, observed {}",
                 fixture.schema_version
             ),
         });
@@ -473,10 +488,15 @@ pub fn run_chat_template_parity(
         .cases
         .into_iter()
         .map(|case| {
-            let encoded = tokenizer.encode_prompt(&EchoChatPrompt {
+            let prompt = EchoChatPrompt {
                 input: case.input,
                 tools: case.tools,
-            })?;
+            };
+            let encoded = if case.continuation {
+                tokenizer.encode_continuation(&prompt)?
+            } else {
+                tokenizer.encode_prompt(&prompt)?
+            };
             Ok(ChatTemplateCaseParity {
                 name: case.name,
                 rendered_exact: encoded.rendered == case.rendered,
@@ -536,29 +556,64 @@ fn render_chat_prompt(prompt: &EchoChatPrompt) -> Result<String, ChatError> {
 }
 
 fn render_chat_continuation(input: &[EchoInputItem]) -> Result<String, ChatError> {
-    let messages = input
-        .iter()
-        .map(|item| match item {
-            EchoInputItem::ToolResult { result, .. } => Ok(TemplateMessage {
-                role: TemplateRole::Tool,
-                content: result.output.clone(),
-                tool_calls: Vec::new(),
-            }),
-            EchoInputItem::Message(_) | EchoInputItem::ToolCall { .. } => {
-                Err(ChatError::InvalidPrompt {
-                    detail:
-                        "exact continuation accepts only tool_result items within one E.C.H.O. session"
-                            .into(),
-                })
-            }
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    validate_continuation_exchanges(input)?;
+    let messages = normalize_messages(input)?;
     let mut output = String::from("\n");
     for (index, message) in messages.iter().enumerate() {
-        render_tool_result(&mut output, &messages, index, message);
+        match message.role {
+            TemplateRole::Assistant => render_assistant(&mut output, message, true),
+            TemplateRole::Tool => render_tool_result(&mut output, &messages, index, message),
+            TemplateRole::System | TemplateRole::User => {
+                return Err(ChatError::InvalidPrompt {
+                    detail: "exact continuation cannot introduce a new user or system message"
+                        .into(),
+                });
+            }
+        }
     }
     output.push_str(NON_THINKING_GENERATION_PROMPT);
     Ok(output)
+}
+
+/// Call IDs are matched to Main's pending calls by the adapter. The renderer
+/// independently rejects incomplete, duplicate or unmarked runtime exchanges;
+/// neither function names nor a model-chosen ID prefix establish provenance.
+fn validate_continuation_exchanges(input: &[EchoInputItem]) -> Result<(), ChatError> {
+    let invalid = || {
+        ChatError::InvalidPrompt {
+        detail: "exact continuation requires unique tool results followed by complete runtime-owned exchanges".into(),
+    }
+    };
+    let mut call_ids = std::collections::HashSet::new();
+    let mut runtime_started = false;
+    let mut index = 0;
+    while index < input.len() {
+        match &input[index] {
+            EchoInputItem::ToolResult { result, .. } if !runtime_started => {
+                if result.call_id.trim().is_empty() || !call_ids.insert(&result.call_id) {
+                    return Err(invalid());
+                }
+                index += 1;
+            }
+            EchoInputItem::ToolCall { call, .. }
+                if call.origin == Some(EchoToolCallOrigin::Runtime) =>
+            {
+                runtime_started = true;
+                if call.call_id.trim().is_empty() || !call_ids.insert(&call.call_id) {
+                    return Err(invalid());
+                }
+                let Some(EchoInputItem::ToolResult { result, .. }) = input.get(index + 1) else {
+                    return Err(invalid());
+                };
+                if result.call_id != call.call_id {
+                    return Err(invalid());
+                }
+                index += 2;
+            }
+            _ => return Err(invalid()),
+        }
+    }
+    Ok(())
 }
 
 fn normalize_messages(input: &[EchoInputItem]) -> Result<Vec<TemplateMessage>, ChatError> {
@@ -1030,6 +1085,102 @@ mod tests {
         let error = render_chat_continuation(&[text(EchoMessageRole::User, "new query")])
             .expect_err("new query needs a session transition");
         assert!(matches!(error, ChatError::InvalidPrompt { .. }));
+    }
+
+    #[test]
+    fn runtime_exchanges_continue_after_pending_results_or_a_plain_completion() {
+        for pending in [true, false] {
+            let mut input = vec![serde_json::json!({"role": "user", "content": "query"})];
+            input.push(serde_json::json!({"role": "assistant", "content": "done"}));
+            let mut suffix = Vec::new();
+            if pending {
+                suffix.push(
+                    serde_json::json!({"type": "tool_result", "call_id": "main", "output": "done"}),
+                );
+            }
+            suffix.extend([
+                serde_json::json!({"type": "tool_call", "origin": "runtime", "call_id": "memory", "tool_name": "search_memory", "input": "{\"query\":\"予定\"}"}),
+                serde_json::json!({"type": "tool_result", "call_id": "memory", "output": "found"}),
+                serde_json::json!({"type": "tool_call", "origin": "runtime", "call_id": "emotion", "tool_name": "update_emotion", "input": "{\"valence\":0.2}"}),
+                serde_json::json!({"type": "tool_result", "call_id": "emotion", "output": "saved"}),
+            ]);
+            let prefix: Vec<EchoInputItem> =
+                serde_json::from_value(serde_json::json!(input)).unwrap();
+            let prefix = render_chat_prompt(&EchoChatPrompt {
+                input: prefix,
+                tools: vec![],
+            })
+            .unwrap();
+            let committed = prefix
+                .strip_suffix(NON_THINKING_GENERATION_PROMPT)
+                .unwrap()
+                .trim_end_matches('\n');
+            input.extend(suffix.clone());
+            let full: Vec<EchoInputItem> =
+                serde_json::from_value(serde_json::json!(input)).unwrap();
+            let full = render_chat_prompt(&EchoChatPrompt {
+                input: full,
+                tools: vec![],
+            })
+            .unwrap();
+            let suffix: Vec<EchoInputItem> =
+                serde_json::from_value(serde_json::json!(suffix)).unwrap();
+            assert_eq!(
+                format!("{committed}{}", render_chat_continuation(&suffix).unwrap()),
+                full
+            );
+        }
+    }
+
+    #[test]
+    fn continuation_rejects_unmarked_unresolved_and_duplicate_runtime_exchanges() {
+        let result =
+            serde_json::json!({"type": "tool_result", "call_id": "main", "output": "done"});
+        let call = serde_json::json!({"type": "tool_call", "origin": "runtime", "call_id": "runtime", "tool_name": "update_emotion", "input": "{}"});
+        let resolved =
+            serde_json::json!({"type": "tool_result", "call_id": "runtime", "output": "done"});
+        let mut unmarked = call.clone();
+        unmarked.as_object_mut().unwrap().remove("origin");
+        for invalid in [
+            vec![result.clone(), unmarked, resolved.clone()],
+            vec![result.clone(), call.clone()],
+            vec![result.clone(), call.clone(), result.clone()],
+            vec![
+                result.clone(),
+                call.clone(),
+                resolved.clone(),
+                call.clone(),
+                resolved.clone(),
+            ],
+            vec![result.clone(), result.clone()],
+            vec![result.clone(), call.clone(), resolved.clone(), result],
+        ] {
+            let input: Vec<EchoInputItem> =
+                serde_json::from_value(serde_json::json!(invalid)).unwrap();
+            assert!(render_chat_continuation(&input).is_err());
+        }
+    }
+
+    #[test]
+    fn cognitive_suffixes_match_official_jinja_fixtures() {
+        let manifest: Value = serde_json::from_str(include_str!(
+            "../../../fixtures/cognitive-continuation.json"
+        ))
+        .unwrap();
+        for case in manifest["cases"].as_array().unwrap() {
+            let input: Vec<EchoInputItem> = serde_json::from_value(case["input"].clone()).unwrap();
+            let rendered = render_chat_continuation(&input).unwrap();
+            assert_eq!(
+                rendered,
+                case["rendered"].as_str().unwrap(),
+                "{}",
+                case["name"]
+            );
+            assert_eq!(
+                format!("{}{rendered}", case["committed_rendered"].as_str().unwrap()),
+                case["full_rendered"]
+            );
+        }
     }
 
     #[test]

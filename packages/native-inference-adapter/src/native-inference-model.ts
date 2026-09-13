@@ -570,34 +570,106 @@ export class NativeInferenceModel implements ModelPort {
   }
 }
 
+/**
+ * Pending Main results must be resolved before runtime-owned exchanges.
+ * Provenance is supplied by trusted runtime code, never inferred from a model's
+ * chosen call ID or function name. Each appended call must already have a result.
+ */
 function validateContinuationInput(
   input: readonly ModelInputItem[],
   pendingToolCallIds: readonly string[]
 ): void {
-  if (pendingToolCallIds.length === 0) {
-    if (input.length === 0) {
-      return;
-    }
+  const first = input[0];
+  if (
+    pendingToolCallIds.length === 0 &&
+    first !== undefined &&
+    'type' in first &&
+    first.type === 'tool_result'
+  ) {
     throw new Error(
       'native continuation requires a pending tool call from the preceding completion'
     );
   }
+  validatePendingToolResults(
+    input.slice(0, pendingToolCallIds.length),
+    pendingToolCallIds
+  );
+  validateRuntimeToolExchanges(
+    input.slice(pendingToolCallIds.length),
+    new Set(pendingToolCallIds)
+  );
+}
+
+/** Preserve the exact ordered results owed by the preceding Main completion. */
+function validatePendingToolResults(
+  input: readonly ModelInputItem[],
+  pendingToolCallIds: readonly string[]
+): void {
   const resultCallIds = input.map((item) => {
     if (!('type' in item) || item.type !== 'tool_result') {
       throw new Error(
-        'native continuation accepts only results for the pending tool calls'
+        'native continuation accepts only results for the pending tool calls before runtime exchanges'
       );
     }
     return item.callId;
   });
   if (
     resultCallIds.length !== pendingToolCallIds.length ||
-    resultCallIds.some((callId, index) => callId !== pendingToolCallIds[index])
+    resultCallIds.some(
+      (callId, index) => callId !== pendingToolCallIds[index]
+    ) ||
+    new Set(resultCallIds).size !== resultCallIds.length
   ) {
     throw new Error(
       `native continuation tool results do not match pending calls: expected ${JSON.stringify(pendingToolCallIds)}, observed ${JSON.stringify(resultCallIds)}`
     );
   }
+}
+
+/** Admit only complete runtime exchanges, without reusing a pending or appended call ID. */
+function validateRuntimeToolExchanges(
+  input: readonly ModelInputItem[],
+  callIds: Set<string>
+): void {
+  for (let index = 0; index < input.length; index += 2) {
+    const call = input[index];
+    if (
+      !isRuntimeToolCall(call) ||
+      call.callId.trim() === '' ||
+      callIds.has(call.callId) ||
+      !isMatchingToolResult(input[index + 1], call.callId)
+    ) {
+      throw new Error(
+        'native continuation requires complete, uniquely identified runtime-owned tool exchanges after pending results'
+      );
+    }
+    callIds.add(call.callId);
+  }
+}
+
+/** Input provenance is explicit and separate from model-selected output. */
+function isRuntimeToolCall(
+  item: ModelInputItem | undefined
+): item is Extract<ModelInputItem, { type: 'tool_call' }> {
+  return (
+    item !== undefined &&
+    'type' in item &&
+    item.type === 'tool_call' &&
+    item.origin === 'runtime'
+  );
+}
+
+/** A runtime call and its committed result form one adjacent input pair. */
+function isMatchingToolResult(
+  item: ModelInputItem | undefined,
+  callId: string
+): boolean {
+  return (
+    item !== undefined &&
+    'type' in item &&
+    item.type === 'tool_result' &&
+    item.callId === callId
+  );
 }
 
 function toModelUsage(event: NativeCompletedEvent): ModelUsage {

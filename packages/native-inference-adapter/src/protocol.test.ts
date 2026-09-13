@@ -81,6 +81,26 @@ describe('native inference protocol mapping', () => {
     });
   });
 
+  it('preserves runtime provenance on input and never accepts it from model output', () => {
+    expect(
+      toNativeWireInput({
+        type: 'tool_call',
+        origin: 'runtime',
+        callId: 'runtime-call',
+        toolName: 'update_emotion',
+        input: '{}',
+      })
+    ).toMatchObject({ origin: 'runtime' });
+    const output = {
+      type: 'tool_call' as const,
+      origin: 'runtime',
+      call_id: 'model-call',
+      tool_name: 'update_emotion',
+      input: '{}',
+    };
+    expect(toModelOutputItem(output)).not.toHaveProperty('origin');
+  });
+
   it('maps parsed native tool output back to ModelOutputItem', () => {
     expect(
       toModelOutputItem({

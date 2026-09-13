@@ -20,6 +20,8 @@ mod parallel_generation;
 mod runtime;
 mod sampling;
 mod snapshot;
+#[cfg(test)]
+mod state_integrity;
 mod tool_output;
 mod weights;
 

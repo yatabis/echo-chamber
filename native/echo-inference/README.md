@@ -1,10 +1,10 @@
 # E.C.H.O. inference engine
 
 This directory contains E.C.H.O. Chamber's specialized native inference
-engine. It is a Cargo workspace inside the polyglot monorepo; it does not use
-pnpm. The narrow TypeScript boundary lives in
-`packages/native-inference-adapter`, and `apps/local-runtime` owns the child
-process plus per-existence lifecycle.
+engine. Build and run the Rust workspace with Cargo. The
+[TypeScript adapter](../../packages/native-inference-adapter) maps requests
+to the local protocol, and [local runtime](../../apps/local-runtime) owns the
+child process and per-existence lifecycle.
 
 The admitted model family is Qwen3.5-style hybrid MoE, with
 Qwen3.6-35B-A3B-MLX-4bit as the current primary artifact. The implementation
@@ -12,26 +12,23 @@ contains the complete model path plus variable-width continuous batching:
 embeddings, GDN and full-attention layers, Q4/Q8 projections, sparse routed
 and shared experts, final normalization, sampling, chat rendering, tool
 parsing, and KV/GDN state carry.
-The numerical path and retained performance work are described in
-`evidence/`; those dated reports remain historical evidence and may describe
-the older state protocol used when they were recorded.
+See [architecture.md](docs/architecture.md) for component responsibilities and
+state invariants. The [evidence archive](evidence/README.md) records numerical
+and performance measurements with their model, runtime and workload conditions.
 
 ## Application integration boundary
 
-The current Core thinking engine requires the
-[Cognitive Module workflow](../../docs/cognitive-module-architecture.md).
-Connecting that workflow to Native remains a separate integration step:
-its system-owned Memory/Emotion exchanges need an admitted continuation
-encoding, and its structured-output format, per-request output limit, and
-abort signal need Native adapter support. Auxiliary activation boundaries
-and local domain persistence also remain to be connected.
+E.C.H.O.'s [Cognitive Module workflow](../../docs/cognitive-module-architecture.md)
+runs Memory and Emotion before each Main turn and at session completion. Native
+accepts their committed results in Main's continuation input.
 
-The current Native module probes exercise synthetic module tool loops.
-Passing the Node suites and Native state-store tests establishes those
-covered contracts; the current Core Cognitive workflow still needs its own
-integration tests and real-model validation.
+Running Memory/Emotion themselves on Native requires request-level structured
+output, output limits, abort propagation, and state boundaries for each module
+activation. Local domain storage and the application entry point also require
+integration. See [Native runtime integration](../../docs/native-runtime-integration-readiness.md)
+for these requirements and the validation coverage of each boundary.
 
-## Current state contract
+## State contract
 
 One independently named state lane owns exactly one current composite
 inference state:
@@ -74,29 +71,32 @@ cursor. Its contents are not decoded or persisted. Restoring a process starts
 with state but no live response token, so its first request is necessarily a
 `new_session`.
 
-Exact `continuation` currently accepts only tool-result input. In particular,
-a persistent memory or emotion lane is a lightweight tool loop: each
-invocation ends in one valid update tool call, and the next observation is
-returned as the result of that exact pending call. A fabricated tool result
-after a normal assistant message is not an admitted semantic boundary. This
-constraint preserves the official Qwen chat-template prefix without replaying
-or separately storing the prior token sequence. The adapter rejects a
-continuation before native execution unless its ordered tool-result call IDs
-exactly match the preceding completion's pending calls.
+Exact `continuation` accepts the ordered results for Main's pending calls,
+followed optionally by complete runtime-owned tool call/result pairs. The
+runtime marks each appended call with `origin: "runtime"` only after its
+Cognitive phase is committed. Model output cannot supply this provenance,
+and matching a function name or call-ID prefix is insufficient. Runtime
+exchanges are already-resolved input history; they do not add executable
+Main tools.
 
-For the bounded cross-session quality experiment only,
-`ECHO_NATIVE_NEW_SESSION_GDN_POLICY=carry_recurrent_only` clears each GDN
-layer's three-position convolution history while retaining its recurrent
-matrix. `carry_convolution_only` retains that short-range history while
-clearing the recurrent matrix to complete the component ablation. The default
-and only production behavior remains `carry_all`; the selected policy is
-reported in the Native `ready.engine` payload. Unsupported values fail at
-startup.
+The adapter checks Main's pending result IDs, order and count before any
+runtime exchange. Both adapter and Rust renderer reject unmarked calls,
+missing/mismatched results and duplicate IDs within the suffix. With no
+pending call, an empty retry or complete runtime exchanges are admitted;
+arbitrary user/developer/assistant messages still require `new_session`.
+This preserves the official Qwen template and the committed EOS boundary
+without reconstructing prior output or replaying the token history.
+
+`ECHO_NATIVE_NEW_SESSION_GDN_POLICY` selects the GDN components retained by
+`new_session`. The production policy is `carry_all`. For component-isolation
+experiments, `carry_recurrent_only` clears the three-position convolution
+history, and `carry_convolution_only` clears the recurrent matrix. The selected
+policy is reported in `ready.engine`; unsupported values fail at startup.
 
 Normal EOS completion commits. Cancellation, diagnostic-stream delivery
 failure, and model or protocol errors roll back the active transaction and
-leave the preceding current state untouched. If the visible output limit is reached, production
-reserves one additional state slot, advances an internal Qwen EOS through the
+leave the preceding current state untouched. If the visible output limit is
+reached, production reserves one additional state slot, advances an internal Qwen EOS through the
 model, commits that closed state, and still reports `length`; the EOS is not
 included in streamed or returned visible tokens. The adapter raises
 `NativeInferenceIncompleteGenerationError` with the new response token so a
@@ -120,11 +120,9 @@ survivors continue. Work beyond the active limit remains in the bounded queue.
 Batch widths are not required to match each other bit-for-bit because the
 floating-point execution shape changes. Admission instead requires exact
 official-MLX parity within each shape, co-tenant and row-position invariance,
-independent state ownership, and valid output. The retained 16K integrated
-probe found aggregate wall throughput effectively saturated at widths four
-through six. The hard capacity remains six; choosing a narrower cohort for a
-particular latency/fairness workload is an admission-policy decision rather
-than a state-layout change.
+independent state ownership, and valid output. The hard capacity is six;
+choosing a narrower cohort depends on the workload's latency and fairness
+requirements.
 
 ## Durable state
 
@@ -146,8 +144,8 @@ The safetensors metadata contains only:
 - `echo_instance_id`;
 - `echo_model_identity`.
 
-Publication writes a uniquely named hidden staging file, evaluates and
-synchronizes the tensors, synchronizes the file, atomically renames it over
+Publication evaluates and synchronizes the tensors, writes a uniquely named
+hidden staging file, synchronizes the file, atomically renames it over
 `current.safetensors`, and synchronizes the instance directory. A crash
 therefore exposes either the preceding complete current file or the complete
 replacement. On startup, only managed `.current.safetensors.tmp-*` remnants
@@ -159,22 +157,29 @@ opens the instance.
 
 ## Build
 
-The workspace deliberately does not vendor MLX. Point it at a pinned official
-`mlx-c` checkout/build and the matching MLX library:
+Run the Cargo commands in this README from `native/echo-inference`. The
+workspace uses an external, pinned official `mlx-c` checkout/build and the
+matching MLX library. Export their paths before building or running commands:
 
 ```sh
-MLX_C_INCLUDE_DIR=/absolute/path/to/mlx-c \
-MLX_C_LIB_DIR=/absolute/path/to/mlx-c/build \
-MLX_LIB_DIR=/absolute/path/to/python/site-packages/mlx/lib \
-DYLD_LIBRARY_PATH=/absolute/path/to/mlx-c/build:/absolute/path/to/python/site-packages/mlx/lib \
-CARGO_TARGET_DIR=/tmp/echo-inference-target \
-cargo test --workspace
+export MLX_C_INCLUDE_DIR=/absolute/path/to/mlx-c
+export MLX_C_LIB_DIR=/absolute/path/to/mlx-c/build
+export MLX_LIB_DIR=/absolute/path/to/python/site-packages/mlx/lib
+export DYLD_LIBRARY_PATH=/absolute/path/to/mlx-c/build:/absolute/path/to/python/site-packages/mlx/lib
+export CARGO_TARGET_DIR=/tmp/echo-inference-target
+
+cargo build --release -p echo-inference
+cargo test --workspace --all-features -- --test-threads=1
 ```
 
 The build fails closed when any path is absent. Generated bindings are limited
 to the MLX surface used by the engine. `DYLD_LIBRARY_PATH` is needed for local
 development when those libraries are not installed in a loader-visible path;
 production packaging should use a stable loader-relative layout.
+
+MLX-linked tests require access to a Metal device. Ordinary tests do not load
+model weights; explicitly invoked real-model probes and the state-integrity
+test below require a local model directory as well.
 
 ## Commands
 
@@ -302,7 +307,7 @@ or `shared_only`. Every mode except `full` deliberately changes model output
 and is valid only for fixed-length component-cost diagnosis.
 
 `run-parallel-generation-diagnostic` is also excluded from ordinary builds.
-It is the initial equal-length, simultaneous-arrival greedy comparison of
+It compares equal-length, simultaneous-arrival greedy execution using
 production FIFO, two independent MLX streams, and a fixed batch of two.
 `run-resident-batch-oracle-parity` checks unequal resident caches against an
 official MLX-LM fixture. `run-resident-batch-context-diagnostic` compares FIFO
@@ -324,14 +329,10 @@ at 4K with each row's current production sampling configuration, seed, and
 generated-token presence history kept request-owned. It repeats maximum-width
 co-tenant and row-permutation isolation under sampling.
 
-These diagnostics supplied the numerical and performance gates used by the
-production continuous scheduler. Different batch-width floating-point paths
-are not required to be bit-exact with each other; official MLX-LM exhibits the
-same shape dependence. Admission instead requires official-oracle parity
-within each shape, exact co-tenant and row-placement invariance, correct
-per-lane state ownership, and representative output quality. Raw JSON belongs
-in the ignored local diagnostic archive; retain conclusions under `evidence/`
-instead of committing repeated machine-local attempts.
+Use these diagnostics when changing model execution or scheduling. Record the
+model, runtime, sampling and batch shape with each comparison. Store raw JSON
+in the ignored local artifact directory; retain reproducible conclusions under
+`evidence/` with their measurement conditions.
 
 The parity manifests above describe oracle fixtures; they are unrelated to the
 production durable-state layout.
@@ -340,7 +341,7 @@ production durable-state layout.
 
 `serve-stdio` reads one JSON command per stdin line and writes one typed event
 per stdout line. The second argument bounds active plus waiting generation
-requests. Protocol version 10 admits:
+requests. Protocol version 11 admits:
 
 - `open_state`: register either a durable lane with a fixed snapshot root or
   an ephemeral process-local lane;
@@ -361,10 +362,52 @@ The native protocol is a trusted-local child-process contract, not an
 OpenAI-compatible HTTP API. E.C.H.O.'s provider-neutral `ModelPort` mapping is
 owned by `packages/native-inference-adapter`.
 
+Adapter and engine must both use protocol version 11; mismatched versions are
+rejected at startup. The snapshot format has its own schema version, validated
+when opening durable state.
+
+## Cognitive continuation validation
+
+`oracles/qwen35_cognitive_continuation_parity.py` derives suffix fixtures from
+the installed model's official Transformers/Jinja template. It asserts that
+the committed prefix ends at EOS and that prefix tokens plus suffix tokens
+exactly equal the complete prompt tokens. The checked-in
+`fixtures/cognitive-continuation.json` covers a tool result or plain Main
+completion, each with and without Cognitive exchanges. Rust unit tests check
+the rendered bytes; `run-chat-template-parity` also
+checks the actual tokenizer IDs:
+
+```sh
+python oracles/qwen35_cognitive_continuation_parity.py \
+  --model /absolute/path/to/model \
+  --output /absolute/path/to/cognitive-continuation.json
+cargo run --release -p echo-inference -- run-chat-template-parity \
+  /absolute/path/to/model /absolute/path/to/cognitive-continuation.json
+```
+
+The fixture schema is version 2; version 1 full-prompt fixtures remain supported.
+
 ## Real-model probes
 
-After building the release binary, the live four-request adapter flow can be
-run with:
+A probe is an explicitly invoked integration-check script that starts the
+Native process and runs real model inference through the TypeScript adapter.
+It records outputs, usage, timing and state observations as JSON. Run the pnpm
+commands in this section from the repository root after building the release
+binary and configuring the MLX libraries.
+
+`probe:real-model` exercises two sessions with two generations each: a model
+tool call, a supplied tool result, and a continuation that answers with the
+returned code. It checks tool-call parsing and arguments, result consumption,
+resident-prefix accounting, and reports state-length advancement.
+
+Its final argument selects `plain` (tool results only, the default) or
+`cognitive` (also include committed Memory/Emotion exchanges). The latter uses
+the Core handoff formatter before every Main turn, including the first turn of
+each session. Module responses and domain state are fixtures; Main generation
+uses the real model. Initial recall is empty, and continuation recall contains
+the observed lookup result. The sampling profile is `greedy` or `production`.
+
+For example:
 
 ```sh
 ECHO_NATIVE_LIBRARY_PATH=/absolute/path/to/mlx-c/build:/absolute/path/to/mlx/lib \
@@ -372,7 +415,8 @@ pnpm --filter @echo-chamber/native-inference-adapter probe:real-model \
   /absolute/path/to/echo-inference \
   /absolute/path/to/Qwen3.6-35B-A3B-MLX-4bit \
   42 \
-  greedy
+  greedy \
+  cognitive
 ```
 
 The cross-process recovery probe is:
@@ -417,7 +461,8 @@ pnpm --filter @echo-chamber/native-inference-adapter probe:continuous-batch \
   /absolute/path/to/Qwen3.6-35B-A3B-MLX-4bit
 ```
 
-The three-E.C.H.O. module probe exercises durable main lanes, ephemeral memory
+The three-E.C.H.O. module probe uses a synthetic one-call-per-observation tool
+loop to exercise durable main lanes, ephemeral memory
 and emotion lanes, exact pending-tool continuations, cancellation retry, and
 main-only publication. The 16K soak reuses that valid tool loop while sweeping
 active widths three through six:
@@ -445,6 +490,27 @@ pnpm --filter @echo-chamber/local-runtime probe:real-lifecycle \
   /absolute/path/to/Qwen3.6-35B-A3B-MLX-4bit \
   /absolute/path/to/empty-snapshot-directory
 ```
+
+## Real-model state integrity test
+
+The Rust `state_integrity` test compares every KV/GDN tensor after interrupted
+generation and retry, including cancellation of one row in a six-row batch.
+It freezes independent tensor references in temporary safetensors files so
+shared GPU buffers cannot hide a mutation. See the
+[validation contract](docs/architecture.md#validation) for the comparison
+conditions and coverage.
+
+Ordinary `cargo test` skips this model-dependent test. With the MLX environment
+configured, run it from `native/echo-inference`:
+
+```sh
+ECHO_NATIVE_TEST_MODEL=/absolute/path/to/model \
+  cargo test --release -p echo-inference --all-features state_integrity:: \
+  -- --ignored --nocapture --test-threads=1
+```
+
+Successful runs remove their temporary reference directory. Failed runs retain
+the directory printed in the log for diagnosis.
 
 ## Evidence
 

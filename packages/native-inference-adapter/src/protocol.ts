@@ -5,7 +5,7 @@ import type {
 } from '@echo-chamber/core/ports/model';
 
 /** Exact native wire contract required by this adapter. */
-export const NATIVE_INFERENCE_PROTOCOL_VERSION = 10;
+export const NATIVE_INFERENCE_PROTOCOL_VERSION = 11;
 
 /** Sampling controls admitted by the specialized native engine. */
 export interface NativeSamplingConfig {
@@ -44,6 +44,7 @@ type NativeWireInputItem =
     }
   | {
       type: 'tool_call';
+      origin?: 'runtime';
       call_id: string;
       tool_name: string;
       input: string;
@@ -312,6 +313,7 @@ export function toNativeWireInput(item: ModelInputItem): NativeWireInputItem {
   if (item.type === 'tool_call') {
     return {
       type: 'tool_call',
+      ...(item.origin === undefined ? {} : { origin: item.origin }),
       call_id: item.callId,
       tool_name: item.toolName,
       input: item.input,

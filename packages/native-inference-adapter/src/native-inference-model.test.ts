@@ -7,7 +7,10 @@ import type {
   EchoEvent,
   EchoEventPort,
 } from '@echo-chamber/core/ports/echo-event';
-import type { ModelRequest } from '@echo-chamber/core/ports/model';
+import type {
+  ModelInputItem,
+  ModelRequest,
+} from '@echo-chamber/core/ports/model';
 
 import { NativeInferenceClient } from './native-inference-client';
 import {
@@ -430,6 +433,115 @@ describe('NativeInferenceModel', () => {
         ],
       })
     );
+  });
+
+  it.each([
+    'missing pending result',
+    'wrong pending result',
+    'reordered pending results',
+    'duplicate pending results',
+    'unmarked call',
+    'missing runtime result',
+    'wrong runtime result',
+    'reused pending ID',
+    'duplicate runtime ID',
+    'extra result',
+    'new user message',
+  ])('rejects %s without advancing Native state', async (invalidCase) => {
+    const { model, transport } = setupModel();
+    const pendingCalls = invalidCase.endsWith('pending results')
+      ? [toolCall('main-call'), toolCall('second-main-call')]
+      : [toolCall('main-call')];
+    transport.onSend = autoResponder({ output: pendingCalls });
+    await model.openState({
+      persistence: 'durable',
+      snapshotRoot: '/state/rin',
+    });
+    const initial = await model.generate(request('main'));
+    const pending: ModelInputItem = {
+      type: 'tool_result',
+      callId: 'main-call',
+      output: 'done',
+    };
+    const runtimeCall: ModelInputItem = {
+      type: 'tool_call',
+      origin: 'runtime',
+      callId: 'cognitive:2:update_emotion',
+      toolName: 'update_emotion',
+      input: '{}',
+    };
+    const runtimeResult: ModelInputItem = {
+      type: 'tool_result',
+      callId: runtimeCall.callId,
+      output: '{"success":true}',
+    };
+    const cases: Record<string, ModelInputItem[]> = {
+      'reordered pending results': [
+        { ...pending, callId: 'second-main-call' },
+        pending,
+        runtimeCall,
+        runtimeResult,
+      ],
+      'duplicate pending results': [
+        pending,
+        pending,
+        runtimeCall,
+        runtimeResult,
+      ],
+      'missing pending result': [runtimeCall, runtimeResult],
+      'wrong pending result': [
+        { ...pending, callId: 'other' },
+        runtimeCall,
+        runtimeResult,
+      ],
+      'unmarked call': [
+        pending,
+        {
+          type: 'tool_call',
+          callId: runtimeCall.callId,
+          toolName: runtimeCall.toolName,
+          input: '{}',
+        },
+        runtimeResult,
+      ],
+      'missing runtime result': [pending, runtimeCall],
+      'wrong runtime result': [
+        pending,
+        runtimeCall,
+        { ...runtimeResult, callId: 'other' },
+      ],
+      'reused pending ID': [
+        pending,
+        { ...runtimeCall, callId: 'main-call' },
+        pending,
+      ],
+      'duplicate runtime ID': [
+        pending,
+        runtimeCall,
+        runtimeResult,
+        runtimeCall,
+        runtimeResult,
+      ],
+      'extra result': [
+        pending,
+        runtimeCall,
+        runtimeResult,
+        { ...runtimeResult, callId: 'orphan' },
+      ],
+      'new user message': [pending, { role: 'user', content: 'new query' }],
+    };
+    const state = model.state();
+    await expect(
+      model.generate({
+        input: cases[invalidCase] ?? [],
+        tools: [TOOL],
+        previousResponseToken: initial.responseToken,
+      })
+    ).rejects.toThrow('native continuation');
+    expect(
+      transport.commands.filter((command) => command.type === 'generate')
+    ).toHaveLength(1);
+    expect(model.state()).toEqual(state);
   });
 
   it('retains the tool schema serialization failure for diagnostics', async () => {

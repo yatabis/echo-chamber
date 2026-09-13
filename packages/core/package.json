@@ -19,6 +19,7 @@
     "./ports/web-page-reader": "./src/ports/web-page-reader.ts",
     "./ports/zenn": "./src/ports/zenn.ts",
     "./agent/tool-context": "./src/agent/tool-context.ts",
+    "./agent/cognitive-module-handoff": "./src/agent/cognitive-module-handoff.ts",
     "./agent/cognitive-module-orchestrator": "./src/agent/cognitive-module-orchestrator.ts",
     "./agent/cognitive-module-schema": "./src/agent/cognitive-module-schema.ts",
     "./agent/model-cognitive-module": "./src/agent/model-cognitive-module.ts",
