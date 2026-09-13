@@ -1,5 +1,7 @@
 # Cognitive Module 設計
 
+Main と Memory/Emotion の責務、入力履歴、結果の確定、失敗時の動作を定義する。Native backend への接続範囲と残る要件は、[Native runtime 統合](./native-runtime-integration-readiness.md)を参照する。
+
 ## 用語
 
 - **思考 session**: E.C.H.O. が起動してから `finish_thinking` または turn 上限で終了するまでの1回の思考。
@@ -8,7 +10,7 @@
 - **Memory Module**: Main に代わって記憶の想起と記銘を担う model。
 - **Emotion Module**: E.C.H.O. の現在の感情状態を更新する model。
 - **Cognitive Module**: Memory Module、Emotion Module、および両者を Main と接続する runtime 処理の総称。
-- **system-owned tool exchange**: Main が選んだ tool call ではなく、Cognitive Module の結果を通常の tool call / result と同じ形で Main の入力へ追加する履歴。
+- **system-owned tool exchange**: runtime が確定した Cognitive Module の結果を、tool call / result の形で Main の入力へ追加する履歴。
 
 ## 責務とインターフェース
 
@@ -57,7 +59,11 @@ update_emotion({ valence, arousal, labels })
 → { success: true }
 ```
 
-Main は検索された Memory と現在の Emotion を、この tool exchange から観測する。system-owned tool exchange であることは内部の call ID と Cognitive Module のログで識別する。
+Main は検索された Memory と現在の Emotion を、この tool exchange から観測する。
+
+runtime は domain commit 後、入力の tool call に `origin: "runtime"` を付ける。この入力専用属性が確定済みの system-owned tool exchange を示し、call ID と Cognitive Module のログで個々の処理を追跡する。モデル出力から `origin` を引き継がないことで、モデルが生成した call を確定済みの履歴として扱うことを防ぐ。
+
+[handoff formatter](../packages/core/src/agent/cognitive-module-handoff.ts)は provider に共通の入力を作る。Hosted adapter は `origin` を API へ送らず、Native adapter は Main の未解決 call に対する結果と、後続の確定済み exchange を区別するために使う。`update_emotion` はこの履歴の表現であり、Main の実行可能な tool catalog には追加しない。
 
 ### 思考 session の終了時
 
@@ -77,4 +83,4 @@ Memory Module と Emotion Module を最後に1回ずつ実行する。runtime �
 
 Memory / Emotion が共有する model と reasoning effort は、`EchoInstanceDefinition.cognitiveModules` に instance ごとに指定する。
 
-Cognitive Module の model event は Main と同じ payload policy で記録し、`cognitiveModule: memory | emotion` を追加する。Cognitive Module だけに適用する本文の redaction は行わない。
+Cognitive Module の model event は Main と同じ payload policy で記録し、`cognitiveModule: memory | emotion` を追加する。

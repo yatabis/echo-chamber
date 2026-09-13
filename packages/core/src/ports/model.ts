@@ -73,6 +73,14 @@ export interface ModelToolCall {
 }
 
 /**
+ * 入力履歴に含まれるtool call。runtimeが確定したexchangeだけに由来を付ける。
+ * モデル出力にはこの属性を認めず、adapterは生成結果から引き継がない。
+ */
+export interface ModelInputToolCall extends ModelToolCall {
+  origin?: 'runtime';
+}
+
+/**
  * tool 実行結果を次ターンへ返すための input item。
  */
 export interface ModelToolResult {
@@ -98,7 +106,8 @@ export type ModelOutputItem = ModelToolCall | ModelOutputMessage;
 /**
  * provider へ渡す input item の正規化表現。
  */
-export type ModelInputItem = ModelMessage | ModelToolCall | ModelToolResult;
+export type ModelInputItem =
+  ModelMessage | ModelInputToolCall | ModelToolResult;
 
 /**
  * provider 固有の usage を `core` で扱いやすい形に正規化した集計値。

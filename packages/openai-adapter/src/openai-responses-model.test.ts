@@ -113,6 +113,7 @@ describe('OpenAIResponsesModel', () => {
         },
         {
           type: 'tool_call',
+          origin: 'runtime',
           callId: 'call_123',
           toolName: 'think_deeply',
           input: '{"thought":"test"}',

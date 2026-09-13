@@ -1,0 +1,445 @@
+{
+  "schema_version": 2,
+  "chat_template_sha256": "e84f32a23fdda27689f868aa4a1a5621f41133e51a48d7f3efcbea2839574259",
+  "eos_token_id": 248046,
+  "cases": [
+    {
+      "name": "tool_then_cognitive",
+      "continuation": true,
+      "input": [
+        {
+          "type": "tool_result",
+          "call_id": "main",
+          "output": "done"
+        },
+        {
+          "type": "tool_call",
+          "origin": "runtime",
+          "call_id": "memory",
+          "tool_name": "search_memory",
+          "input": "{\"query\":\"予定の変更\"}"
+        },
+        {
+          "type": "tool_result",
+          "call_id": "memory",
+          "output": "{\"success\":true,\"results\":[{\"content\":\"予定は中止\"}]}"
+        },
+        {
+          "type": "tool_call",
+          "origin": "runtime",
+          "call_id": "emotion",
+          "tool_name": "update_emotion",
+          "input": "{\"valence\":0.2,\"arousal\":0.3,\"labels\":[\"calm\",\"確認\"]}"
+        },
+        {
+          "type": "tool_result",
+          "call_id": "emotion",
+          "output": "{\"success\":true}"
+        }
+      ],
+      "tools": [],
+      "rendered": "\n<|im_start|>user\n<tool_response>\ndone\n</tool_response><|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n<function=search_memory>\n<parameter=query>\n予定の変更\n</parameter>\n</function>\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\n{\"success\":true,\"results\":[{\"content\":\"予定は中止\"}]}\n</tool_response><|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n<function=update_emotion>\n<parameter=valence>\n0.2\n</parameter>\n<parameter=arousal>\n0.3\n</parameter>\n<parameter=labels>\n[\"calm\", \"確認\"]\n</parameter>\n</function>\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\n{\"success\":true}\n</tool_response><|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+      "token_ids": [
+        198, 248045, 846, 198, 248066, 198, 10128, 198, 248067, 248046, 198,
+        248045, 74455, 198, 248068, 271, 248069, 271, 248058, 198, 27, 1628,
+        93260, 18615, 29, 198, 27, 15704, 76478, 29, 198, 211657, 243076, 198,
+        510, 15704, 29, 198, 510, 1628, 29, 198, 248059, 248046, 198, 248045,
+        846, 198, 248066, 198, 4754, 5453, 763, 1802, 1288, 7821, 64331, 1733,
+        3147, 211657, 14876, 122716, 8934, 13587, 198, 248067, 248046, 198,
+        248045, 74455, 198, 248068, 271, 248069, 271, 248058, 198, 27, 1628, 28,
+        2309, 21805, 5770, 29, 198, 27, 15704, 84513, 738, 29, 198, 15, 13, 17,
+        198, 510, 15704, 29, 198, 27, 15704, 28, 277, 757, 278, 29, 198, 15, 13,
+        18, 198, 510, 15704, 29, 198, 27, 15704, 28, 16379, 29, 198, 1143, 5248,
+        76, 487, 328, 113780, 1293, 198, 510, 15704, 29, 198, 510, 1628, 29,
+        198, 248059, 248046, 198, 248045, 846, 198, 248066, 198, 4754, 5453,
+        763, 1802, 92, 198, 248067, 248046, 198, 248045, 74455, 198, 248068,
+        271, 248069, 271
+      ],
+      "prefix_input": [
+        {
+          "role": "user",
+          "content": "予定を確認してください。"
+        },
+        {
+          "type": "tool_call",
+          "call_id": "main",
+          "tool_name": "inspect_note",
+          "input": "{}"
+        }
+      ],
+      "prefix_tools": [
+        {
+          "name": "inspect_note",
+          "description": "Read one note.",
+          "input_schema": {
+            "type": "object",
+            "properties": {}
+          },
+          "strict": true
+        }
+      ],
+      "committed_rendered": "<|im_start|>system\n# Tools\n\nYou have access to the following functions:\n\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"inspect_note\", \"description\": \"Read one note.\", \"parameters\": {\"type\": \"object\", \"properties\": {}}, \"strict\": true}}\n</tools>\n\nIf you choose to call a function ONLY reply in the following format with NO suffix:\n\n<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n<parameter=example_parameter_2>\nThis is the value for the second parameter\nthat can span\nmultiple lines\n</parameter>\n</function>\n</tool_call>\n\n<IMPORTANT>\nReminder:\n- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags\n- Required parameters MUST be specified\n- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after\n- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls\n</IMPORTANT><|im_end|>\n<|im_start|>user\n予定を確認してください。<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n<function=inspect_note>\n</function>\n</tool_call><|im_end|>",
+      "full_rendered": "<|im_start|>system\n# Tools\n\nYou have access to the following functions:\n\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"inspect_note\", \"description\": \"Read one note.\", \"parameters\": {\"type\": \"object\", \"properties\": {}}, \"strict\": true}}\n</tools>\n\nIf you choose to call a function ONLY reply in the following format with NO suffix:\n\n<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n<parameter=example_parameter_2>\nThis is the value for the second parameter\nthat can span\nmultiple lines\n</parameter>\n</function>\n</tool_call>\n\n<IMPORTANT>\nReminder:\n- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags\n- Required parameters MUST be specified\n- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after\n- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls\n</IMPORTANT><|im_end|>\n<|im_start|>user\n予定を確認してください。<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n<function=inspect_note>\n</function>\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\ndone\n</tool_response><|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n<function=search_memory>\n<parameter=query>\n予定の変更\n</parameter>\n</function>\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\n{\"success\":true,\"results\":[{\"content\":\"予定は中止\"}]}\n</tool_response><|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n<function=update_emotion>\n<parameter=valence>\n0.2\n</parameter>\n<parameter=arousal>\n0.3\n</parameter>\n<parameter=labels>\n[\"calm\", \"確認\"]\n</parameter>\n</function>\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\n{\"success\":true}\n</tool_response><|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+      "committed_token_ids": [
+        248045, 8678, 198, 2, 13455, 271, 2523, 599, 2528, 310, 279, 2614, 5568,
+        25, 271, 27, 15449, 29, 198, 4754, 1267, 763, 328, 1628, 487, 328, 1628,
+        763, 5046, 591, 763, 328, 79221, 26331, 487, 328, 4532, 763, 328, 4274,
+        799, 5020, 10152, 328, 13390, 763, 5046, 1267, 763, 328, 1640, 487, 328,
+        12811, 763, 4535, 2069, 328, 6418, 763, 804, 3307, 198, 510, 15449, 29,
+        271, 2592, 488, 4992, 310, 1562, 264, 709, 25835, 9559, 303, 279, 2614,
+        3443, 440, 5486, 19900, 25, 271, 248058, 198, 27, 1628, 28, 8422, 8901,
+        1224, 29, 198, 27, 15704, 28, 8422, 24109, 62, 16, 29, 198, 927, 62, 16,
+        198, 510, 15704, 29, 198, 27, 15704, 28, 8422, 24109, 62, 17, 29, 198,
+        1919, 369, 279, 869, 364, 279, 2018, 5555, 198, 8761, 628, 9111, 198,
+        34493, 4965, 198, 510, 15704, 29, 198, 510, 1628, 29, 198, 248059, 271,
+        27, 95328, 29, 198, 92065, 25, 198, 12, 5534, 6526, 26834, 1732, 279,
+        5024, 3443, 25, 449, 8906, 361, 1628, 28, 1076, 1419, 1628, 29, 2424,
+        1902, 381, 23283, 2785, 220, 248058, 248059, 11535, 9212, 198, 12,
+        12296, 4868, 26834, 381, 5024, 198, 12, 1394, 1189, 3300, 9801, 31626,
+        364, 678, 709, 1562, 303, 5629, 3992, 54588, 279, 709, 1562, 11, 694,
+        4045, 1238, 198, 12, 1368, 1017, 369, 874, 709, 1562, 2420, 11, 4087,
+        279, 3296, 1040, 4472, 440, 678, 1428, 6337, 321, 635, 524, 3184, 279,
+        1156, 883, 709, 6526, 198, 510, 95328, 29, 248046, 198, 248045, 846,
+        198, 211657, 181399, 172808, 1710, 248046, 198, 248045, 74455, 198,
+        248068, 271, 248069, 271, 248058, 198, 27, 1628, 28, 79221, 26331, 29,
+        198, 510, 1628, 29, 198, 248059, 248046
+      ],
+      "full_token_ids": [
+        248045, 8678, 198, 2, 13455, 271, 2523, 599, 2528, 310, 279, 2614, 5568,
+        25, 271, 27, 15449, 29, 198, 4754, 1267, 763, 328, 1628, 487, 328, 1628,
+        763, 5046, 591, 763, 328, 79221, 26331, 487, 328, 4532, 763, 328, 4274,
+        799, 5020, 10152, 328, 13390, 763, 5046, 1267, 763, 328, 1640, 487, 328,
+        12811, 763, 4535, 2069, 328, 6418, 763, 804, 3307, 198, 510, 15449, 29,
+        271, 2592, 488, 4992, 310, 1562, 264, 709, 25835, 9559, 303, 279, 2614,
+        3443, 440, 5486, 19900, 25, 271, 248058, 198, 27, 1628, 28, 8422, 8901,
+        1224, 29, 198, 27, 15704, 28, 8422, 24109, 62, 16, 29, 198, 927, 62, 16,
+        198, 510, 15704, 29, 198, 27, 15704, 28, 8422, 24109, 62, 17, 29, 198,
+        1919, 369, 279, 869, 364, 279, 2018, 5555, 198, 8761, 628, 9111, 198,
+        34493, 4965, 198, 510, 15704, 29, 198, 510, 1628, 29, 198, 248059, 271,
+        27, 95328, 29, 198, 92065, 25, 198, 12, 5534, 6526, 26834, 1732, 279,
+        5024, 3443, 25, 449, 8906, 361, 1628, 28, 1076, 1419, 1628, 29, 2424,
+        1902, 381, 23283, 2785, 220, 248058, 248059, 11535, 9212, 198, 12,
+        12296, 4868, 26834, 381, 5024, 198, 12, 1394, 1189, 3300, 9801, 31626,
+        364, 678, 709, 1562, 303, 5629, 3992, 54588, 279, 709, 1562, 11, 694,
+        4045, 1238, 198, 12, 1368, 1017, 369, 874, 709, 1562, 2420, 11, 4087,
+        279, 3296, 1040, 4472, 440, 678, 1428, 6337, 321, 635, 524, 3184, 279,
+        1156, 883, 709, 6526, 198, 510, 95328, 29, 248046, 198, 248045, 846,
+        198, 211657, 181399, 172808, 1710, 248046, 198, 248045, 74455, 198,
+        248068, 271, 248069, 271, 248058, 198, 27, 1628, 28, 79221, 26331, 29,
+        198, 510, 1628, 29, 198, 248059, 248046, 198, 248045, 846, 198, 248066,
+        198, 10128, 198, 248067, 248046, 198, 248045, 74455, 198, 248068, 271,
+        248069, 271, 248058, 198, 27, 1628, 93260, 18615, 29, 198, 27, 15704,
+        76478, 29, 198, 211657, 243076, 198, 510, 15704, 29, 198, 510, 1628, 29,
+        198, 248059, 248046, 198, 248045, 846, 198, 248066, 198, 4754, 5453,
+        763, 1802, 1288, 7821, 64331, 1733, 3147, 211657, 14876, 122716, 8934,
+        13587, 198, 248067, 248046, 198, 248045, 74455, 198, 248068, 271,
+        248069, 271, 248058, 198, 27, 1628, 28, 2309, 21805, 5770, 29, 198, 27,
+        15704, 84513, 738, 29, 198, 15, 13, 17, 198, 510, 15704, 29, 198, 27,
+        15704, 28, 277, 757, 278, 29, 198, 15, 13, 18, 198, 510, 15704, 29, 198,
+        27, 15704, 28, 16379, 29, 198, 1143, 5248, 76, 487, 328, 113780, 1293,
+        198, 510, 15704, 29, 198, 510, 1628, 29, 198, 248059, 248046, 198,
+        248045, 846, 198, 248066, 198, 4754, 5453, 763, 1802, 92, 198, 248067,
+        248046, 198, 248045, 74455, 198, 248068, 271, 248069, 271
+      ]
+    },
+    {
+      "name": "tool_then_retry",
+      "continuation": true,
+      "input": [
+        {
+          "type": "tool_result",
+          "call_id": "main",
+          "output": "done"
+        }
+      ],
+      "tools": [],
+      "rendered": "\n<|im_start|>user\n<tool_response>\ndone\n</tool_response><|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+      "token_ids": [
+        198, 248045, 846, 198, 248066, 198, 10128, 198, 248067, 248046, 198,
+        248045, 74455, 198, 248068, 271, 248069, 271
+      ],
+      "prefix_input": [
+        {
+          "role": "user",
+          "content": "予定を確認してください。"
+        },
+        {
+          "type": "tool_call",
+          "call_id": "main",
+          "tool_name": "inspect_note",
+          "input": "{}"
+        }
+      ],
+      "prefix_tools": [
+        {
+          "name": "inspect_note",
+          "description": "Read one note.",
+          "input_schema": {
+            "type": "object",
+            "properties": {}
+          },
+          "strict": true
+        }
+      ],
+      "committed_rendered": "<|im_start|>system\n# Tools\n\nYou have access to the following functions:\n\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"inspect_note\", \"description\": \"Read one note.\", \"parameters\": {\"type\": \"object\", \"properties\": {}}, \"strict\": true}}\n</tools>\n\nIf you choose to call a function ONLY reply in the following format with NO suffix:\n\n<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n<parameter=example_parameter_2>\nThis is the value for the second parameter\nthat can span\nmultiple lines\n</parameter>\n</function>\n</tool_call>\n\n<IMPORTANT>\nReminder:\n- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags\n- Required parameters MUST be specified\n- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after\n- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls\n</IMPORTANT><|im_end|>\n<|im_start|>user\n予定を確認してください。<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n<function=inspect_note>\n</function>\n</tool_call><|im_end|>",
+      "full_rendered": "<|im_start|>system\n# Tools\n\nYou have access to the following functions:\n\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"inspect_note\", \"description\": \"Read one note.\", \"parameters\": {\"type\": \"object\", \"properties\": {}}, \"strict\": true}}\n</tools>\n\nIf you choose to call a function ONLY reply in the following format with NO suffix:\n\n<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n<parameter=example_parameter_2>\nThis is the value for the second parameter\nthat can span\nmultiple lines\n</parameter>\n</function>\n</tool_call>\n\n<IMPORTANT>\nReminder:\n- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags\n- Required parameters MUST be specified\n- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after\n- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls\n</IMPORTANT><|im_end|>\n<|im_start|>user\n予定を確認してください。<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n<function=inspect_note>\n</function>\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\ndone\n</tool_response><|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+      "committed_token_ids": [
+        248045, 8678, 198, 2, 13455, 271, 2523, 599, 2528, 310, 279, 2614, 5568,
+        25, 271, 27, 15449, 29, 198, 4754, 1267, 763, 328, 1628, 487, 328, 1628,
+        763, 5046, 591, 763, 328, 79221, 26331, 487, 328, 4532, 763, 328, 4274,
+        799, 5020, 10152, 328, 13390, 763, 5046, 1267, 763, 328, 1640, 487, 328,
+        12811, 763, 4535, 2069, 328, 6418, 763, 804, 3307, 198, 510, 15449, 29,
+        271, 2592, 488, 4992, 310, 1562, 264, 709, 25835, 9559, 303, 279, 2614,
+        3443, 440, 5486, 19900, 25, 271, 248058, 198, 27, 1628, 28, 8422, 8901,
+        1224, 29, 198, 27, 15704, 28, 8422, 24109, 62, 16, 29, 198, 927, 62, 16,
+        198, 510, 15704, 29, 198, 27, 15704, 28, 8422, 24109, 62, 17, 29, 198,
+        1919, 369, 279, 869, 364, 279, 2018, 5555, 198, 8761, 628, 9111, 198,
+        34493, 4965, 198, 510, 15704, 29, 198, 510, 1628, 29, 198, 248059, 271,
+        27, 95328, 29, 198, 92065, 25, 198, 12, 5534, 6526, 26834, 1732, 279,
+        5024, 3443, 25, 449, 8906, 361, 1628, 28, 1076, 1419, 1628, 29, 2424,
+        1902, 381, 23283, 2785, 220, 248058, 248059, 11535, 9212, 198, 12,
+        12296, 4868, 26834, 381, 5024, 198, 12, 1394, 1189, 3300, 9801, 31626,
+        364, 678, 709, 1562, 303, 5629, 3992, 54588, 279, 709, 1562, 11, 694,
+        4045, 1238, 198, 12, 1368, 1017, 369, 874, 709, 1562, 2420, 11, 4087,
+        279, 3296, 1040, 4472, 440, 678, 1428, 6337, 321, 635, 524, 3184, 279,
+        1156, 883, 709, 6526, 198, 510, 95328, 29, 248046, 198, 248045, 846,
+        198, 211657, 181399, 172808, 1710, 248046, 198, 248045, 74455, 198,
+        248068, 271, 248069, 271, 248058, 198, 27, 1628, 28, 79221, 26331, 29,
+        198, 510, 1628, 29, 198, 248059, 248046
+      ],
+      "full_token_ids": [
+        248045, 8678, 198, 2, 13455, 271, 2523, 599, 2528, 310, 279, 2614, 5568,
+        25, 271, 27, 15449, 29, 198, 4754, 1267, 763, 328, 1628, 487, 328, 1628,
+        763, 5046, 591, 763, 328, 79221, 26331, 487, 328, 4532, 763, 328, 4274,
+        799, 5020, 10152, 328, 13390, 763, 5046, 1267, 763, 328, 1640, 487, 328,
+        12811, 763, 4535, 2069, 328, 6418, 763, 804, 3307, 198, 510, 15449, 29,
+        271, 2592, 488, 4992, 310, 1562, 264, 709, 25835, 9559, 303, 279, 2614,
+        3443, 440, 5486, 19900, 25, 271, 248058, 198, 27, 1628, 28, 8422, 8901,
+        1224, 29, 198, 27, 15704, 28, 8422, 24109, 62, 16, 29, 198, 927, 62, 16,
+        198, 510, 15704, 29, 198, 27, 15704, 28, 8422, 24109, 62, 17, 29, 198,
+        1919, 369, 279, 869, 364, 279, 2018, 5555, 198, 8761, 628, 9111, 198,
+        34493, 4965, 198, 510, 15704, 29, 198, 510, 1628, 29, 198, 248059, 271,
+        27, 95328, 29, 198, 92065, 25, 198, 12, 5534, 6526, 26834, 1732, 279,
+        5024, 3443, 25, 449, 8906, 361, 1628, 28, 1076, 1419, 1628, 29, 2424,
+        1902, 381, 23283, 2785, 220, 248058, 248059, 11535, 9212, 198, 12,
+        12296, 4868, 26834, 381, 5024, 198, 12, 1394, 1189, 3300, 9801, 31626,
+        364, 678, 709, 1562, 303, 5629, 3992, 54588, 279, 709, 1562, 11, 694,
+        4045, 1238, 198, 12, 1368, 1017, 369, 874, 709, 1562, 2420, 11, 4087,
+        279, 3296, 1040, 4472, 440, 678, 1428, 6337, 321, 635, 524, 3184, 279,
+        1156, 883, 709, 6526, 198, 510, 95328, 29, 248046, 198, 248045, 846,
+        198, 211657, 181399, 172808, 1710, 248046, 198, 248045, 74455, 198,
+        248068, 271, 248069, 271, 248058, 198, 27, 1628, 28, 79221, 26331, 29,
+        198, 510, 1628, 29, 198, 248059, 248046, 198, 248045, 846, 198, 248066,
+        198, 10128, 198, 248067, 248046, 198, 248045, 74455, 198, 248068, 271,
+        248069, 271
+      ]
+    },
+    {
+      "name": "message_then_cognitive",
+      "continuation": true,
+      "input": [
+        {
+          "type": "tool_call",
+          "origin": "runtime",
+          "call_id": "memory",
+          "tool_name": "search_memory",
+          "input": "{\"query\":\"予定の変更\"}"
+        },
+        {
+          "type": "tool_result",
+          "call_id": "memory",
+          "output": "{\"success\":true,\"results\":[{\"content\":\"予定は中止\"}]}"
+        },
+        {
+          "type": "tool_call",
+          "origin": "runtime",
+          "call_id": "emotion",
+          "tool_name": "update_emotion",
+          "input": "{\"valence\":0.2,\"arousal\":0.3,\"labels\":[\"calm\",\"確認\"]}"
+        },
+        {
+          "type": "tool_result",
+          "call_id": "emotion",
+          "output": "{\"success\":true}"
+        }
+      ],
+      "tools": [],
+      "rendered": "\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n<function=search_memory>\n<parameter=query>\n予定の変更\n</parameter>\n</function>\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\n{\"success\":true,\"results\":[{\"content\":\"予定は中止\"}]}\n</tool_response><|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n<function=update_emotion>\n<parameter=valence>\n0.2\n</parameter>\n<parameter=arousal>\n0.3\n</parameter>\n<parameter=labels>\n[\"calm\", \"確認\"]\n</parameter>\n</function>\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\n{\"success\":true}\n</tool_response><|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+      "token_ids": [
+        198, 248045, 74455, 198, 248068, 271, 248069, 271, 248058, 198, 27,
+        1628, 93260, 18615, 29, 198, 27, 15704, 76478, 29, 198, 211657, 243076,
+        198, 510, 15704, 29, 198, 510, 1628, 29, 198, 248059, 248046, 198,
+        248045, 846, 198, 248066, 198, 4754, 5453, 763, 1802, 1288, 7821, 64331,
+        1733, 3147, 211657, 14876, 122716, 8934, 13587, 198, 248067, 248046,
+        198, 248045, 74455, 198, 248068, 271, 248069, 271, 248058, 198, 27,
+        1628, 28, 2309, 21805, 5770, 29, 198, 27, 15704, 84513, 738, 29, 198,
+        15, 13, 17, 198, 510, 15704, 29, 198, 27, 15704, 28, 277, 757, 278, 29,
+        198, 15, 13, 18, 198, 510, 15704, 29, 198, 27, 15704, 28, 16379, 29,
+        198, 1143, 5248, 76, 487, 328, 113780, 1293, 198, 510, 15704, 29, 198,
+        510, 1628, 29, 198, 248059, 248046, 198, 248045, 846, 198, 248066, 198,
+        4754, 5453, 763, 1802, 92, 198, 248067, 248046, 198, 248045, 74455, 198,
+        248068, 271, 248069, 271
+      ],
+      "prefix_input": [
+        {
+          "role": "user",
+          "content": "予定を確認してください。"
+        },
+        {
+          "role": "assistant",
+          "content": "内容を確認します。"
+        }
+      ],
+      "prefix_tools": [
+        {
+          "name": "inspect_note",
+          "description": "Read one note.",
+          "input_schema": {
+            "type": "object",
+            "properties": {}
+          },
+          "strict": true
+        }
+      ],
+      "committed_rendered": "<|im_start|>system\n# Tools\n\nYou have access to the following functions:\n\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"inspect_note\", \"description\": \"Read one note.\", \"parameters\": {\"type\": \"object\", \"properties\": {}}, \"strict\": true}}\n</tools>\n\nIf you choose to call a function ONLY reply in the following format with NO suffix:\n\n<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n<parameter=example_parameter_2>\nThis is the value for the second parameter\nthat can span\nmultiple lines\n</parameter>\n</function>\n</tool_call>\n\n<IMPORTANT>\nReminder:\n- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags\n- Required parameters MUST be specified\n- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after\n- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls\n</IMPORTANT><|im_end|>\n<|im_start|>user\n予定を確認してください。<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n内容を確認します。<|im_end|>",
+      "full_rendered": "<|im_start|>system\n# Tools\n\nYou have access to the following functions:\n\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"inspect_note\", \"description\": \"Read one note.\", \"parameters\": {\"type\": \"object\", \"properties\": {}}, \"strict\": true}}\n</tools>\n\nIf you choose to call a function ONLY reply in the following format with NO suffix:\n\n<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n<parameter=example_parameter_2>\nThis is the value for the second parameter\nthat can span\nmultiple lines\n</parameter>\n</function>\n</tool_call>\n\n<IMPORTANT>\nReminder:\n- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags\n- Required parameters MUST be specified\n- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after\n- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls\n</IMPORTANT><|im_end|>\n<|im_start|>user\n予定を確認してください。<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n内容を確認します。<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n<function=search_memory>\n<parameter=query>\n予定の変更\n</parameter>\n</function>\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\n{\"success\":true,\"results\":[{\"content\":\"予定は中止\"}]}\n</tool_response><|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<tool_call>\n<function=update_emotion>\n<parameter=valence>\n0.2\n</parameter>\n<parameter=arousal>\n0.3\n</parameter>\n<parameter=labels>\n[\"calm\", \"確認\"]\n</parameter>\n</function>\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\n{\"success\":true}\n</tool_response><|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+      "committed_token_ids": [
+        248045, 8678, 198, 2, 13455, 271, 2523, 599, 2528, 310, 279, 2614, 5568,
+        25, 271, 27, 15449, 29, 198, 4754, 1267, 763, 328, 1628, 487, 328, 1628,
+        763, 5046, 591, 763, 328, 79221, 26331, 487, 328, 4532, 763, 328, 4274,
+        799, 5020, 10152, 328, 13390, 763, 5046, 1267, 763, 328, 1640, 487, 328,
+        12811, 763, 4535, 2069, 328, 6418, 763, 804, 3307, 198, 510, 15449, 29,
+        271, 2592, 488, 4992, 310, 1562, 264, 709, 25835, 9559, 303, 279, 2614,
+        3443, 440, 5486, 19900, 25, 271, 248058, 198, 27, 1628, 28, 8422, 8901,
+        1224, 29, 198, 27, 15704, 28, 8422, 24109, 62, 16, 29, 198, 927, 62, 16,
+        198, 510, 15704, 29, 198, 27, 15704, 28, 8422, 24109, 62, 17, 29, 198,
+        1919, 369, 279, 869, 364, 279, 2018, 5555, 198, 8761, 628, 9111, 198,
+        34493, 4965, 198, 510, 15704, 29, 198, 510, 1628, 29, 198, 248059, 271,
+        27, 95328, 29, 198, 92065, 25, 198, 12, 5534, 6526, 26834, 1732, 279,
+        5024, 3443, 25, 449, 8906, 361, 1628, 28, 1076, 1419, 1628, 29, 2424,
+        1902, 381, 23283, 2785, 220, 248058, 248059, 11535, 9212, 198, 12,
+        12296, 4868, 26834, 381, 5024, 198, 12, 1394, 1189, 3300, 9801, 31626,
+        364, 678, 709, 1562, 303, 5629, 3992, 54588, 279, 709, 1562, 11, 694,
+        4045, 1238, 198, 12, 1368, 1017, 369, 874, 709, 1562, 2420, 11, 4087,
+        279, 3296, 1040, 4472, 440, 678, 1428, 6337, 321, 635, 524, 3184, 279,
+        1156, 883, 709, 6526, 198, 510, 95328, 29, 248046, 198, 248045, 846,
+        198, 211657, 181399, 172808, 1710, 248046, 198, 248045, 74455, 198,
+        248068, 271, 248069, 271, 96621, 181399, 74688, 1710, 248046
+      ],
+      "full_token_ids": [
+        248045, 8678, 198, 2, 13455, 271, 2523, 599, 2528, 310, 279, 2614, 5568,
+        25, 271, 27, 15449, 29, 198, 4754, 1267, 763, 328, 1628, 487, 328, 1628,
+        763, 5046, 591, 763, 328, 79221, 26331, 487, 328, 4532, 763, 328, 4274,
+        799, 5020, 10152, 328, 13390, 763, 5046, 1267, 763, 328, 1640, 487, 328,
+        12811, 763, 4535, 2069, 328, 6418, 763, 804, 3307, 198, 510, 15449, 29,
+        271, 2592, 488, 4992, 310, 1562, 264, 709, 25835, 9559, 303, 279, 2614,
+        3443, 440, 5486, 19900, 25, 271, 248058, 198, 27, 1628, 28, 8422, 8901,
+        1224, 29, 198, 27, 15704, 28, 8422, 24109, 62, 16, 29, 198, 927, 62, 16,
+        198, 510, 15704, 29, 198, 27, 15704, 28, 8422, 24109, 62, 17, 29, 198,
+        1919, 369, 279, 869, 364, 279, 2018, 5555, 198, 8761, 628, 9111, 198,
+        34493, 4965, 198, 510, 15704, 29, 198, 510, 1628, 29, 198, 248059, 271,
+        27, 95328, 29, 198, 92065, 25, 198, 12, 5534, 6526, 26834, 1732, 279,
+        5024, 3443, 25, 449, 8906, 361, 1628, 28, 1076, 1419, 1628, 29, 2424,
+        1902, 381, 23283, 2785, 220, 248058, 248059, 11535, 9212, 198, 12,
+        12296, 4868, 26834, 381, 5024, 198, 12, 1394, 1189, 3300, 9801, 31626,
+        364, 678, 709, 1562, 303, 5629, 3992, 54588, 279, 709, 1562, 11, 694,
+        4045, 1238, 198, 12, 1368, 1017, 369, 874, 709, 1562, 2420, 11, 4087,
+        279, 3296, 1040, 4472, 440, 678, 1428, 6337, 321, 635, 524, 3184, 279,
+        1156, 883, 709, 6526, 198, 510, 95328, 29, 248046, 198, 248045, 846,
+        198, 211657, 181399, 172808, 1710, 248046, 198, 248045, 74455, 198,
+        248068, 271, 248069, 271, 96621, 181399, 74688, 1710, 248046, 198,
+        248045, 74455, 198, 248068, 271, 248069, 271, 248058, 198, 27, 1628,
+        93260, 18615, 29, 198, 27, 15704, 76478, 29, 198, 211657, 243076, 198,
+        510, 15704, 29, 198, 510, 1628, 29, 198, 248059, 248046, 198, 248045,
+        846, 198, 248066, 198, 4754, 5453, 763, 1802, 1288, 7821, 64331, 1733,
+        3147, 211657, 14876, 122716, 8934, 13587, 198, 248067, 248046, 198,
+        248045, 74455, 198, 248068, 271, 248069, 271, 248058, 198, 27, 1628, 28,
+        2309, 21805, 5770, 29, 198, 27, 15704, 84513, 738, 29, 198, 15, 13, 17,
+        198, 510, 15704, 29, 198, 27, 15704, 28, 277, 757, 278, 29, 198, 15, 13,
+        18, 198, 510, 15704, 29, 198, 27, 15704, 28, 16379, 29, 198, 1143, 5248,
+        76, 487, 328, 113780, 1293, 198, 510, 15704, 29, 198, 510, 1628, 29,
+        198, 248059, 248046, 198, 248045, 846, 198, 248066, 198, 4754, 5453,
+        763, 1802, 92, 198, 248067, 248046, 198, 248045, 74455, 198, 248068,
+        271, 248069, 271
+      ]
+    },
+    {
+      "name": "message_then_retry",
+      "continuation": true,
+      "input": [],
+      "tools": [],
+      "rendered": "\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+      "token_ids": [198, 248045, 74455, 198, 248068, 271, 248069, 271],
+      "prefix_input": [
+        {
+          "role": "user",
+          "content": "予定を確認してください。"
+        },
+        {
+          "role": "assistant",
+          "content": "内容を確認します。"
+        }
+      ],
+      "prefix_tools": [
+        {
+          "name": "inspect_note",
+          "description": "Read one note.",
+          "input_schema": {
+            "type": "object",
+            "properties": {}
+          },
+          "strict": true
+        }
+      ],
+      "committed_rendered": "<|im_start|>system\n# Tools\n\nYou have access to the following functions:\n\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"inspect_note\", \"description\": \"Read one note.\", \"parameters\": {\"type\": \"object\", \"properties\": {}}, \"strict\": true}}\n</tools>\n\nIf you choose to call a function ONLY reply in the following format with NO suffix:\n\n<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n<parameter=example_parameter_2>\nThis is the value for the second parameter\nthat can span\nmultiple lines\n</parameter>\n</function>\n</tool_call>\n\n<IMPORTANT>\nReminder:\n- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags\n- Required parameters MUST be specified\n- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after\n- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls\n</IMPORTANT><|im_end|>\n<|im_start|>user\n予定を確認してください。<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n内容を確認します。<|im_end|>",
+      "full_rendered": "<|im_start|>system\n# Tools\n\nYou have access to the following functions:\n\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"inspect_note\", \"description\": \"Read one note.\", \"parameters\": {\"type\": \"object\", \"properties\": {}}, \"strict\": true}}\n</tools>\n\nIf you choose to call a function ONLY reply in the following format with NO suffix:\n\n<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n<parameter=example_parameter_2>\nThis is the value for the second parameter\nthat can span\nmultiple lines\n</parameter>\n</function>\n</tool_call>\n\n<IMPORTANT>\nReminder:\n- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags\n- Required parameters MUST be specified\n- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after\n- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls\n</IMPORTANT><|im_end|>\n<|im_start|>user\n予定を確認してください。<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n内容を確認します。<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+      "committed_token_ids": [
+        248045, 8678, 198, 2, 13455, 271, 2523, 599, 2528, 310, 279, 2614, 5568,
+        25, 271, 27, 15449, 29, 198, 4754, 1267, 763, 328, 1628, 487, 328, 1628,
+        763, 5046, 591, 763, 328, 79221, 26331, 487, 328, 4532, 763, 328, 4274,
+        799, 5020, 10152, 328, 13390, 763, 5046, 1267, 763, 328, 1640, 487, 328,
+        12811, 763, 4535, 2069, 328, 6418, 763, 804, 3307, 198, 510, 15449, 29,
+        271, 2592, 488, 4992, 310, 1562, 264, 709, 25835, 9559, 303, 279, 2614,
+        3443, 440, 5486, 19900, 25, 271, 248058, 198, 27, 1628, 28, 8422, 8901,
+        1224, 29, 198, 27, 15704, 28, 8422, 24109, 62, 16, 29, 198, 927, 62, 16,
+        198, 510, 15704, 29, 198, 27, 15704, 28, 8422, 24109, 62, 17, 29, 198,
+        1919, 369, 279, 869, 364, 279, 2018, 5555, 198, 8761, 628, 9111, 198,
+        34493, 4965, 198, 510, 15704, 29, 198, 510, 1628, 29, 198, 248059, 271,
+        27, 95328, 29, 198, 92065, 25, 198, 12, 5534, 6526, 26834, 1732, 279,
+        5024, 3443, 25, 449, 8906, 361, 1628, 28, 1076, 1419, 1628, 29, 2424,
+        1902, 381, 23283, 2785, 220, 248058, 248059, 11535, 9212, 198, 12,
+        12296, 4868, 26834, 381, 5024, 198, 12, 1394, 1189, 3300, 9801, 31626,
+        364, 678, 709, 1562, 303, 5629, 3992, 54588, 279, 709, 1562, 11, 694,
+        4045, 1238, 198, 12, 1368, 1017, 369, 874, 709, 1562, 2420, 11, 4087,
+        279, 3296, 1040, 4472, 440, 678, 1428, 6337, 321, 635, 524, 3184, 279,
+        1156, 883, 709, 6526, 198, 510, 95328, 29, 248046, 198, 248045, 846,
+        198, 211657, 181399, 172808, 1710, 248046, 198, 248045, 74455, 198,
+        248068, 271, 248069, 271, 96621, 181399, 74688, 1710, 248046
+      ],
+      "full_token_ids": [
+        248045, 8678, 198, 2, 13455, 271, 2523, 599, 2528, 310, 279, 2614, 5568,
+        25, 271, 27, 15449, 29, 198, 4754, 1267, 763, 328, 1628, 487, 328, 1628,
+        763, 5046, 591, 763, 328, 79221, 26331, 487, 328, 4532, 763, 328, 4274,
+        799, 5020, 10152, 328, 13390, 763, 5046, 1267, 763, 328, 1640, 487, 328,
+        12811, 763, 4535, 2069, 328, 6418, 763, 804, 3307, 198, 510, 15449, 29,
+        271, 2592, 488, 4992, 310, 1562, 264, 709, 25835, 9559, 303, 279, 2614,
+        3443, 440, 5486, 19900, 25, 271, 248058, 198, 27, 1628, 28, 8422, 8901,
+        1224, 29, 198, 27, 15704, 28, 8422, 24109, 62, 16, 29, 198, 927, 62, 16,
+        198, 510, 15704, 29, 198, 27, 15704, 28, 8422, 24109, 62, 17, 29, 198,
+        1919, 369, 279, 869, 364, 279, 2018, 5555, 198, 8761, 628, 9111, 198,
+        34493, 4965, 198, 510, 15704, 29, 198, 510, 1628, 29, 198, 248059, 271,
+        27, 95328, 29, 198, 92065, 25, 198, 12, 5534, 6526, 26834, 1732, 279,
+        5024, 3443, 25, 449, 8906, 361, 1628, 28, 1076, 1419, 1628, 29, 2424,
+        1902, 381, 23283, 2785, 220, 248058, 248059, 11535, 9212, 198, 12,
+        12296, 4868, 26834, 381, 5024, 198, 12, 1394, 1189, 3300, 9801, 31626,
+        364, 678, 709, 1562, 303, 5629, 3992, 54588, 279, 709, 1562, 11, 694,
+        4045, 1238, 198, 12, 1368, 1017, 369, 874, 709, 1562, 2420, 11, 4087,
+        279, 3296, 1040, 4472, 440, 678, 1428, 6337, 321, 635, 524, 3184, 279,
+        1156, 883, 709, 6526, 198, 510, 95328, 29, 248046, 198, 248045, 846,
+        198, 211657, 181399, 172808, 1710, 248046, 198, 248045, 74455, 198,
+        248068, 271, 248069, 271, 96621, 181399, 74688, 1710, 248046, 198,
+        248045, 74455, 198, 248068, 271, 248069, 271
+      ]
+    }
+  ]
+}

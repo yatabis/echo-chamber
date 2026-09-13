@@ -24,7 +24,7 @@ use super::runtime::{
 use super::sampling::SamplingConfig;
 use super::tool_output::{EchoOutputItem, parse_qwen_output_with_tools};
 
-const PROTOCOL_VERSION: u32 = 10;
+const PROTOCOL_VERSION: u32 = 11;
 
 /// Admission and backpressure limits for the dedicated local stdio server.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

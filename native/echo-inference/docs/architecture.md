@@ -1,17 +1,16 @@
 # Native inference architecture
 
-## Status
+## Scope
 
-This is the current implementation boundary for E.C.H.O. Chamber's local
-Qwen3.5-family MoE inference path. The primary admitted artifact is
-Qwen3.6-35B-A3B-MLX-4bit. The numerical model, resident execution, composite
-KV/GDN state, variable-width continuous batching, atomic durable publication,
-protocol-v10 adapter, and local multi-module lifecycle are implemented.
+This document defines component ownership, request transitions, transaction
+boundaries and durable state for E.C.H.O. Chamber's local Qwen3.5-family MoE
+inference path. The primary admitted artifact is Qwen3.6-35B-A3B-MLX-4bit.
 
-Dated reports under `../evidence/` record the exact numerical and performance
-conditions tested at each milestone. Some reports predate this state design
-and use older protocol terminology; they are evidence of those runs, not the
-current contract.
+Build and diagnostic commands are in the [README](../README.md). Application
+integration, including Cognitive module activation and domain storage, is
+tracked in [Native runtime integration](../../../docs/native-runtime-integration-readiness.md).
+The [evidence archive](../evidence/README.md) records the conditions of numerical
+and performance measurements.
 
 ## Repository and component boundaries
 
@@ -29,7 +28,7 @@ harness evolve together, but Cargo remains independent from pnpm.
   executes the model, owns composite KV/GDN state, renders the admitted chat
   template, parses Qwen tool output, persists current state, and serves the
   local NDJSON protocol.
-- `@echo-chamber/native-inference-adapter` maps protocol version 10 to the
+- `@echo-chamber/native-inference-adapter` maps protocol version 11 to the
   provider-neutral `ModelPort`. It owns only process-local continuation
   capability and lifecycle metadata, never model tensors.
 - `@echo-chamber/local-runtime` owns one native child process, one stable
@@ -37,17 +36,13 @@ harness evolve together, but Cargo remains independent from pnpm.
   existence, per-state-lane exclusion, and main-state snapshotting at
   thinking-session boundaries.
 
-There is deliberately no generic backend registry, interchangeable model
-plugin layer, OpenAI-compatible local server, or JavaScript model runtime in
-this path.
-
 ## Process and request flow
 
 ```text
-ThinkingEngine session
-  -> LocalNativeInferenceRuntime
-     -> stable NativeInferenceModel for one state lane
-        -> protocol-v10 command over NDJSON
+LocalNativeInferenceRuntime.runThinkingSession(instance, callback)
+  -> session callback receives the instance's Native models
+     -> NativeInferenceModel.generate() for one state lane
+        -> protocol-v11 command over NDJSON
            -> one resident Rust model owner
               -> exclusive state transaction
                  -> variable-width MLX/Metal execution
@@ -71,30 +66,24 @@ The batch runtime left-pads unequal full-attention KV rows to one append
 offset, supplies per-row RoPE offsets and an explicit padding/causal mask,
 concatenates GDN state without a token-axis pad, and splits every row back into
 one compact independently owned state. Sampling slices model logits per row
-and applies the existing production sampler with that request's own seed and
-generated-output presence history. Official MLX-LM equal- and unequal-cache
-oracles, co-tenant replacement, row permutation, split/remerge continuation,
-join/leave/cancel transactions, EOS and length completion, and sampled tool
-continuations all passed the bounded gates.
+and applies the production sampler with that request's own seed and
+generated-output presence history.
 
 Different batch widths are not bit-exact because floating-point model execution
 depends on shape; the official MLX-LM path behaves the same way. Cross-shape
 identity is therefore not an admission invariant. Within a fixed shape, moving
 or replacing another row must leave the request's tokens and complete KV/GDN
-state exactly unchanged. Width six passed the official full-model oracle,
-production-sampler isolation, and a 6-to-1 shrink gate. The integrated stdio
-path additionally passed six-row admission, late joining, independent EOS and
-length departure, cancellation rollback with survivor commit, retry from the
-preceding commit, and exact per-lane prefix/state accounting. Context-length
-bucketing and the final admission choice between widths three through six
-remain workload policy rather than model-state architecture.
+state exactly unchanged. Late joining, EOS/length departure and cancellation
+must preserve the surviving rows' state and sampling ownership. Context-length
+bucketing and narrower admission widths depend on workload latency and
+fairness requirements.
 
 Six admitted rows mean six independently owned state lanes. Each E.C.H.O.
-existence currently reserves a durable `main` lane and process-local `memory`
-and `emotion` lanes. The two auxiliary lanes may run together after a main
-boundary, but they cannot snapshot or mutate the main lane. Their results are
-integrated by the main thought path; memory and emotion do not consume each
-other's same-turn output.
+existence can open a durable `main` lane and process-local `memory` and
+`emotion` lanes. The auxiliary lanes can generate concurrently, and only
+`main` can snapshot. The Cognitive coordinator determines when to run modules
+and how to pass their committed results to Main; the engine owns each lane's
+model state independently of that application policy.
 
 ## Composite state invariant
 
@@ -142,28 +131,23 @@ attention state, processes a complete prompt, and commits the result.
 ### `continuation`
 
 The instance must have state. The runtime reuses the complete current KV/GDN
-payload and processes only the newly encoded suffix. The current admitted chat
-path limits this suffix to tool-result items, because ordinary user/developer
-history can cause Qwen's template to rewrite earlier thinking and is not
-necessarily append-only.
+payload and processes only the newly encoded suffix. The admitted chat suffix
+contains the ordered results for Main's pending calls, followed optionally by
+complete runtime-owned tool call/result pairs. With no pending call, an empty
+retry or complete runtime exchanges are admitted. Ordinary user/developer or
+assistant history still requires `new_session`, because it can cause Qwen's
+template to rewrite earlier thinking and is not necessarily append-only.
 
 Production completions always advance a Qwen end-of-message token into state.
-Consequently a tool-result continuation can encode only the new Qwen tool
-envelope; it does not need the preceding text or a separately persisted full
-token sequence.
+Consequently continuation can encode only the new Qwen envelopes; it does not
+need the preceding text or a separately persisted full token sequence.
 
-This restriction makes the auxiliary-module boundary explicit. A memory or
-emotion invocation must finish with one valid module-update tool call. The
-runtime commits that closed tool-call state and retains its call ID in the
-TypeScript control flow. The next observation arrives as the result of that
-exact pending call, followed by the instruction for the next update call.
-Thus the auxiliary module is a one-call-per-observation lightweight tool loop,
-not a sequence of unrelated plain assistant messages. Appending a fabricated
-tool result after a normal text response is not an admitted continuation even
-though it is mechanically encodable. The adapter retains the ordered pending
-call IDs alongside its process-local response capability and rejects missing,
-reordered, mismatched, or non-tool-result continuation input before sending a
-native command.
+Runtime calls carry input-only `origin: "runtime"`, assigned after their
+Cognitive phase commits. Model output cannot provide this provenance. Both
+the adapter and Rust renderer reject unmarked calls, incomplete or mismatched
+pairs, and duplicate IDs within the suffix. The adapter additionally requires
+the exact pending Main result IDs, count and order before runtime exchanges.
+These resolved exchanges are input history and do not add executable tools.
 
 ### `new_session`
 
@@ -187,6 +171,11 @@ is the signal; its string contents are intentionally opaque and are not
 compared with a durable cursor. It is never stored in safetensors. After a
 restart, restored state exists but no live response token does, so the first
 request is `new_session`.
+
+Tool-output parsing uses the committed session tool catalog to preserve
+argument types. Continuations reuse that catalog even when no tool definitions
+are supplied. The server updates it only when generation commits, retains it
+on failure or cancellation, and clears it when a new session has no tools.
 
 ## Generation and transaction boundaries
 
@@ -263,14 +252,14 @@ complete file, the new complete file, or an ignored managed staging remainder.
 The startup cleanup preserves unknown files. Legacy roots require an explicit
 migration or archive operation rather than silent deletion.
 
-The restart contract is intentionally session-boundary recovery. The local
-runtime snapshots dirty state after one complete `ThinkingEngine.think()`
-invocation and on shutdown. If a later tool/session action fails after an
+The restart contract is session-boundary recovery. The local runtime snapshots
+dirty state when the callback passed to `runThinkingSession` settles and on
+shutdown. If a later tool/session action fails after an
 earlier model request committed, that earlier current state is still
 snapshotted. A process crash can lose commits made since the last successful
 snapshot; resuming in the middle of that thinking session is unsupported.
 
-## Protocol version 10
+## Protocol version 11
 
 The local child-process protocol accepts only:
 
@@ -325,12 +314,12 @@ quantized language head. Static weights are bound once into typed handles.
 Request-local attention storage grows in capacity blocks and is compacted to
 the exact logical state at commit.
 
-Batch-one decode uses specialized GDN and MoE Metal paths where retained
-evidence showed dispatch and graph-construction overhead mattered. The fused
+Batch-one decode uses specialized GDN and MoE Metal paths to reduce dispatch
+and graph-construction overhead. The fused
 router preserves MLX's BF16 softmax and selection semantics while retaining
 the 256-way intermediate inside threadgroup memory. Generic shapes and prefill
-remain on MLX operations. Numerical parity, not approximate similarity, is the
-admission rule for the retained oracle fixtures.
+remain on MLX operations. Numerical changes must satisfy the official-oracle
+comparison for the affected operation and execution shape.
 
 The production sampler follows the admitted Rapid-MLX operation order:
 generated-output-only presence penalty, log-softmax, top-p, top-k,
@@ -338,26 +327,29 @@ temperature, and categorical sampling with a request-local MLX key. E.C.H.O.'s
 current profile is temperature `0.7`, top-p `0.8`, top-k `20`, neutral min-p
 and repetition penalty, and presence penalty `1.5`.
 
-## Validation boundary and remaining work
+## Validation
 
 Unit tests cover state ownership, rollback, transition mapping, protocol
 validation, fixed-path publication metadata, owner locking, staging cleanup,
 adapter cancellation, length completion handling, and local lifecycle
-coordination. MLX-linked Rust tests cover the existing operator and numerical
+coordination. MLX-linked Rust tests cover operator and numerical
 fixtures. Real-model probes cover the full adapter flow, process restart,
 continuous membership, the three-module state-lane contract, and six resident
-16K states; they must be rerun whenever the durable format, finish semantics,
-chat continuation, or batch scheduler changes.
+16K states. Rerun the relevant probes when changing the durable format, finish
+semantics, chat continuation or batch scheduler. The
+[README](../README.md#real-model-probes) documents each probe's purpose and
+command. Synthetic module tool loops validate lane ownership; the actual
+Cognitive activation lifecycle and domain storage require application-level
+tests.
 
-Still outside the admitted production boundary:
+## Supported boundary
 
-- partial-tool-call rollback;
-- recovery in the middle of one thinking session;
-- multiple simultaneous native owners for one instance directory;
-- arbitrary Qwen chat-template changes or vision input;
-- Qwen3.5-122B-A10B and REAP-pruned model admission;
-- E.C.H.O. application orchestration for memory/emotion prompts, tools, and
-  domain persistence;
-- workload-derived admission and context-length bucketing policy;
-- proof that every broader prompt, context length, and thermal state retains
-  the earlier performance envelope.
+- Rollback covers a complete request; selective rollback of a partial tool
+  call is unsupported.
+- Recovery starts from the last published session boundary, with one native
+  owner per instance directory.
+- Model and template admission is checkpoint-specific. Vision input,
+  Qwen3.5-122B-A10B and REAP-pruned artifacts require separate implementation
+  and validation.
+- Performance conclusions apply to the measured model, batch shape, context
+  length and hardware conditions recorded in the evidence archive.

@@ -3,7 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 
-import type { ModelOutputItem } from '@echo-chamber/core/ports/model';
+import { formatCognitiveModuleHandoff } from '@echo-chamber/core/agent/cognitive-module-handoff';
+import type { CognitiveModuleCommittedState } from '@echo-chamber/core/agent/cognitive-module-orchestrator';
+import { ZERO_MODEL_USAGE } from '@echo-chamber/core/agent/session';
+import type {
+  ModelInputItem,
+  ModelOutputItem,
+} from '@echo-chamber/core/ports/model';
 
 import { NativeInferenceClient } from './native-inference-client';
 import { NativeInferenceModel } from './native-inference-model';
@@ -38,13 +44,26 @@ const GREEDY_SAMPLING = {
   presence_penalty: 0,
 } as const;
 
-const [binaryPath, modelDirectory, firstSeedArgument, profileArgument] =
-  process.argv.slice(2);
+const [
+  binaryPath,
+  modelDirectory,
+  firstSeedArgument,
+  profileArgument,
+  handoffArgument,
+] = process.argv.slice(2);
 if (binaryPath === undefined || modelDirectory === undefined) {
   throw new Error(
-    'usage: pnpm probe:real-model <echo-inference-binary> <model-directory> [first-seed] [production|greedy]'
+    'usage: pnpm probe:real-model <echo-inference-binary> <model-directory> [first-seed] [production|greedy] [plain|cognitive]'
   );
 }
+if (
+  handoffArgument !== undefined &&
+  handoffArgument !== 'plain' &&
+  handoffArgument !== 'cognitive'
+) {
+  throw new Error('handoff profile must be plain or cognitive');
+}
+const includeCognitiveHandoff = handoffArgument === 'cognitive';
 const firstSeed = parseSeed(firstSeedArgument);
 const greedy = parseProfile(profileArgument);
 const nativeLibraryPath = process.env.ECHO_NATIVE_LIBRARY_PATH;
@@ -93,6 +112,7 @@ try {
         content:
           'For this transport probe, your entire first reply must be exactly the following function call, with no prefix or suffix:\n\n<tool_call>\n<function=lookup_probe_code>\n<parameter=key>\necho_probe\n</parameter>\n</function>\n</tool_call>\n\nAfter its result arrives, reply with only the returned code and do not call another tool.',
       },
+      ...createRuntimeHandoff(1),
     ],
     tools: [TOOL],
     turnIndex: 1,
@@ -119,6 +139,7 @@ try {
         callId: toolCall.callId,
         output: '{"code":"7391"}',
       },
+      ...createRuntimeHandoff(2, '7391'),
     ],
     tools: [TOOL],
     previousResponseToken: first.responseToken,
@@ -158,6 +179,7 @@ try {
         content:
           'This is a new thinking session. Your entire first reply must be exactly the following function call, with no prefix or suffix:\n\n<tool_call>\n<function=lookup_probe_code>\n<parameter=key>\necho_new_session\n</parameter>\n</function>\n</tool_call>\n\nAfter its result arrives, reply with only the returned code and do not call another tool.',
       },
+      ...createRuntimeHandoff(1),
     ],
     tools: [NEXT_SESSION_TOOL],
     turnIndex: 1,
@@ -192,6 +214,7 @@ try {
         callId: newSessionToolCall.callId,
         output: '{"code":"8642"}',
       },
+      ...createRuntimeHandoff(2, '8642'),
     ],
     tools: [NEXT_SESSION_TOOL],
     previousResponseToken: newSession.responseToken,
@@ -226,7 +249,8 @@ try {
   console.log(
     JSON.stringify(
       {
-        schemaVersion: 3,
+        schemaVersion: 4,
+        cognitiveHandoff: includeCognitiveHandoff,
         protocolVersion: ready.protocol_version,
         engineId: ready.engine.engine_id,
         modelDirectory,
@@ -355,4 +379,49 @@ function parseToolInput(input: string): { key?: unknown } {
     throw new Error(`real-model tool input is not an object: ${input}`);
   }
   return parsed;
+}
+
+/**
+ * Mirrors the coordinator's pre_main handoff on every Main turn, including
+ * the first turn of each session. Recall contains no answer before lookup.
+ */
+function createRuntimeHandoff(
+  sequence: number,
+  code?: string
+): readonly ModelInputItem[] {
+  if (!includeCognitiveHandoff) return [];
+  const emotion = { valence: 0.1, arousal: 0.2, labels: ['calm'] };
+  const committed: CognitiveModuleCommittedState = {
+    version: sequence,
+    emotion,
+    previousSessionMemory: null,
+    recalledMemories:
+      code === undefined
+        ? []
+        : [
+            {
+              content: `The probe code is ${code}.`,
+              type: 'semantic',
+              emotion,
+              createdAt: '2026-09-12T00:00:00Z',
+            },
+          ],
+  };
+  return formatCognitiveModuleHandoff(
+    {
+      activationId: 'real-probe',
+      boundaryId: `real-probe:${sequence}:pre_main`,
+      sequence,
+      phase: 'pre_main',
+      committed,
+      memory: {
+        status: 'ready',
+        value: { query: 'current probe code' },
+        attempts: 1,
+      },
+      emotion: { status: 'ready', value: emotion, attempts: 1 },
+      usage: ZERO_MODEL_USAGE,
+    },
+    committed
+  );
 }

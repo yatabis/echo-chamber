@@ -256,6 +256,7 @@ describe('createCognitiveModuleOrchestrator', () => {
     expect(handoff).toEqual([
       {
         type: 'tool_call',
+        origin: 'runtime',
         callId: 'cognitive:1:search_memory',
         toolName: 'search_memory',
         input: '{"query":"current context and relevant memory"}',
@@ -277,6 +278,7 @@ describe('createCognitiveModuleOrchestrator', () => {
       },
       {
         type: 'tool_call',
+        origin: 'runtime',
         callId: 'cognitive:1:update_emotion',
         toolName: 'update_emotion',
         input: '{"valence":0.1,"arousal":0.2,"labels":["calm"]}',
