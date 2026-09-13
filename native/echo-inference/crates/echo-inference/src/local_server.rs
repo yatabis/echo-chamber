@@ -19,12 +19,15 @@ use super::chat::{
 use super::runtime::{
     BatchAdmission, BatchGenerationObserver, GenerationDirective, GenerationObserver,
     InferenceRequest, InferenceResponse, RequestState, ResidentEngine, ResidentEngineConfig,
-    ResidentEngineInfo, RuntimeError, StatePersistence,
+    ResidentEngineInfo, RuntimeError, RuntimeTokenUsage, StatePersistence,
 };
 use super::sampling::SamplingConfig;
-use super::tool_output::{EchoOutputItem, parse_qwen_output_with_tools};
+use super::structured_output::StructuredOutputFormat;
+use super::tool_output::{
+    EchoAssistantRole, EchoOutputItem, ParsedQwenOutput, parse_qwen_output_with_tools,
+};
 
-const PROTOCOL_VERSION: u32 = 11;
+const PROTOCOL_VERSION: u32 = 13;
 
 /// Admission and backpressure limits for the dedicated local stdio server.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -74,6 +77,8 @@ impl LocalServerConfig {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum WireCommand {
     Generate {
+        #[serde(default)]
+        response_format: Option<Box<StructuredOutputFormat>>,
         request_id: String,
         instance_id: InstanceId,
         state_transition: RequestState,
@@ -103,6 +108,7 @@ enum WireCommand {
 }
 
 struct AcceptedGenerate {
+    response_format: Option<Box<StructuredOutputFormat>>,
     request_id: String,
     instance_id: InstanceId,
     state_transition: RequestState,
@@ -172,6 +178,7 @@ enum WireEvent {
     },
     Cancelled {
         request_id: String,
+        usage: RuntimeTokenUsage,
     },
     StateOpened {
         request_id: String,
@@ -222,6 +229,7 @@ pub fn serve_local_stdio(
     validate_config(config)?;
     let tokenizer = Qwen35ChatTokenizer::load(model_directory)?;
     let mut engine = ResidentEngine::load(model_directory, config.engine)?;
+    engine.enable_structured_output(model_directory, tokenizer.eos_token_id())?;
     let registry = RequestRegistry::default();
     let (command_sender, command_receiver) = mpsc::channel();
     let (event_sender, event_receiver) = mpsc::sync_channel(config.event_buffer_capacity);
@@ -361,6 +369,7 @@ fn dispatch_wire_command(
 ) -> Result<bool, LocalServerError> {
     match command {
         WireCommand::Generate {
+            response_format,
             request_id,
             instance_id,
             state_transition,
@@ -383,6 +392,7 @@ fn dispatch_wire_command(
                 return Ok(false);
             };
             let accepted = AcceptedCommand::Generate(AcceptedGenerate {
+                response_format,
                 request_id: request_id.clone(),
                 instance_id,
                 state_transition,
@@ -641,6 +651,7 @@ fn send_generation_outcome(
     tokenizer: &Qwen35ChatTokenizer,
     request_id: &str,
     tools: &[EchoToolContract],
+    structured_output: bool,
     outcome: &Result<InferenceResponse, RuntimeError>,
 ) -> Result<(), LocalServerError> {
     match outcome {
@@ -651,7 +662,17 @@ fn send_generation_outcome(
                 .position(|token| *token == tokenizer.eos_token_id())
                 .unwrap_or(response.generated_tokens.len());
             let text = tokenizer.decode(&response.generated_tokens[..text_token_count])?;
-            let parsed = parse_qwen_output_with_tools(&text, request_id, tools);
+            let parsed = if structured_output {
+                ParsedQwenOutput {
+                    output: vec![EchoOutputItem::Message {
+                        role: EchoAssistantRole::Assistant,
+                        content: text.clone(),
+                    }],
+                    warning: None,
+                }
+            } else {
+                parse_qwen_output_with_tools(&text, request_id, tools)
+            };
             send_event(
                 events,
                 WireEvent::Completed {
@@ -663,10 +684,11 @@ fn send_generation_outcome(
                 },
             )
         }
-        Err(RuntimeError::Cancelled { .. }) => send_event(
+        Err(RuntimeError::Cancelled { usage, .. }) => send_event(
             events,
             WireEvent::Cancelled {
                 request_id: request_id.into(),
+                usage: *usage,
             },
         ),
         Err(error) => send_request_failure(events, request_id, "inference", &error),
@@ -775,6 +797,7 @@ impl SessionToolCatalogs {
 }
 
 struct StdioGenerationObserver<'a> {
+    structured_output: bool,
     request_id: String,
     instance_id: InstanceId,
     tools: Vec<EchoToolContract>,
@@ -797,6 +820,7 @@ impl<'a> StdioGenerationObserver<'a> {
         events: &'a SyncSender<WireEvent>,
     ) -> Self {
         Self {
+            structured_output: false,
             request_id,
             instance_id,
             tools,
@@ -873,6 +897,7 @@ impl StdioBatchGenerationCoordinator<'_> {
         generate: AcceptedGenerate,
     ) -> Result<Option<BatchAdmission>, LocalServerError> {
         let AcceptedGenerate {
+            response_format,
             request_id,
             instance_id,
             state_transition,
@@ -883,6 +908,18 @@ impl StdioBatchGenerationCoordinator<'_> {
             cancellation,
             enqueued_at,
         } = generate;
+        if response_format.is_some() && !prompt.tools.is_empty() {
+            remove_registration(self.registry, &request_id);
+            send_request_failure(
+                self.events,
+                &request_id,
+                "admission",
+                &RuntimeError::InvalidRequest {
+                    detail: "structured output cannot be combined with tools".into(),
+                },
+            )?;
+            return Ok(None);
+        }
         let encoded = match encode_generate_input(self.tokenizer, state_transition, &prompt) {
             Ok(encoded) => encoded,
             Err(error) => {
@@ -901,7 +938,7 @@ impl StdioBatchGenerationCoordinator<'_> {
         let tools = self
             .tool_catalogs
             .prepare(&instance_id, state_transition, prompt.tools);
-        self.rows.push(StdioGenerationObserver::new(
+        let mut observer = StdioGenerationObserver::new(
             request_id,
             instance_id.clone(),
             tools,
@@ -909,9 +946,12 @@ impl StdioBatchGenerationCoordinator<'_> {
             self.tokenizer.eos_token_id(),
             stream_tokens.then(|| self.tokenizer.decode_stream()),
             self.events,
-        ));
+        );
+        observer.structured_output = response_format.is_some();
+        self.rows.push(observer);
         Ok(Some(BatchAdmission {
             request: InferenceRequest {
+                response_format: response_format.map(|format| *format),
                 instance_id,
                 state_transition,
                 input_tokens: encoded.token_ids,
@@ -989,8 +1029,15 @@ impl BatchGenerationObserver for StdioBatchGenerationCoordinator<'_> {
             .finish(&row.instance_id, &tools, outcome.is_ok());
         row.finished = true;
         remove_registration(self.registry, &request_id);
-        send_generation_outcome(self.events, self.tokenizer, &request_id, &tools, outcome)
-            .map_err(|error| error.to_string())
+        send_generation_outcome(
+            self.events,
+            self.tokenizer,
+            &request_id,
+            &tools,
+            row.structured_output,
+            outcome,
+        )
+        .map_err(|error| error.to_string())
     }
 }
 
@@ -1219,6 +1266,7 @@ mod tests {
 
     fn accepted_generate(request_id: &str) -> AcceptedCommand {
         AcceptedCommand::Generate(AcceptedGenerate {
+            response_format: None,
             request_id: request_id.into(),
             instance_id: InstanceId::new(format!("instance-{request_id}")).expect("valid instance"),
             state_transition: RequestState::Initial,

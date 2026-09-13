@@ -6,8 +6,8 @@ use echo_mlx::Array;
 use super::{
     EngineError, GenerationDirective, GenerationFinishReason, Gpu, InferenceRequest,
     InferenceResponse, MlxInferenceState, ResidentEngine, RuntimeError, RuntimeMetrics,
-    commit_with_optional_metal_memory, duration_nanos, selected_prefill_chunk_size,
-    slice_token_chunk, token_array,
+    RuntimeTokenUsage, commit_with_optional_metal_memory, duration_nanos,
+    selected_prefill_chunk_size, slice_token_chunk, token_array,
 };
 use crate::MAX_ACTIVE_BATCH_SIZE;
 use crate::full_model::{
@@ -16,6 +16,7 @@ use crate::full_model::{
     schedule_runtime_execution, split_runtime_state,
 };
 use crate::sampling::{sample_token, sample_token_rows};
+use crate::structured_output::{OutputConstraint, mask_output_logits};
 
 /// One request that has completed protocol preparation and can enter a model
 /// batch without blocking for more caller input.
@@ -73,6 +74,7 @@ pub(crate) trait BatchGenerationObserver {
 }
 
 struct BatchRow {
+    output_constraint: Option<OutputConstraint>,
     request_index: usize,
     request: InferenceRequest,
     lease: Option<StateLease<MlxInferenceState>>,
@@ -240,6 +242,7 @@ impl ResidentEngine {
             }
             if observer.is_cancelled(request_index) {
                 outcomes[request_index] = Some(Err(RuntimeError::Cancelled {
+                    usage: RuntimeTokenUsage::default(),
                     instance_id: request.instance_id,
                 }));
                 continue;
@@ -336,10 +339,12 @@ impl ResidentEngine {
         self.validate_request(&request)?;
         if observer.is_cancelled(request_index) {
             return Err(RuntimeError::Cancelled {
+                usage: RuntimeTokenUsage::default(),
                 instance_id: request.instance_id,
             });
         }
 
+        let output_constraint = self.prepare_output_constraint(&request)?;
         let request_state = request.state_transition;
         let lease = self
             .states
@@ -368,6 +373,7 @@ impl ResidentEngine {
         let state = compact_runtime_state(&self.gpu, state, &self.plan)?;
         let decode_started = Instant::now();
         Ok(BatchRow {
+            output_constraint,
             request_index,
             request,
             lease: Some(lease),
@@ -431,6 +437,11 @@ impl ResidentEngine {
             for chunk_start in (0..input_token_count).step_by(chunk_size) {
                 if observer.is_cancelled(request_index) {
                     return Err(RuntimeError::Cancelled {
+                        usage: RuntimeTokenUsage::observed(
+                            initial_state.sequence_length()?,
+                            chunk_start,
+                            0,
+                        ),
                         instance_id: request.instance_id.clone(),
                     });
                 }
@@ -635,6 +646,7 @@ impl ResidentEngine {
                 .map(|row| {
                     if observer.is_cancelled(row.request_index) {
                         RowDisposition::Fail(RuntimeError::Cancelled {
+                            usage: row.token_usage(),
                             instance_id: row.request.instance_id.clone(),
                         })
                     } else {
@@ -687,11 +699,17 @@ impl ResidentEngine {
         observer: &mut O,
     ) -> Result<DecodeStep, RuntimeError> {
         let graph_started = Instant::now();
+        let logits = mask_output_logits(
+            &self.gpu,
+            &execution.logits,
+            rows.iter_mut().map(|row| &mut row.output_constraint),
+            self.plan.vocabulary_size,
+        )?;
         let sampled = if rows.len() == 1 {
             let row = &rows[0];
             sample_token(
                 &self.gpu,
-                &execution.logits,
+                &logits,
                 &row.generated_tokens,
                 row.generated_tokens.len(),
                 row.request.sampling,
@@ -708,7 +726,7 @@ impl ResidentEngine {
                 .collect::<Vec<_>>();
             sample_token_rows(
                 &self.gpu,
-                &execution.logits,
+                &logits,
                 &histories,
                 &configs,
                 self.plan.vocabulary_size,
@@ -747,6 +765,7 @@ impl ResidentEngine {
             if observer.is_cancelled(row.request_index) {
                 let request_index = row.request_index;
                 outcomes[request_index] = Some(Err(RuntimeError::Cancelled {
+                    usage: row.token_usage(),
                     instance_id: row.request.instance_id.clone(),
                 }));
             } else {
@@ -767,9 +786,15 @@ impl ResidentEngine {
         let mut dispositions = Vec::with_capacity(rows.len());
         for mut row in rows {
             let graph_started = Instant::now();
-            let sampled = sample_token(
+            let logits = mask_output_logits(
                 &self.gpu,
                 &row.logits,
+                std::iter::once(&mut row.output_constraint),
+                self.plan.vocabulary_size,
+            )?;
+            let sampled = sample_token(
+                &self.gpu,
+                &logits,
                 &row.generated_tokens,
                 row.generated_tokens.len(),
                 row.request.sampling,
@@ -792,7 +817,7 @@ impl ResidentEngine {
             }
             row.generated_tokens.push(token);
             row.state_advance_steps = row.state_advance_steps.saturating_add(1);
-            match observer.on_token(row.request_index, token) {
+            match row.observe_token(token, observer) {
                 Ok(directive) => {
                     dispositions.push(row.disposition_after_token(directive, observer));
                     tokens.push(token);
@@ -968,6 +993,36 @@ impl ResidentEngine {
 }
 
 impl BatchRow {
+    fn observe_token<O: BatchGenerationObserver>(
+        &mut self,
+        token: u32,
+        observer: &mut O,
+    ) -> Result<GenerationDirective, String> {
+        let grammar_stop = self
+            .output_constraint
+            .as_mut()
+            .map(|constraint| constraint.consume(token))
+            .transpose()
+            .map_err(|error| error.to_string())?;
+        let directive = observer.on_token(self.request_index, token)?;
+        if directive == GenerationDirective::Stop && grammar_stop == Some(false) {
+            return Err("observer stopped before structured output EOS".into());
+        }
+        Ok(if grammar_stop == Some(true) {
+            GenerationDirective::Stop
+        } else {
+            directive
+        })
+    }
+
+    fn token_usage(&self) -> RuntimeTokenUsage {
+        RuntimeTokenUsage::observed(
+            self.cached_prefix_tokens,
+            self.request.input_tokens.len(),
+            self.generated_tokens.len(),
+        )
+    }
+
     fn state_ref(&self) -> Result<&MlxInferenceState, RuntimeError> {
         self.state
             .as_ref()
@@ -1004,6 +1059,7 @@ impl BatchRow {
     ) -> RowDisposition {
         if observer.is_cancelled(self.request_index) {
             return RowDisposition::Fail(RuntimeError::Cancelled {
+                usage: self.token_usage(),
                 instance_id: self.request.instance_id.clone(),
             });
         }
@@ -1030,7 +1086,7 @@ fn observe_tokens<O: BatchGenerationObserver>(
             }
             row.generated_tokens.push(token);
             row.state_advance_steps = row.state_advance_steps.saturating_add(1);
-            match observer.on_token(row.request_index, token) {
+            match row.observe_token(token, observer) {
                 Ok(directive) => row.disposition_after_token(directive, observer),
                 Err(detail) => RowDisposition::Fail(RuntimeError::Observer {
                     instance_id: row.request.instance_id.clone(),

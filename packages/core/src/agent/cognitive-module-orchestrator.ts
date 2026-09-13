@@ -1,3 +1,4 @@
+import { ModelGenerationError } from '../ports/model';
 import { getErrorMessage } from '../utils/error';
 
 import {
@@ -535,7 +536,11 @@ class ParallelCognitiveModuleActivation implements CognitiveModuleActivation {
           usage: totalUsage,
         };
       } catch (error) {
-        if (error instanceof CognitiveModuleOutputValidationError) {
+        if (
+          (error instanceof CognitiveModuleOutputValidationError ||
+            error instanceof ModelGenerationError) &&
+          error.usage !== undefined
+        ) {
           totalUsage = accumulateModelUsage(totalUsage, error.usage);
         }
         // Retry policy may own bounded asynchronous backoff.

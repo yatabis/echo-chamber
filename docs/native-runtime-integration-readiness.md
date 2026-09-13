@@ -8,13 +8,13 @@ Native 推論基盤は、モデルの常駐実行、TypeScript adapter、KV/GDN 
 
 Memory/Emotion 自身の Native 生成から domain 保存までを含む、アプリケーション全体の実行は未接続である。推論 state の snapshot はモデル内部の状態を保存するもので、Memory・Emotion・Note 等の domain 保存は別途必要になる。
 
-| 境界                                             | 実装状況                                                                           |
-| ------------------------------------------------ | ---------------------------------------------------------------------------------- |
-| Main への Cognitive handoff                      | Core formatter、Native adapter、protocol v11、Rust renderer が対応                 |
-| ThinkingEngine と Cognitive coordinator の処理順 | モデル応答・domain 保存先・transport を fixture にした結合テストで検証             |
-| Cognitive request の指定                         | `responseFormat`、`maxOutputTokens`、`signal` の Native 実行への反映が未実装       |
-| Memory/Emotion の推論 state                      | 独立した ephemeral lane は実装済み。phase・再試行・次 activation との対応が未接続  |
-| ローカルアプリケーション                         | provider を注入できる composition、domain 保存、実行入口、全体の実モデル評価が必要 |
+| 境界                                             | 実装状況                                                                                              |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| Main への Cognitive handoff                      | Core formatter、Native adapter、protocol v13、Rust renderer が対応                                    |
+| ThinkingEngine と Cognitive coordinator の処理順 | モデル応答・domain 保存先・transport を fixture にした結合テストで検証                                |
+| Cognitive request の指定                         | `responseFormat` の生成時のスキーマ制約・最終出力の契約検証、request ごとの出力上限、abort を実装済み |
+| Memory/Emotion の推論 state                      | 独立した ephemeral lane は実装済み。phase・再試行・次 activation との対応が未接続                     |
+| ローカルアプリケーション                         | provider を注入できる composition、domain 保存、実行入口、全体の実モデル評価が必要                    |
 
 ## Main の継続入力
 
@@ -28,7 +28,19 @@ Native は次の順序で継続入力を受理する。
 
 Main に未解決 call がなければ、空の再試行または確定済み runtime exchange を受理する。新しい通常 message は `new_session` を必要とする。adapter と Rust renderer は、由来のない call、未解決・不一致の組、suffix 内の重複 ID を拒否する。
 
-`origin` は runtime が付ける入力専用属性で、モデル出力から引き継がない。これは確定済みの履歴を識別するためのもので、`update_emotion` を Main の実行可能 tool として登録するものではない。Native adapter と engine は protocol version 11 で揃える。
+`origin` は runtime が付ける入力専用属性で、モデル出力から引き継がない。これは確定済みの履歴を識別するためのもので、`update_emotion` を Main の実行可能 tool として登録するものではない。Native adapter と engine は protocol version 13 で揃える。
+
+## Cognitive request の実行契約
+
+`responseFormat` は prompt と別の実行パラメーターとしてエンジンへ渡す。Rust 側が推論開始前にスキーマを文法へコンパイルし、各 token の選択前に不正な継続候補を除外する。EOS は JSON 値が完成した時点でのみ選択できる。Core の prompt を中間層が追記・変更することはない。
+
+対応範囲は [Native README](../native/echo-inference/README.md#request-controls) に定義した JSON Schema draft-7 の部分集合とする。未対応の条件やコンパイラー警告は推論開始前に拒否し、近似や prompt 指示へフォールバックしない。文法の状態は生成 request ごとに独立し、通常生成・バッチ生成・キャンセル後の再試行で同じ契約を守る。継続 request でも出力形式を個別に指定できる。生成後の schema 検証はエンジン・通信経路の不変条件を確認するために残す。
+
+`maxOutputTokens` は request ごとに指定できる。正の安全な整数を要求し、model 作成時の上限を超える値は拒否する。省略時はその上限を使い、model の上限も resident owner の上限以内に収める。
+
+`signal` が開始前に abort 済みなら生成を送らず、実行中なら generate の後に cancel を送る。adapter は terminal event まで lane を占有する。`cancelled` なら直前の KV/GDN と継続情報を維持し、`completed` が競合に勝った場合は確定済みの応答を受理する。cancel の送信失敗で engine の状態が不明になった client は、以降の要求を拒否する。
+
+長さ制限による未完了と、エンジン・通信経路の不変条件に反する最終出力は、エンジンが EOS で閉じて確定した state を保持したまま使用量付きのエラーを返す。キャンセルでは、完了した prefill chunk と生成済み token の使用量を protocol v13 の `cancelled.usage` で返す。Cognitive coordinator は `ModelGenerationError` の使用量を失敗・再試行後も集計する。domain commit の可否と、モデル内部で state が確定したかどうかは別の境界である。
 
 ## 検証方法と確認範囲
 
@@ -43,27 +55,23 @@ Main に未解決 call がなければ、空の再試行または確定済み ru
 
 state integrity テストはテンソルの値・shape・dtype を比較する。TypeScript probe が報告する state 長や再利用 token 数の一致だけでは、GDN テンソル全体の一致を確認したことにはならない。
 
+[実モデル request-control テスト](../packages/native-inference-adapter/src/real-request-controls.test.ts)は、Memory検索・Memory保存・Emotion の各 schema を greedy/production sampling で生成し、出力上限、途中 abort、使用量と再試行を確認する。prompt が非 JSON の文章を要求してもスキーマが強制されること、異なるスキーマでの実バッチ生成、Unicode と tool 記法を含む文字列も確認する。module prompt の判断品質や phase の寿命は検証しない。
+
 通常の Node テスト、Rust テスト、実モデル probe は実行条件が異なる。モデルと Metal を必要とする検証は明示的に実行する。環境設定とコマンドは[Native README](../native/echo-inference/README.md#build)を参照する。
 
 ## 残る実装要件
 
-### 1. Cognitive request の指定を実行へ反映する
-
-[ModelCognitiveModuleRunner](../packages/core/src/agent/model-cognitive-module.ts)は `responseFormat`、`maxOutputTokens`、`signal` を `ModelPort.generate()` へ渡す。[Native adapter](../packages/native-inference-adapter/src/native-inference-model.ts)はこれらを wire 実行へ反映しておらず、生成上限には model 作成時の設定を使う。
-
-Core は返答後に JSON/schema を検証する。Native 側にも生成・結果検証、request ごとの上限、開始前と実行中の abort を接続し、未対応の指定は明示的に拒否する必要がある。完了条件には、cancel と完了の競合、rollback、再試行、使用済み usage の保持を含める。
-
-### 2. Auxiliary state と phase の寿命を対応させる
+### 1. Auxiliary state と phase の寿命を対応させる
 
 Core runner は各 phase で共有 context 全体を渡し、`previousResponseToken` を付けない。既存 state がある Native では `new_session` となり、既定で GDN を保持して KV を初期化する。一方、[local runtime](../apps/local-runtime/src/local-native-inference-runtime.ts)は Memory/Emotion の ephemeral lane をプロセス内で保持する。
 
 この組み合わせでは共有 context の再入力と過去 GDN の持ち越しが重なる。phase ごとに初期化するか、確定 state から差分を入力するかを定義する必要がある。再試行、成功済み sibling、次 activation の開始状態をそれぞれ定め、Main の durable lane との独立性を維持する。
 
-### 3. Provider と domain を注入できる composition を作る
+### 2. Provider と domain を注入できる composition を作る
 
 [Cognitive factory](../apps/cloudflare-workers/src/echo/cognitive-modules.ts)の prompt 組み立てと module 設定を、model/domain の実装を注入できる形にする。共通の handoff formatter は Core が所有し、Hosted の SDK・環境設定・retry policy は Worker 側が所有する。
 
-### 4. 実際の Cognitive 経路で workflow を評価する
+### 3. 実際の Cognitive 経路で workflow を評価する
 
 [既存 workflow harness](../packages/model-evaluation/src/qwen36-eat-readiness/runtime-workflow-harness.ts)は `runAgentSession` を直接呼び、Cognitive coordinator を接続せず、評価専用の `session_record` 付き終了契約を使う。各 turn の Cognitive exchange を前提とする[Main prompt](../packages/core/src/llm/prompts/rin.ts)とは入力・終了契約が異なる。
 
@@ -71,7 +79,7 @@ Core runner は各 phase で共有 context 全体を渡し、`previousResponseTo
 
 長文 prefill の評価では、新規入力が8,192 tokens 以上となる fixture を用意する。chunked prefill は BF16 の演算順序が変わるため、単一実行との state の bit 一致を前提にしない。比較条件は[long-input prefill](../native/echo-inference/README.md#long-input-prefill)に従う。
 
-### 5. ローカル保存・起動・再起動を接続する
+### 4. ローカル保存・起動・再起動を接続する
 
 Memory/Emotion の domain 保存には version、idempotency、一括 commit が必要になる。Memory 検索には local SQL と embedding/reranking の境界を接続し、Note 等には既存の storage interface を利用する。
 

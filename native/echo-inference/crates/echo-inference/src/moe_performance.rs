@@ -109,6 +109,7 @@ pub fn run_moe_performance_diagnostic(
         };
         let response = engine
             .execute(InferenceRequest {
+                response_format: None,
                 instance_id: InstanceId::new(format!(
                     "moe-diagnostic-{mode}-{}-{index}",
                     if measured { "measured" } else { "warmup" }
