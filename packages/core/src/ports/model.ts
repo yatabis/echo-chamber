@@ -122,6 +122,23 @@ export interface ModelUsage {
   totalTokens: number;
 }
 
+/** 生成が失敗しても、providerが観測した使用量を失わず上位へ返す。 */
+export class ModelGenerationError extends Error {
+  /**
+   * @param message 失敗の説明
+   * @param usage 観測済み使用量。未取得ならundefined
+   * @param options 元の失敗
+   */
+  constructor(
+    message: string,
+    readonly usage: ModelUsage | undefined,
+    options?: ErrorOptions
+  ) {
+    super(message, options);
+    this.name = 'ModelGenerationError';
+  }
+}
+
 /** Provider-neutral strict JSON Schema response contract。 */
 export interface ModelStructuredOutputFormat {
   type: 'json_schema';

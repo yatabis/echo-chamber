@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { ModelGenerationError } from '../ports/model';
+
 import {
   CognitiveModuleOutputValidationError,
   ParallelCognitiveModuleOrchestrator,
@@ -621,6 +623,28 @@ describe('ParallelCognitiveModuleOrchestrator', () => {
     expect(domain.failPhase).toHaveBeenCalledTimes(1);
     expect(formatHandoff).not.toHaveBeenCalled();
     expect(activation.getResultSnapshot().usage.totalTokens).toBe(5);
+  });
+
+  it('provider生成失敗の使用量を再試行後も保持し、成功済みsiblingを再実行しない', async () => {
+    const memoryRun = vi
+      .fn<MemoryRun>()
+      .mockRejectedValueOnce(
+        new ModelGenerationError('cancelled', createUsage(3))
+      )
+      .mockResolvedValueOnce(moduleResult(recallOutput(), 5));
+    const emotionRun = vi
+      .fn<EmotionRun>()
+      .mockResolvedValue(moduleResult(emotionOutput(), 2));
+    const activation = createOrchestrator({
+      memoryRun,
+      emotionRun,
+      maxAttempts: 2,
+      shouldRetry: (): boolean => true,
+    }).beginActivation();
+    await activation.beforeMain([]);
+    expect(activation.getResultSnapshot().usage.totalTokens).toBe(10);
+    expect(memoryRun).toHaveBeenCalledTimes(2);
+    expect(emotionRun).toHaveBeenCalledTimes(1);
   });
 
   it('provider後のvalidation failureでもusageとbounded診断を保持する', async () => {

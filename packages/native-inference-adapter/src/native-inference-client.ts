@@ -1,9 +1,12 @@
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 
+import { ModelGenerationError } from '@echo-chamber/core/ports/model';
+
 import {
   NATIVE_INFERENCE_PROTOCOL_VERSION,
   parseNativeWireEvent,
+  toNativeModelUsage,
   type NativeCompletedEvent,
   type NativeGenerateCommand,
   type NativeOpenStateCommand,
@@ -49,6 +52,20 @@ interface PendingGeneration {
   reject(error: Error): void;
   onToken?: NativeTokenListener;
   listenerError?: Error;
+  abortError?: ModelGenerationError;
+  dispatched: boolean;
+  cancelSent: boolean;
+}
+
+/** Cancellation is terminal only after Native reports rollback. */
+function abortError(reason: unknown): ModelGenerationError {
+  const error = new ModelGenerationError(
+    'native request aborted before commit',
+    undefined,
+    { cause: reason }
+  );
+  error.name = 'AbortError';
+  return error;
 }
 
 /**
@@ -132,9 +149,11 @@ export class NativeInferenceClient {
   /** Sends one generation and resolves only after its state commits. */
   async generate(
     command: NativeGenerateCommand,
-    onToken?: NativeTokenListener
+    onToken?: NativeTokenListener,
+    signal?: AbortSignal
   ): Promise<NativeCompletedEvent> {
-    await this.ready();
+    await this.waitForGenerationReady(signal);
+    if (signal?.aborted === true) throw abortError(signal.reason);
     this.throwIfFailed();
     if (this.hasPendingRequest(command.request_id)) {
       throw new Error(
@@ -142,7 +161,7 @@ export class NativeInferenceClient {
       );
     }
     const deferred = createDeferred<NativeCompletedEvent>();
-    this.pending.set(command.request_id, {
+    const pending: PendingGeneration = {
       resolve: (event): void => {
         deferred.resolve(event);
       },
@@ -150,14 +169,35 @@ export class NativeInferenceClient {
         deferred.reject(error);
       },
       ...(onToken === undefined ? {} : { onToken }),
-    });
+      dispatched: false,
+      cancelSent: false,
+    };
+    this.pending.set(command.request_id, pending);
+    // A transport can deliver its terminal event before send() settles.
+    // Observe rejection immediately while retaining the original promise.
+    void deferred.promise.catch(() => undefined);
+    const onAbort = (): void => {
+      if (this.pending.get(command.request_id) !== pending) return;
+      pending.abortError = abortError(signal?.reason);
+      this.cancelPending(command.request_id, pending);
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
     try {
-      await this.transport.send(command);
-    } catch (error) {
-      this.pending.delete(command.request_id);
-      throw toError(error);
+      try {
+        await this.transport.send(command);
+        pending.dispatched = true;
+        if (
+          pending.abortError !== undefined ||
+          pending.listenerError !== undefined
+        )
+          this.cancelPending(command.request_id, pending);
+      } catch (error) {
+        this.fail(toError(error));
+      }
+      return await deferred.promise;
+    } finally {
+      signal?.removeEventListener('abort', onAbort);
     }
-    return await deferred.promise;
   }
 
   /** Opens one durable state root and restores its current payload if present. */
@@ -249,17 +289,30 @@ export class NativeInferenceClient {
     }
     const pending = this.pending.get(event.request_id);
     this.pending.delete(event.request_id);
-    pending?.reject(
-      pending.listenerError ??
-        new Error(`native request cancelled before commit: ${event.request_id}`)
+    const error = new ModelGenerationError(
+      `native request cancelled before commit: ${event.request_id}`,
+      toNativeModelUsage(event.usage),
+      { cause: pending?.listenerError ?? pending?.abortError?.cause }
     );
+    if (pending?.abortError !== undefined) error.name = 'AbortError';
+    pending?.reject(error);
   }
 
   private handleToken(
     event: Extract<NativeWireEvent, { event: 'token' }>
   ): void {
     const pending = this.pending.get(event.request_id);
-    if (pending?.onToken === undefined || pending.listenerError !== undefined) {
+    if (pending !== undefined) {
+      // A token event proves admission even if the write callback is pending.
+      pending.dispatched = true;
+      if (pending.abortError !== undefined)
+        this.cancelPending(event.request_id, pending);
+    }
+    if (
+      pending?.onToken === undefined ||
+      pending.listenerError !== undefined ||
+      pending.abortError !== undefined
+    ) {
       return;
     }
     try {
@@ -267,9 +320,41 @@ export class NativeInferenceClient {
     } catch (error) {
       pending.listenerError = toError(error);
       delete pending.onToken;
-      void this.cancel(event.request_id).catch((cancelError: unknown) => {
-        this.fail(toError(cancelError));
-      });
+      this.cancelPending(event.request_id, pending);
+    }
+  }
+
+  private cancelPending(requestId: string, pending: PendingGeneration): void {
+    // Preserve generate -> cancel wire order, even if abort fires inside send.
+    if (
+      !pending.dispatched ||
+      pending.cancelSent ||
+      this.pending.get(requestId) !== pending
+    )
+      return;
+    pending.cancelSent = true;
+    void this.cancel(requestId).catch((error: unknown) => {
+      this.fail(toError(error));
+    });
+  }
+
+  private async waitForGenerationReady(
+    signal: AbortSignal | undefined
+  ): Promise<void> {
+    if (signal === undefined) {
+      await this.ready();
+      return;
+    }
+    if (signal.aborted) throw abortError(signal.reason);
+    const aborted = createDeferred<never>();
+    const onAbort = (): void => {
+      aborted.reject(abortError(signal.reason));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    try {
+      await Promise.race([this.ready(), aborted.promise]);
+    } finally {
+      signal.removeEventListener('abort', onAbort);
     }
   }
 

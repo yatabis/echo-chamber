@@ -341,7 +341,7 @@ production durable-state layout.
 
 `serve-stdio` reads one JSON command per stdin line and writes one typed event
 per stdout line. The second argument bounds active plus waiting generation
-requests. Protocol version 11 admits:
+requests. Protocol version 13 admits:
 
 - `open_state`: register either a durable lane with a fixed snapshot root or
   an ephemeral process-local lane;
@@ -362,9 +362,66 @@ The native protocol is a trusted-local child-process contract, not an
 OpenAI-compatible HTTP API. E.C.H.O.'s provider-neutral `ModelPort` mapping is
 owned by `packages/native-inference-adapter`.
 
-Adapter and engine must both use protocol version 11; mismatched versions are
+Adapter and engine must both use protocol version 13; mismatched versions are
 rejected at startup. The snapshot format has its own schema version, validated
 when opening durable state.
+
+## Request controls
+
+`responseFormat` travels as separate `response_format` execution metadata;
+no layer appends schema instructions to the conversation. The native engine
+compiles the schema with [llguidance](https://github.com/guidance-ai/llguidance)
+before prefill. Each request owns a fresh byte-level grammar matcher. Its mask
+excludes invalid continuations before greedy selection, presence-adjusted
+top-p/top-k filtering, and categorical sampling. EOS is admissible only when
+the JSON value is complete. Single-request and continuous-batch paths use the
+same masking and prefix-consumption contract; cancellation discards the matcher.
+
+The admitted JSON Schema draft-7 subset includes objects (`properties`,
+`required`, `additionalProperties`), homogeneous arrays (`items`, `minItems`,
+`maxItems`), scalar types, `enum`/`const`, numeric bounds and `multipleOf`,
+string lengths and `pattern`, `anyOf`/`allOf`, and local references through
+`definitions`/`$defs`. Annotations `title`, `description`, `$comment`, `default`
+and `examples` carry no generation instructions. Unknown keywords, `format`,
+`oneOf`, remote references, compiler relaxation switches, unsupported rule
+combinations, empty languages and simultaneous tools fail before model
+execution. Compiler warnings are admission errors, never silent approximation.
+The final Ajv check detects an engine/transport invariant violation; it is not
+the mechanism that enforces the schema. JSON strings containing tool markup
+remain literal message content. A continuation may independently choose its
+output format because grammar state is scoped to each generation.
+
+`maxOutputTokens` selects a positive per-request limit no greater than the
+model's configured `maxTokens` ceiling. Omitting it uses that ceiling. A length
+result keeps the EOS-closed committed state but raises an incomplete-generation
+error carrying usage and the live response token. This forced state closure
+is not a successful structured response. An unexpected final invariant violation
+also retains the committed metadata and usage for diagnosis.
+
+An already-aborted `signal` prevents dispatch. An abort during generation
+sends cancellation after admission and waits for `cancelled` or `completed`.
+Completion remains authoritative if commit wins the race. Cancellation rolls
+back state and reports `usage` with `cached_prefix_tokens`,
+`input_tokens_processed` (including completed prefill chunks), and
+`generated_tokens`, even when token streaming is disabled. Failed cancellation
+delivery makes the client unusable because owner state is then uncertain.
+`ModelGenerationError.usage` lets the Cognitive coordinator account for
+failed attempts.
+
+The opt-in test below loads the real model once. It generates the three
+Cognitive schemas with greedy and production sampling while prompts request
+non-JSON prose. It also checks different schemas in a real batch, Unicode and
+literal tool markup, structured-request abort/rollback, a one-token output
+limit, and retry. These are mechanism tests, not Cognitive quality evaluation.
+Run from the repository root after building the binary and exporting the MLX
+library environment described above:
+
+```sh
+ECHO_NATIVE_BINARY="$PWD/native/echo-inference/target/release/echo-inference" \
+ECHO_NATIVE_MODEL_DIRECTORY=/absolute/path/to/model \
+pnpm --filter @echo-chamber/native-inference-adapter exec vitest run \
+  src/real-request-controls.test.ts --silent=false
+```
 
 ## Cognitive continuation validation
 

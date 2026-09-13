@@ -358,6 +358,11 @@ describe('LocalNativeInferenceRuntime', () => {
           throw new Error('missing generation');
         current.emit({
           event: 'cancelled',
+          usage: {
+            cached_prefix_tokens: 0,
+            input_tokens_processed: 0,
+            generated_tokens: 0,
+          },
           request_id: pendingGenerate.request_id,
         });
       }
@@ -777,13 +782,11 @@ async function waitForCommand(
   transport: FakeTransport,
   commandType: NativeWireCommand['type']
 ): Promise<void> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    if (transport.commands.some((command) => command.type === commandType)) {
-      return;
-    }
-    // The fake transport settles command delivery on the next microtask.
-    // eslint-disable-next-line no-await-in-loop
-    await Promise.resolve();
-  }
-  throw new Error(`timed out waiting for ${commandType}`);
+  // Observe the protocol boundary without depending on the adapter's number
+  // of promise continuations before it dispatches the command.
+  await vi.waitFor(() => {
+    expect(
+      transport.commands.some((command) => command.type === commandType)
+    ).toBe(true);
+  });
 }

@@ -1,11 +1,13 @@
 import type {
+  ModelStructuredOutputFormat,
   ModelInputItem,
   ModelOutputItem,
   ModelToolContract,
+  ModelUsage,
 } from '@echo-chamber/core/ports/model';
 
 /** Exact native wire contract required by this adapter. */
-export const NATIVE_INFERENCE_PROTOCOL_VERSION = 11;
+export const NATIVE_INFERENCE_PROTOCOL_VERSION = 13;
 
 /** Sampling controls admitted by the specialized native engine. */
 export interface NativeSamplingConfig {
@@ -65,6 +67,8 @@ interface NativeWireToolContract {
 
 /** One request sent to the native NDJSON owner. */
 export interface NativeGenerateCommand {
+  /** Strict output grammar enforced by the native sampler, never added to the prompt. */
+  response_format?: ModelStructuredOutputFormat;
   type: 'generate';
   request_id: string;
   instance_id: string;
@@ -134,6 +138,28 @@ export interface NativeRuntimeMetrics {
   committed_state_logical_nbytes: number;
   /** Post-commit allocator counters, or null when MLX could not observe them. */
   metal_memory: NativeMetalMemoryStats | null;
+}
+
+/** Measured token work from a rolled-back generation, independent of streaming. */
+export interface NativeTokenUsage {
+  cached_prefix_tokens: number;
+  input_tokens_processed: number;
+  generated_tokens: number;
+}
+
+/** Normalize completed or cancelled token observations for the Core budget. */
+export function toNativeModelUsage(metrics: NativeTokenUsage): ModelUsage {
+  const totalInputTokens =
+    metrics.cached_prefix_tokens + metrics.input_tokens_processed;
+  return {
+    cachedInputTokens: metrics.cached_prefix_tokens,
+    cacheWriteInputTokens: 0,
+    uncachedInputTokens: metrics.input_tokens_processed,
+    totalInputTokens,
+    outputTokens: metrics.generated_tokens,
+    reasoningTokens: 0,
+    totalTokens: totalInputTokens + metrics.generated_tokens,
+  };
 }
 
 /** Process-wide MLX Metal allocator observations at one native boundary. */
@@ -247,6 +273,7 @@ export type NativeWireEvent =
   | {
       event: 'cancelled';
       request_id: string;
+      usage: NativeTokenUsage;
     }
   | NativeStateOpenedEvent
   | NativeSnapshotPublishedEvent
@@ -390,6 +417,11 @@ function validateRequestEvent(event: Record<string, unknown>): void {
       requireBoolean(event, 'accepted');
       return;
     case 'cancelled':
+      if (!isRecord(event.usage))
+        throw new Error('native cancelled event requires usage');
+      requireNonnegativeSafeInteger(event.usage, 'cached_prefix_tokens');
+      requireNonnegativeSafeInteger(event.usage, 'input_tokens_processed');
+      requireNonnegativeSafeInteger(event.usage, 'generated_tokens');
       return;
     case 'state_opened':
       validateStateOpenedEvent(event);

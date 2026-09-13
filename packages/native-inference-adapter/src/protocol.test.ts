@@ -168,7 +168,15 @@ describe('native inference protocol mapping', () => {
       request_id: 'rin:cancel',
       accepted: true,
     },
-    { event: 'cancelled', request_id: 'rin:cancelled' },
+    {
+      event: 'cancelled',
+      usage: {
+        cached_prefix_tokens: 0,
+        input_tokens_processed: 0,
+        generated_tokens: 0,
+      },
+      request_id: 'rin:cancelled',
+    },
     {
       event: 'failed',
       request_id: 'rin:failed',
@@ -179,6 +187,27 @@ describe('native inference protocol mapping', () => {
     { event: 'shutdown' },
   ])('admits a complete $event event', (event) => {
     expect(parseNativeWireEvent(JSON.stringify(event))).toEqual(event);
+  });
+
+  it.each([
+    undefined,
+    {},
+    {
+      cached_prefix_tokens: 0,
+      input_tokens_processed: -1,
+      generated_tokens: 1,
+    },
+    {
+      cached_prefix_tokens: 0,
+      input_tokens_processed: 1,
+      generated_tokens: 1.5,
+    },
+  ])('rejects missing or invalid cancellation usage %j', (usage) => {
+    expect(() =>
+      parseNativeWireEvent(
+        JSON.stringify({ event: 'cancelled', request_id: 'rin:1', usage })
+      )
+    ).toThrow();
   });
 
   it('admits a complete parsed tool-call output and warning', () => {

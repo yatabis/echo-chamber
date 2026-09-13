@@ -22,6 +22,9 @@ use super::gdn::GdnKernel;
 use super::model_state::{MlxInferenceState, NewSessionGdnPolicy};
 use super::sampling::{SamplingConfig, sample_token};
 use super::snapshot::{CurrentStateOwner, PublishedMlxCheckpoint, RestoredMlxCheckpoint};
+use super::structured_output::{
+    OutputConstraint, OutputGrammarCompiler, StructuredOutputFormat, mask_output_logits,
+};
 use super::weights::{BoundModelWeights, ShardedWeights};
 use super::{EngineError, ModelPlan, identify_model};
 
@@ -65,6 +68,9 @@ impl From<RequestState> for ExpectedState {
 /// token and appends this request atomically with its KV and GDN payload.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct InferenceRequest {
+    /// Strict generation grammar, independent of prompt tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<StructuredOutputFormat>,
     /// Stable E.C.H.O. existence whose state is read and advanced.
     pub instance_id: InstanceId,
     /// Requested relation to the instance's one current state.
@@ -296,6 +302,7 @@ enum StateOwner {
 /// per-instance state store. Execution requires `&mut self`, so callers cannot
 /// overlap generations through this owner.
 pub struct ResidentEngine {
+    output_compiler: Option<OutputGrammarCompiler>,
     info: ResidentEngineInfo,
     config: ResidentEngineConfig,
     plan: ModelPlan,
@@ -326,6 +333,36 @@ struct ModelRun {
 }
 
 impl ResidentEngine {
+    /// Install the admitted tokenizer's grammar compiler before serving requests.
+    pub(crate) fn enable_structured_output(
+        &mut self,
+        directory: &Path,
+        eos_token: u32,
+    ) -> Result<(), RuntimeError> {
+        self.output_compiler = Some(OutputGrammarCompiler::load(
+            directory,
+            eos_token,
+            self.plan.vocabulary_size,
+        )?);
+        Ok(())
+    }
+
+    fn prepare_output_constraint(
+        &self,
+        request: &InferenceRequest,
+    ) -> Result<Option<OutputConstraint>, RuntimeError> {
+        let Some(format) = &request.response_format else {
+            return Ok(None);
+        };
+        let compiler =
+            self.output_compiler
+                .as_ref()
+                .ok_or_else(|| RuntimeError::InvalidRequest {
+                    detail: "structured output requires the admitted tokenizer compiler".into(),
+                })?;
+        compiler.compile(format).map(Some)
+    }
+
     /// Admits and loads one specialized model exactly once.
     ///
     /// # Errors
@@ -374,6 +411,7 @@ impl ResidentEngine {
             metal_memory: metal_memory.into(),
         };
         Ok(Self {
+            output_compiler: None,
             info,
             config,
             plan,
@@ -629,10 +667,12 @@ impl ResidentEngine {
         self.validate_request(&request)?;
         if observer.is_cancelled() {
             return Err(RuntimeError::Cancelled {
+                usage: RuntimeTokenUsage::default(),
                 instance_id: request.instance_id,
             });
         }
 
+        let mut output_constraint = self.prepare_output_constraint(&request)?;
         let request_state = request.state_transition;
         let lease = self
             .states
@@ -651,9 +691,20 @@ impl ResidentEngine {
                 detail: "continuation request lost its committed base".into(),
             });
         };
-        let model_run = self.run_model(&request, &input_ids, initial_state, observer)?;
+        let model_run = self.run_model(
+            &request,
+            &input_ids,
+            initial_state,
+            &mut output_constraint,
+            observer,
+        )?;
         if observer.is_cancelled() {
             return Err(RuntimeError::Cancelled {
+                usage: RuntimeTokenUsage::observed(
+                    cached_prefix_tokens,
+                    input_tokens_processed,
+                    model_run.generated_tokens.len(),
+                ),
                 instance_id: request.instance_id,
             });
         }
@@ -750,10 +801,12 @@ impl ResidentEngine {
         request: &InferenceRequest,
         input_ids: &Array,
         initial_state: &MlxInferenceState,
+        output_constraint: &mut Option<OutputConstraint>,
         observer: &mut O,
     ) -> Result<ModelRun, RuntimeError> {
         if observer.is_cancelled() {
             return Err(RuntimeError::Cancelled {
+                usage: RuntimeTokenUsage::default(),
                 instance_id: request.instance_id.clone(),
             });
         }
@@ -785,6 +838,11 @@ impl ResidentEngine {
             for chunk_start in (0..input_token_count).step_by(chunk_size) {
                 if observer.is_cancelled() {
                     return Err(RuntimeError::Cancelled {
+                        usage: RuntimeTokenUsage::observed(
+                            initial_state.sequence_length()?,
+                            chunk_start,
+                            0,
+                        ),
                         instance_id: request.instance_id.clone(),
                     });
                 }
@@ -854,11 +912,22 @@ impl ResidentEngine {
         for _ in 0..request.max_new_tokens {
             if observer.is_cancelled() {
                 return Err(RuntimeError::Cancelled {
+                    usage: RuntimeTokenUsage::observed(
+                        initial_state.sequence_length()?,
+                        input_token_count,
+                        generated_tokens.len(),
+                    ),
                     instance_id: request.instance_id.clone(),
                 });
             }
             let graph_started = Instant::now();
             let RuntimeModelExecution { logits, state } = execution;
+            let logits = mask_output_logits(
+                &self.gpu,
+                &logits,
+                std::iter::once(&mut *output_constraint),
+                self.plan.vocabulary_size,
+            )?;
             let token = sample_token(
                 &self.gpu,
                 &logits,
@@ -890,6 +959,10 @@ impl ResidentEngine {
             if first_generated_token_nanos.is_none() {
                 first_generated_token_nanos = Some(duration_nanos(model_started.elapsed()));
             }
+            let grammar_stop = output_constraint
+                .as_mut()
+                .map(|constraint| constraint.consume(scalar))
+                .transpose()?;
             generated_tokens.push(scalar);
             let directive = observer
                 .on_token(scalar)
@@ -898,7 +971,12 @@ impl ResidentEngine {
                     detail,
                 })?;
             execution = next_execution;
-            if directive == GenerationDirective::Stop {
+            if directive == GenerationDirective::Stop && grammar_stop == Some(false) {
+                return Err(RuntimeError::InvalidRequest {
+                    detail: "observer stopped before structured output EOS".into(),
+                });
+            }
+            if directive == GenerationDirective::Stop || grammar_stop == Some(true) {
                 finish_reason = GenerationFinishReason::StopToken;
                 break;
             }
@@ -907,6 +985,11 @@ impl ResidentEngine {
         if finish_reason == GenerationFinishReason::Length {
             if observer.is_cancelled() {
                 return Err(RuntimeError::Cancelled {
+                    usage: RuntimeTokenUsage::observed(
+                        initial_state.sequence_length()?,
+                        input_token_count,
+                        generated_tokens.len(),
+                    ),
                     instance_id: request.instance_id.clone(),
                 });
             }
@@ -930,6 +1013,11 @@ impl ResidentEngine {
         }
         if observer.is_cancelled() {
             return Err(RuntimeError::Cancelled {
+                usage: RuntimeTokenUsage::observed(
+                    initial_state.sequence_length()?,
+                    input_token_count,
+                    generated_tokens.len(),
+                ),
                 instance_id: request.instance_id.clone(),
             });
         }
@@ -1057,6 +1145,35 @@ fn duration_nanos(duration: Duration) -> u64 {
     u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
 }
 
+/// Observed token work retained even when a cancelled transaction rolls back.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct RuntimeTokenUsage {
+    /// Committed prefix reused by completed input execution.
+    pub cached_prefix_tokens: usize,
+    /// New prompt tokens whose prefill completed, including partial chunks.
+    pub input_tokens_processed: usize,
+    /// Sampled output tokens, including EOS but excluding forced length closure.
+    pub generated_tokens: usize,
+}
+
+impl RuntimeTokenUsage {
+    fn observed(
+        cached_prefix_tokens: usize,
+        input_tokens_processed: usize,
+        generated_tokens: usize,
+    ) -> Self {
+        Self {
+            cached_prefix_tokens: if input_tokens_processed == 0 && generated_tokens == 0 {
+                0
+            } else {
+                cached_prefix_tokens
+            },
+            input_tokens_processed,
+            generated_tokens,
+        }
+    }
+}
+
 /// Failure before or during one state transaction.
 #[derive(Debug)]
 pub enum RuntimeError {
@@ -1079,11 +1196,12 @@ pub enum RuntimeError {
         /// State owner whose model identity did not match.
         instance_id: InstanceId,
     },
-    /// Cancellation was observed before any generated output became visible,
-    /// so the state transaction was rolled back.
+    /// Cancellation rolled back state; provisional tokens may already be visible.
     Cancelled {
         /// State owner whose request was cancelled.
         instance_id: InstanceId,
+        /// Work already consumed by this request, independently of rollback.
+        usage: RuntimeTokenUsage,
     },
     /// A streaming observer failed, so the request was rolled back.
     Observer {
@@ -1119,7 +1237,7 @@ impl fmt::Display for RuntimeError {
                 "instance {} state model differs from the resident model",
                 instance_id.as_str()
             ),
-            Self::Cancelled { instance_id } => {
+            Self::Cancelled { instance_id, .. } => {
                 write!(
                     formatter,
                     "instance {} inference was cancelled",
@@ -1370,6 +1488,7 @@ mod tests {
 
     fn request(instance: &str, token: u32) -> InferenceRequest {
         InferenceRequest {
+            response_format: None,
             instance_id: InstanceId::new(instance).expect("valid test instance"),
             state_transition: RequestState::Initial,
             input_tokens: vec![token],

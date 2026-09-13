@@ -13,6 +13,8 @@ parallel-generation-diagnostics = []
 [dependencies]
 echo-inference-state.workspace = true
 echo-mlx.workspace = true
+llguidance.workspace = true
+toktrie_hf_tokenizers.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

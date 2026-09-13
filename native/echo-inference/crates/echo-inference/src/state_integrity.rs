@@ -11,7 +11,7 @@ use crate::model_state::{LayerState, MlxInferenceState};
 use crate::runtime::{
     BatchAdmission, BatchGenerationObserver, GenerationDirective, GenerationObserver,
     InferenceRequest, InferenceResponse, RequestState, ResidentEngine, ResidentEngineConfig,
-    RuntimeError,
+    RuntimeError, RuntimeTokenUsage,
 };
 use crate::sampling::SamplingConfig;
 
@@ -144,6 +144,7 @@ struct Observer {
     interruption: Interruption,
     tokens: Vec<Vec<u32>>,
     outcomes: Vec<Option<bool>>,
+    cancelled_usage: Vec<Option<RuntimeTokenUsage>>,
 }
 
 impl Observer {
@@ -152,6 +153,7 @@ impl Observer {
             interruption,
             tokens: vec![Vec::new(); width],
             outcomes: vec![None; width],
+            cancelled_usage: vec![None; width],
         }
     }
 }
@@ -188,6 +190,9 @@ impl BatchGenerationObserver for Observer {
             "one terminal outcome per request"
         );
         self.outcomes[index] = Some(outcome.is_ok());
+        if let Err(RuntimeError::Cancelled { usage, .. }) = outcome {
+            self.cancelled_usage[index] = Some(*usage);
+        }
         Ok(())
     }
 }
@@ -219,6 +224,7 @@ fn prompt(tokenizer: &Qwen35ChatTokenizer, label: &str) -> Vec<u32> {
 
 fn request(id: &InstanceId, transition: RequestState, input: &[u32], eos: u32) -> InferenceRequest {
     InferenceRequest {
+        response_format: None,
         instance_id: id.clone(),
         state_transition: transition,
         input_tokens: input.to_vec(),
@@ -258,7 +264,24 @@ fn check_single_interruption(
         "must interrupt after real GPU work"
     );
     match interruption {
-        Interruption::Cancel => assert!(matches!(result, Err(RuntimeError::Cancelled { .. }))),
+        Interruption::Cancel => {
+            let Err(RuntimeError::Cancelled { usage, .. }) = result else {
+                panic!("expected cancellation")
+            };
+            assert_eq!(usage.generated_tokens, 3);
+            assert_eq!(usage.input_tokens_processed, input.len());
+            let cached = if transition == RequestState::Continuation {
+                engine
+                    .current_state(&id)
+                    .expect("committed base")
+                    .payload
+                    .sequence_length()
+                    .expect("prefix length")
+            } else {
+                0
+            };
+            assert_eq!(usage.cached_prefix_tokens, cached);
+        }
         Interruption::ObserverFailure => {
             assert!(matches!(result, Err(RuntimeError::Observer { .. })));
         }
@@ -331,6 +354,21 @@ fn check_batch_interruption(
     let observed = run_batch(engine, cancelled.clone(), Interruption::Cancel);
     assert_eq!(observed.tokens[0].len(), 3);
     assert_eq!(observed.outcomes[0], Some(false));
+    let usage = observed.cancelled_usage[0].expect("cancelled batch usage");
+    assert_eq!(usage.generated_tokens, 3);
+    assert_eq!(
+        usage.input_tokens_processed,
+        cancelled[0].input_tokens.len()
+    );
+    assert_eq!(
+        usage.cached_prefix_tokens,
+        engine
+            .current_state(&cancelled[0].instance_id)
+            .expect("cancelled base")
+            .payload
+            .sequence_length()
+            .expect("prefix length")
+    );
     assert!(
         baseline
             .outcomes
@@ -364,6 +402,64 @@ fn check_batch_interruption(
     );
 }
 
+/// Exercise the single-request grammar path against independently frozen state.
+fn check_structured_interruption(
+    engine: &mut ResidentEngine,
+    tokenizer: &Qwen35ChatTokenizer,
+    frozen: &FrozenState,
+    directory: &Path,
+) {
+    let id = state_id("structured.cancel");
+    let control = state_id("structured.control");
+    frozen.restore_as(engine, &id);
+    frozen.restore_as(engine, &control);
+    let expected = serde_json::json!({"text": "猫と散歩。引用と改行を含めても、出力は文法に従う。", "answer": 7});
+    let input = prompt(tokenizer, "answer in prose without JSON");
+    let mut constrained = request(
+        &id,
+        RequestState::NewSession,
+        &input,
+        tokenizer.eos_token_id(),
+    );
+    constrained.max_new_tokens = 128;
+    constrained.response_format = Some(crate::StructuredOutputFormat {
+        kind: "json_schema".into(),
+        name: "single_state".into(),
+        strict: true,
+        schema: serde_json::json!({"const": expected}),
+    });
+    let mut observer = Observer::new(Interruption::Cancel, 1);
+    assert!(matches!(
+        engine.execute_observed(constrained.clone(), &mut observer),
+        Err(RuntimeError::Cancelled { .. })
+    ));
+    assert_eq!(observer.tokens[0].len(), 3);
+    frozen.assert_matches(engine, &id);
+    let retry = engine
+        .execute(constrained.clone())
+        .expect("fresh matcher after rollback");
+    assert_eq!(
+        retry.finish_reason,
+        crate::GenerationFinishReason::StopToken
+    );
+    let text = tokenizer
+        .decode(&retry.generated_tokens[..retry.generated_tokens.len() - 1])
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&text).unwrap(),
+        expected
+    );
+    constrained.instance_id = control.clone();
+    let reference = engine
+        .execute(constrained)
+        .expect("uninterrupted grammar control");
+    assert_eq!(retry.generated_tokens, reference.generated_tokens);
+    FrozenState::capture(engine, &control, directory).assert_matches(engine, &id);
+    eprintln!(
+        "PASS structured cancellation: all KV/GDN tensors unchanged; fresh matcher retry equals uninterrupted control"
+    );
+}
+
 #[test]
 #[ignore = "requires ECHO_NATIVE_TEST_MODEL, local model weights and a Metal GPU"]
 fn real_model_transactions_preserve_all_committed_state_tensors() {
@@ -381,6 +477,9 @@ fn real_model_transactions_preserve_all_committed_state_tensors() {
     let tokenizer = Qwen35ChatTokenizer::load(Path::new(&model)).expect("local tokenizer");
     let mut engine = ResidentEngine::load(Path::new(&model), ResidentEngineConfig::default())
         .expect("resident model");
+    engine
+        .enable_structured_output(Path::new(&model), tokenizer.eos_token_id())
+        .expect("grammar compiler");
     let sentinel = state_id("main");
     engine
         .open_ephemeral_state(sentinel.clone())
@@ -415,5 +514,7 @@ fn real_model_transactions_preserve_all_committed_state_tensors() {
         frozen.assert_matches(&engine, &sentinel);
     }
     check_batch_interruption(&mut engine, &tokenizer, &directory, &sentinel, &frozen);
+    check_structured_interruption(&mut engine, &tokenizer, &frozen, &directory);
+    frozen.assert_matches(&engine, &sentinel);
     std::fs::remove_dir_all(&directory).expect("remove only test-owned references after success");
 }

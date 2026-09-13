@@ -22,7 +22,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@echo-chamber/core": "workspace:*"
+    "@echo-chamber/core": "workspace:*",
+    "ajv": "8.20.0"
   },
   "devDependencies": {
     "vite-node": "3.2.4"

@@ -22,6 +22,7 @@ mod sampling;
 mod snapshot;
 #[cfg(test)]
 mod state_integrity;
+mod structured_output;
 mod tool_output;
 mod weights;
 
@@ -40,6 +41,8 @@ use sha2::{Digest, Sha256};
 /// Maximum number of resident decode rows admitted by the scheduler and every
 /// fixed-shape batch fast path.
 pub(crate) const MAX_ACTIVE_BATCH_SIZE: usize = 6;
+
+pub use structured_output::StructuredOutputFormat;
 
 pub use attention::{AttentionLayerParity, run_attention_layer_parity};
 #[cfg(feature = "parallel-generation-diagnostics")]

@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 
 import { emitEchoEvent } from '@echo-chamber/core/ports/echo-event';
 import type { EchoEventPort } from '@echo-chamber/core/ports/echo-event';
+import { ModelGenerationError } from '@echo-chamber/core/ports/model';
 import type {
   ModelInputItem,
   ModelOutputItem,
@@ -15,9 +16,11 @@ import type {
 import { NativeTokenListenerCompletionError } from './native-inference-client';
 import {
   toModelOutputItem,
+  toNativeModelUsage,
   toNativeWireInput,
   toNativeWireTool,
 } from './protocol';
+import { prepareStructuredOutput } from './structured-output';
 
 import type {
   NativeInferenceClient,
@@ -32,10 +35,17 @@ import type {
   NativeStatePersistence,
   NativeStateTransition,
 } from './protocol';
+import type { NativeStructuredOutputContract } from './structured-output';
 
 const PROVIDER_NAME = 'echo.native_inference';
 
 type NativeRequestFlow = NativeStateTransition;
+
+interface PreparedNativeGeneration {
+  command: NativeGenerateCommand;
+  toolFingerprint: string;
+  structuredOutput: NativeStructuredOutputContract | undefined;
+}
 
 /** E.C.H.O.'s current Qwen non-thinking production profile. */
 export const ECHO_NATIVE_PRODUCTION_SAMPLING = {
@@ -54,6 +64,7 @@ export type NativeSamplingSeedSource = () => number;
 export interface NativeInferenceModelOptions {
   client: NativeInferenceClient;
   instanceId: string;
+  /** Default output limit and ceiling for per-request maxOutputTokens. */
   maxTokens?: number;
   sampling?: Omit<NativeSamplingConfig, 'seed'>;
   seedSource?: NativeSamplingSeedSource;
@@ -87,12 +98,16 @@ export type NativeStateOpenOptions =
  * The opaque response token permits a caller that explicitly accepts the
  * truncated semantic result to continue the same live thinking session.
  */
-export class NativeInferenceIncompleteGenerationError extends Error {
+export class NativeInferenceIncompleteGenerationError extends ModelGenerationError {
   /**
    * @param responseToken Opaque process-local continuation capability
+   * @param usage Completed generation usage, retained despite truncation
    */
-  constructor(public readonly responseToken: string) {
-    super('native inference committed a length-limited generation');
+  constructor(
+    public readonly responseToken: string,
+    usage: ModelUsage
+  ) {
+    super('native inference committed a length-limited generation', usage);
     this.name = 'NativeInferenceIncompleteGenerationError';
   }
 
@@ -130,6 +145,7 @@ export class NativeInferenceModel implements ModelPort {
   private toolFingerprint: string | undefined;
   private engineId: number | undefined;
   private activeRequestId: string | undefined;
+  private activeGenerationAbort: AbortController | undefined;
   private stopping = false;
   private requestSequence = 0;
 
@@ -251,24 +267,21 @@ export class NativeInferenceModel implements ModelPort {
     }
     const requestId = this.nextRequestId();
     this.activeRequestId = requestId;
+    const controller = new AbortController();
+    this.activeGenerationAbort = controller;
+    const signal =
+      request.signal === undefined
+        ? controller.signal
+        : AbortSignal.any([request.signal, controller.signal]);
     try {
-      const prepared = this.prepareCommand(
-        request,
-        requestId,
-        flow,
-        this.requireResolvedMaxTokens()
-      );
+      const prepared = this.prepareCommand(request, requestId, flow);
       try {
         const event = await this.client.generate(
           prepared.command,
-          this.onToken
+          this.onToken,
+          signal
         );
-        return await this.acceptCompleted(
-          request,
-          prepared.toolFingerprint,
-          event,
-          flow
-        );
+        return await this.acceptCompleted(request, prepared, event, flow);
       } catch (error) {
         if (!(error instanceof NativeTokenListenerCompletionError)) {
           throw error;
@@ -276,7 +289,7 @@ export class NativeInferenceModel implements ModelPort {
         try {
           await this.acceptCompleted(
             request,
-            prepared.toolFingerprint,
+            prepared,
             error.completedEvent,
             flow
           );
@@ -291,15 +304,17 @@ export class NativeInferenceModel implements ModelPort {
       }
     } finally {
       this.activeRequestId = undefined;
+      this.activeGenerationAbort = undefined;
     }
   }
 
   /** Cancels this instance's active request, if one exists. */
   async cancelActive(): Promise<boolean> {
-    if (this.activeRequestId === undefined) {
+    if (this.activeGenerationAbort === undefined) {
       return false;
     }
-    await this.client.cancel(this.activeRequestId);
+    this.activeGenerationAbort.abort();
+    await Promise.resolve();
     return true;
   }
 
@@ -375,23 +390,13 @@ export class NativeInferenceModel implements ModelPort {
   private prepareCommand(
     request: ModelRequest,
     requestId: string,
-    flow: NativeRequestFlow,
-    maxTokens: number
-  ): { command: NativeGenerateCommand; toolFingerprint: string } {
-    if (flow === 'continuation') {
-      validateContinuationInput(request.input, this.pendingToolCallIds);
-    }
-    const wireTools = request.tools.map(toNativeWireTool);
-    const toolFingerprint = fingerprintTools(request.tools, wireTools);
-    if (
-      flow === 'continuation' &&
-      this.toolFingerprint !== undefined &&
-      toolFingerprint !== this.toolFingerprint
-    ) {
-      throw new Error(
-        'native tool catalog cannot change inside one live E.C.H.O. thinking session'
-      );
-    }
+    flow: NativeRequestFlow
+  ): PreparedNativeGeneration {
+    const requestedLimit = this.resolveRequestMaxTokens(
+      request.maxOutputTokens
+    );
+    const structuredOutput = this.prepareResponseFormat(request);
+    const { wireTools, toolFingerprint } = this.prepareTools(request, flow);
     const seed = this.seedSource();
     if (!Number.isSafeInteger(seed) || seed < 0) {
       throw new Error('seedSource must return a non-negative safe integer');
@@ -404,12 +409,57 @@ export class NativeInferenceModel implements ModelPort {
         state_transition: flow,
         stream_tokens: this.onToken !== undefined,
         input: request.input.map(toNativeWireInput),
+        ...(structuredOutput === undefined
+          ? {}
+          : { response_format: structuredOutput.format }),
         tools: flow === 'continuation' ? [] : wireTools,
-        max_new_tokens: maxTokens,
+        max_new_tokens: requestedLimit,
         sampling: { ...this.sampling, seed },
       },
       toolFingerprint,
+      structuredOutput,
     };
+  }
+
+  private resolveRequestMaxTokens(requested: number | undefined): number {
+    const maximum = this.requireResolvedMaxTokens();
+    const limit = requested ?? maximum;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > maximum) {
+      throw new Error(
+        `maxOutputTokens must be a positive safe integer no greater than ${maximum}`
+      );
+    }
+    return limit;
+  }
+
+  private prepareResponseFormat(
+    request: ModelRequest
+  ): NativeStructuredOutputContract | undefined {
+    const contract = prepareStructuredOutput(request.responseFormat);
+    if (contract !== undefined && request.tools.length !== 0) {
+      throw new Error('native responseFormat cannot be combined with tools');
+    }
+    return contract;
+  }
+
+  private prepareTools(
+    request: ModelRequest,
+    flow: NativeRequestFlow
+  ): { wireTools: NativeGenerateCommand['tools']; toolFingerprint: string } {
+    if (flow === 'continuation')
+      validateContinuationInput(request.input, this.pendingToolCallIds);
+    const wireTools = request.tools.map(toNativeWireTool);
+    const toolFingerprint = fingerprintTools(request.tools, wireTools);
+    if (
+      flow === 'continuation' &&
+      this.toolFingerprint !== undefined &&
+      toolFingerprint !== this.toolFingerprint
+    ) {
+      throw new Error(
+        'native tool catalog cannot change inside one live E.C.H.O. thinking session'
+      );
+    }
+    return { wireTools, toolFingerprint };
   }
 
   private requireResolvedMaxTokens(): number {
@@ -421,13 +471,14 @@ export class NativeInferenceModel implements ModelPort {
 
   private async acceptCompleted(
     request: ModelRequest,
-    toolFingerprint: string,
+    prepared: PreparedNativeGeneration,
     event: NativeCompletedEvent,
     flow: NativeRequestFlow
   ): Promise<ModelResponse> {
+    const { toolFingerprint, structuredOutput } = prepared;
     this.validateCompleted(event);
     const output = event.output.map(toModelOutputItem);
-    const usage = toModelUsage(event);
+    const usage = toNativeModelUsage(event.response.metrics);
     const responseToken = createResponseToken(event);
 
     this.hasState = true;
@@ -447,8 +498,9 @@ export class NativeInferenceModel implements ModelPort {
     await this.emitOutput(request, output);
 
     if (event.response.finish_reason === 'length') {
-      throw new NativeInferenceIncompleteGenerationError(responseToken);
+      throw new NativeInferenceIncompleteGenerationError(responseToken, usage);
     }
+    structuredOutput?.validate(output, usage, responseToken);
     return { output, usage, responseToken };
   }
 
@@ -670,22 +722,6 @@ function isMatchingToolResult(
     item.type === 'tool_result' &&
     item.callId === callId
   );
-}
-
-function toModelUsage(event: NativeCompletedEvent): ModelUsage {
-  const metrics = event.response.metrics;
-  const totalInputTokens =
-    metrics.cached_prefix_tokens + metrics.input_tokens_processed;
-  const outputTokens = metrics.generated_tokens;
-  return {
-    cachedInputTokens: metrics.cached_prefix_tokens,
-    cacheWriteInputTokens: 0,
-    uncachedInputTokens: metrics.input_tokens_processed,
-    totalInputTokens,
-    outputTokens,
-    reasoningTokens: 0,
-    totalTokens: totalInputTokens + outputTokens,
-  };
 }
 
 function createResponseToken(event: NativeCompletedEvent): string {

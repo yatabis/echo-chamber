@@ -18,6 +18,8 @@ bindgen = "0.72.1"
 echo-inference-state = { path = "crates/echo-inference-state" }
 echo-mlx = { path = "crates/echo-mlx" }
 echo-mlx-sys = { path = "crates/echo-mlx-sys" }
+llguidance = "=1.8.0"
+toktrie_hf_tokenizers = "=1.8.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.149", features = ["preserve_order"] }
 sha2 = "0.10.9"

@@ -94,6 +94,319 @@ class FakeTransport implements NativeInferenceTransport {
 }
 
 describe('NativeInferenceModel', () => {
+  it('applies a request-local output limit without changing the default', async () => {
+    const { model, transport } = setupModel();
+    transport.onSend = autoResponder();
+    await model.openState({
+      persistence: 'durable',
+      snapshotRoot: '/state/rin',
+    });
+    await model.generate({ ...request('bounded'), maxOutputTokens: 7 });
+    await model.generate(request('default'));
+    expect(
+      transport.commands
+        .filter((item) => item.type === 'generate')
+        .map((item) => item.max_new_tokens)
+    ).toEqual([7, 128]);
+  });
+
+  it.each([0, -1, 1.5, NaN, Infinity, 129])(
+    'rejects an invalid or over-budget request limit %s before sending',
+    async (maxOutputTokens) => {
+      const { model, transport } = setupModel();
+      transport.onSend = autoResponder();
+      await model.openState({
+        persistence: 'durable',
+        snapshotRoot: '/state/rin',
+      });
+      const before = model.state();
+      await expect(
+        model.generate({ ...request('invalid'), maxOutputTokens })
+      ).rejects.toThrow('maxOutputTokens');
+      expect(transport.commands).toHaveLength(1);
+      expect(model.state()).toEqual(before);
+    }
+  );
+
+  it('does not send a generation whose signal was already aborted', async () => {
+    const { model, transport } = setupModel();
+    transport.onSend = autoResponder();
+    await model.openState({
+      persistence: 'durable',
+      snapshotRoot: '/state/rin',
+    });
+    const before = model.state();
+    await expect(
+      model.generate({ ...request('cancelled'), signal: AbortSignal.abort() })
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(transport.commands).toHaveLength(1);
+    expect(model.state()).toEqual(before);
+  });
+
+  it('waits for cancellation rollback before allowing a retry', async () => {
+    const { model, transport } = setupModel();
+    transport.onSend = autoResponder();
+    await model.openState({
+      persistence: 'durable',
+      snapshotRoot: '/state/rin',
+    });
+    await model.generate(request('base'));
+    const before = model.state();
+    const controller = new AbortController();
+    transport.onSend = (wire): void => {
+      if (wire.type === 'generate') controller.abort('deadline');
+    };
+    const pending = model.generate({
+      ...request('interrupted'),
+      signal: controller.signal,
+    });
+    const rejected = expect(pending).rejects.toMatchObject({
+      name: 'AbortError',
+      cause: 'deadline',
+      usage: {
+        cachedInputTokens: 2,
+        uncachedInputTokens: 10,
+        outputTokens: 3,
+        totalTokens: 15,
+      },
+    });
+    await vi.waitFor(() => {
+      expect(transport.commands[transport.commands.length - 1]?.type).toBe(
+        'cancel'
+      );
+    });
+    const cancel = transport.commands[transport.commands.length - 1];
+    if (cancel?.type !== 'cancel') throw new Error('missing cancel');
+    await expect(model.generate(request('too early'))).rejects.toThrow(
+      'active generation'
+    );
+    transport.emit({
+      event: 'cancelled',
+      usage: {
+        cached_prefix_tokens: 2,
+        input_tokens_processed: 10,
+        generated_tokens: 3,
+      },
+      request_id: cancel.request_id,
+    });
+    await rejected;
+    expect(model.state()).toEqual(before);
+    transport.onSend = autoResponder();
+    await expect(model.generate(request('retry'))).resolves.toHaveProperty(
+      'responseToken'
+    );
+  });
+
+  it('accepts authoritative completion when it wins an abort race and removes the listener', async () => {
+    const { model, transport } = setupModel();
+    transport.onSend = autoResponder();
+    await model.openState({
+      persistence: 'durable',
+      snapshotRoot: '/state/rin',
+    });
+    const controller = new AbortController();
+    const removeListener = vi.spyOn(
+      AbortSignal.prototype,
+      'removeEventListener'
+    );
+    transport.onSend = (wire, current): void => {
+      if (wire.type === 'generate') {
+        controller.abort();
+        current.emit(completed(wire, { stateSequenceLength: 19 }));
+      }
+    };
+    await expect(
+      model.generate({ ...request('race'), signal: controller.signal })
+    ).resolves.toHaveProperty('usage');
+    expect(model.state().stateSequenceLength).toBe(19);
+    expect(removeListener).toHaveBeenCalledWith('abort', expect.any(Function));
+    removeListener.mockRestore();
+    expect(transport.commands.filter((item) => item.type === 'cancel')).toEqual(
+      []
+    );
+  });
+
+  it('keeps a committed response when cancellation is sent but loses the race', async () => {
+    const { model, transport } = setupModel();
+    transport.onSend = autoResponder();
+    await model.openState({
+      persistence: 'durable',
+      snapshotRoot: '/state/rin',
+    });
+    let command: NativeGenerateCommand | undefined;
+    transport.onSend = (wire, current): void => {
+      if (wire.type === 'generate') command = wire;
+      if (wire.type === 'cancel') {
+        if (command === undefined) throw new Error('missing generation');
+        current.emit({
+          event: 'cancel_acknowledged',
+          request_id: wire.request_id,
+          accepted: false,
+        });
+        current.emit(completed(command, { stateSequenceLength: 23 }));
+      }
+    };
+    const controller = new AbortController();
+    const pending = model.generate({
+      ...request('race'),
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => {
+      expect(command).toBeDefined();
+    });
+    controller.abort();
+    const response = await pending;
+    expect(model.state()).toMatchObject({
+      stateSequenceLength: 23,
+      responseToken: response.responseToken,
+    });
+    expect(
+      transport.commands.filter((item) => item.type === 'cancel')
+    ).toHaveLength(1);
+  });
+
+  it('cancels before dispatch through the owner API without sending an orphan cancel', async () => {
+    const { model, transport } = setupModel();
+    transport.onSend = autoResponder();
+    await model.openState({
+      persistence: 'durable',
+      snapshotRoot: '/state/rin',
+    });
+    const before = model.state();
+    const pending = model.generate(request('cancel immediately'));
+    const rejected = expect(pending).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+    expect(await model.cancelActive()).toBe(true);
+    await rejected;
+    expect(transport.commands).toHaveLength(1);
+    expect(model.state()).toEqual(before);
+  });
+
+  it('fails the shared client if a cancellation cannot be delivered', async () => {
+    const { model, transport } = setupModel();
+    transport.onSend = autoResponder();
+    await model.openState({
+      persistence: 'durable',
+      snapshotRoot: '/state/rin',
+    });
+    const controller = new AbortController();
+    transport.onSend = (wire): void => {
+      if (wire.type === 'cancel') throw new Error('cancel transport failed');
+    };
+    const pending = model.generate({
+      ...request('running'),
+      signal: controller.signal,
+    });
+    const rejected = expect(pending).rejects.toThrow('cancel transport failed');
+    await vi.waitFor(() => {
+      expect(transport.commands).toHaveLength(2);
+    });
+    controller.abort();
+    await rejected;
+    await expect(model.generate(request('uncertain owner'))).rejects.toThrow(
+      'cancel transport failed'
+    );
+    expect(
+      transport.commands.filter((item) => item.type === 'generate')
+    ).toHaveLength(1);
+  });
+
+  it('passes the schema separately without rewriting any prompt and preserves it across continuation', async () => {
+    const { model, transport } = setupModel();
+    transport.onSend = autoResponder({
+      output: [{ type: 'message', role: 'assistant', content: '{"answer":7}' }],
+    });
+    await model.openState({
+      persistence: 'durable',
+      snapshotRoot: '/state/rin',
+    });
+    const input: ModelRequest['input'] = [
+      { role: 'system', content: 'Be precise.' },
+      { role: 'user', content: 'Seven' },
+    ];
+    const format = {
+      type: 'json_schema' as const,
+      name: 'answer',
+      strict: true as const,
+      schema: {
+        type: 'object',
+        properties: { answer: { type: 'integer' } },
+        required: ['answer'],
+        additionalProperties: false,
+      },
+    };
+    const response = await model.generate({
+      input,
+      tools: [],
+      responseFormat: format,
+    });
+    expect(input[0]).toEqual({ role: 'system', content: 'Be precise.' });
+    const first = transport.commands.find((item) => item.type === 'generate');
+    expect(first?.input).toEqual(input);
+    expect(first).toHaveProperty('response_format', format);
+    const continued = await model.generate({
+      input: [],
+      tools: [],
+      previousResponseToken: response.responseToken,
+      responseFormat: format,
+    });
+    const continuation = transport.commands[transport.commands.length - 1];
+    expect(continuation).toMatchObject({
+      type: 'generate',
+      state_transition: 'continuation',
+      input: [],
+      response_format: format,
+    });
+    await model.generate({
+      input: [],
+      tools: [],
+      previousResponseToken: continued.responseToken,
+    });
+    expect(
+      transport.commands[transport.commands.length - 1]
+    ).not.toHaveProperty('response_format');
+  });
+
+  it.each(['not JSON', '{"answer":"7"}', '{"answer":7,"extra":true}'])(
+    'detects an engine output contract violation %s while retaining committed state and usage',
+    async (content) => {
+      const { model, transport } = setupModel();
+      transport.onSend = autoResponder({
+        stateSequenceLength: 12,
+        output: [{ type: 'message', role: 'assistant', content }],
+      });
+      await model.openState({
+        persistence: 'durable',
+        snapshotRoot: '/state/rin',
+      });
+      await expect(
+        model.generate({
+          input: [{ role: 'user', content: 'Seven' }],
+          tools: [],
+          responseFormat: {
+            type: 'json_schema',
+            name: 'answer',
+            strict: true,
+            schema: {
+              type: 'object',
+              properties: { answer: { type: 'integer' } },
+              required: ['answer'],
+              additionalProperties: false,
+            },
+          },
+        })
+      ).rejects.toMatchObject({
+        name: 'NativeStructuredOutputError',
+        usage: { outputTokens: 1, totalInputTokens: 11 },
+      });
+      expect(model.state()).toMatchObject({
+        hasState: true,
+        stateSequenceLength: 12,
+      });
+    }
+  );
+
   it('rejects an incompatible native protocol before opening state', async () => {
     const transport = new FakeTransport();
     const client = new NativeInferenceClient(transport);
@@ -892,6 +1205,9 @@ describe('NativeInferenceModel', () => {
     await expect(generation).rejects.toBeInstanceOf(
       NativeInferenceIncompleteGenerationError
     );
+    await expect(generation).rejects.toMatchObject({
+      usage: { outputTokens: 1, totalTokens: 129 },
+    });
     expect(model.state()).toMatchObject({
       hasState: true,
       snapshotDirty: true,
@@ -933,7 +1249,15 @@ describe('NativeInferenceModel', () => {
       terminal: false,
     });
     expect(await model.cancelActive()).toBe(true);
-    transport.emit({ event: 'cancelled', request_id: command.request_id });
+    transport.emit({
+      event: 'cancelled',
+      usage: {
+        cached_prefix_tokens: 0,
+        input_tokens_processed: 0,
+        generated_tokens: 0,
+      },
+      request_id: command.request_id,
+    });
 
     await expect(generation).rejects.toThrow('cancelled before commit');
     expect(model.state()).toEqual(before);

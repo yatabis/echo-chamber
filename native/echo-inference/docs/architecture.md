@@ -28,13 +28,31 @@ harness evolve together, but Cargo remains independent from pnpm.
   executes the model, owns composite KV/GDN state, renders the admitted chat
   template, parses Qwen tool output, persists current state, and serves the
   local NDJSON protocol.
-- `@echo-chamber/native-inference-adapter` maps protocol version 11 to the
+- `@echo-chamber/native-inference-adapter` maps protocol version 13 to the
   provider-neutral `ModelPort`. It owns only process-local continuation
-  capability and lifecycle metadata, never model tensors.
+  capability, lifecycle metadata, request limits, abort routing, and
+  schema transport and final output-invariant validation, never model tensors.
 - `@echo-chamber/local-runtime` owns one native child process, one stable
   main adapter plus optional memory and emotion adapters per E.C.H.O.
   existence, per-state-lane exclusion, and main-state snapshotting at
   thinking-session boundaries.
+
+The native engine owns constrained decoding. It compiles request metadata into
+an llguidance grammar before prefill, masks logits before sampling, and advances
+one matcher per request from the tokens actually sampled. This keeps prompt
+ownership with Core and prevents schema compliance from depending on model
+obedience. Batching, late joins and row removal preserve each row's matcher;
+rollback discards it. The matcher is not part of persistent KV/GDN state.
+
+The adapter's final schema check detects engine/transport invariant violations.
+A length limit is an incomplete generation even though the runtime closes and
+commits its token lineage with EOS. Both cases retain committed continuation
+metadata and usage. An abort waits for the Native terminal event: `completed`
+accepts commit, while `cancelled` preserves the preceding state and reports work
+consumed before rollback. See [request controls](../README.md#request-controls)
+for the admitted schema subset and real-model tests. Grammar/compiler failures
+must remain errors; a fallback to prompt instructions or approximate schemas
+would change this contract and requires a new architectural decision.
 
 ## Process and request flow
 
@@ -42,7 +60,7 @@ harness evolve together, but Cargo remains independent from pnpm.
 LocalNativeInferenceRuntime.runThinkingSession(instance, callback)
   -> session callback receives the instance's Native models
      -> NativeInferenceModel.generate() for one state lane
-        -> protocol-v11 command over NDJSON
+        -> protocol-v13 command over NDJSON
            -> one resident Rust model owner
               -> exclusive state transaction
                  -> variable-width MLX/Metal execution
@@ -259,7 +277,7 @@ earlier model request committed, that earlier current state is still
 snapshotted. A process crash can lose commits made since the last successful
 snapshot; resuming in the middle of that thinking session is unsupported.
 
-## Protocol version 11
+## Protocol version 13
 
 The local child-process protocol accepts only:
 
@@ -267,7 +285,7 @@ The local child-process protocol accepts only:
 snapshot_root }`;
 - `open_state { request_id, instance_id, persistence: "ephemeral" }`;
 - `generate { request_id, instance_id, state_transition, stream_tokens, input,
-tools, max_new_tokens, sampling }`;
+tools, max_new_tokens, sampling, response_format? }`;
 - `cancel { request_id }`;
 - `snapshot { request_id, instance_id }`;
 - `shutdown`.
