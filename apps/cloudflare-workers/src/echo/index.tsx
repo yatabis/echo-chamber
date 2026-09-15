@@ -235,6 +235,7 @@ export class Echo extends DurableObject<Env> {
     null;
 
   // 遅延初期化されるプロパティ（ensureInitializedで設定されるためreadonlyではない）
+  private initializationPromise: Promise<void> | null = null;
   private executableTools: readonly AgentSessionTool[] | null = null;
   private instanceDefinition: EchoInstanceDefinition | null = null;
   private runtimeBindings: EchoRuntimeBindings | null = null;
@@ -379,15 +380,43 @@ export class Echo extends DurableObject<Env> {
   }
 
   /**
-   * インスタンスの遅延初期化
-   * 最初のリクエスト時に呼び出され、definition と runtime bindings を設定する
+   * 並列の request / alarm と初期化を共有し、保存まで完了した状態を保証する。
+   *
+   * @param id - 初期化する Echo instance ID
+   * @throws 初期化に失敗した場合。次の要求では初期化を再試行する。
    */
   private async ensureInitialized(id: EchoInstanceId): Promise<void> {
-    // 既に同じIDで初期化済みの場合はスキップ
+    // definition は初期化中のイベント識別にも使うため、完了判定より先に待機する。
+    while (this.initializationPromise !== null) {
+      // 待機後に別の初期化が始まっていれば、その完了も待ってから ID を判定する。
+      // eslint-disable-next-line no-await-in-loop
+      await this.initializationPromise;
+    }
     if (this.instanceDefinition?.id === id) {
       return;
     }
 
+    this.initializationPromise = this.initializeInstance(id);
+    try {
+      await this.initializationPromise;
+    } catch (error) {
+      this.instanceDefinition = null;
+      this.runtimeBindings = null;
+      this.memorySystem = null;
+      this.cognitiveDomainStore = null;
+      this.executableTools = null;
+      throw error;
+    } finally {
+      this.initializationPromise = null;
+    }
+  }
+
+  /**
+   * runtime 部品を構築し、instance の識別情報を保存する。
+   *
+   * @param id - 初期化する Echo instance ID
+   */
+  private async initializeInstance(id: EchoInstanceId): Promise<void> {
     this.instanceDefinition = getEchoInstanceDefinition(id);
     this.clearDashboardReadCache();
     this.runtimeBindings = await resolveEchoRuntimeBindings(
