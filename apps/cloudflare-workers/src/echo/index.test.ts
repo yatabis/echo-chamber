@@ -1,3 +1,5 @@
+import { setImmediate } from 'node:timers/promises';
+
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
 import { MemorySystem } from '@echo-chamber/cloudflare-runtime/memory-system';
@@ -76,6 +78,7 @@ const {
     },
   },
   mockMemorySystem: {
+    getDashboardMemories: vi.fn(() => []),
     reEmbedStaleMemories: vi.fn(async () => Promise.resolve()),
   },
   mockNoteSystem: {
@@ -339,6 +342,21 @@ async function ensureInitialized(
   ).ensureInitialized(id);
 }
 
+/** 非同期 I/O の完了と失敗をテスト側から制御する。 */
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve(value: T | PromiseLike<T>): void;
+  reject(reason: unknown): void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 function setInitializedDefinition(
   echo: Echo,
   id: 'rin' | 'marie' = 'rin'
@@ -418,6 +436,118 @@ describe('Echo external request budgets', () => {
 describe('Echo.ensureInitialized', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it.each(['runtime bindings', 'instance metadata'] as const)(
+    '%s の準備が完了してから並列の Dashboard 要求へ応答する',
+    async (pendingStage) => {
+      const { storage, putFn } = createMockStorage();
+      const echo = new Echo(createMockState(storage), createMockEnv());
+      const started = createDeferred<undefined>();
+      const gate = createDeferred<undefined>();
+      const pauseInitialization = async (): Promise<void> => {
+        started.resolve(undefined);
+        await gate.promise;
+      };
+      if (pendingStage === 'runtime bindings') {
+        vi.mocked(resolveEchoRuntimeBindings).mockImplementationOnce(
+          async () => {
+            await pauseInitialization();
+            return mockRuntimeBindings;
+          }
+        );
+      } else {
+        putFn
+          .mockResolvedValueOnce(undefined)
+          .mockImplementationOnce(pauseInitialization);
+      }
+      vi.spyOn(echo, 'getNextAlarm').mockResolvedValue(null);
+      vi.spyOn(echo, 'getNotes').mockResolvedValue([]);
+      vi.spyOn(echo, 'getAllUsage').mockResolvedValue({});
+      const consoleError = vi
+        .spyOn(console, 'error')
+        .mockImplementation(() => undefined);
+      let completedResponses = 0;
+      const requestStatus = async (): Promise<Response> => {
+        const response = await echo.fetch(
+          new Request('http://example.com/rin')
+        );
+        completedResponses += 1;
+        return response;
+      };
+
+      try {
+        const first = requestStatus();
+        await started.promise;
+        const second = requestStatus();
+        // 保留した I/O を解放する前に、実行可能な promise continuation を処理する。
+        await setImmediate();
+        const completedBeforeInitialization = completedResponses;
+        gate.resolve(undefined);
+        const responses = await Promise.all([first, second]);
+
+        expect(completedBeforeInitialization).toBe(0);
+        expect(responses.map((response) => response.status)).toEqual([
+          200, 200,
+        ]);
+        const statuses = await Promise.all(
+          responses.map(async (response) =>
+            parseEchoStatus(await response.json())
+          )
+        );
+        for (const status of statuses) {
+          expect(status).toMatchObject({
+            id: 'rin',
+            cognitive: { domainVersion: 0 },
+          });
+        }
+        expect(resolveEchoRuntimeBindings).toHaveBeenCalledTimes(1);
+        expect(putFn).toHaveBeenCalledTimes(2);
+        expect(consoleError).not.toHaveBeenCalled();
+      } finally {
+        gate.resolve(undefined);
+        consoleError.mockRestore();
+      }
+    }
+  );
+
+  it('初期化の失敗を待機中の全要求へ返し、次の要求で再試行する', async () => {
+    const { storage, putFn } = createMockStorage();
+    const echo = new Echo(createMockState(storage), createMockEnv());
+    const gate = createDeferred<typeof mockRuntimeBindings>();
+    vi.mocked(resolveEchoRuntimeBindings).mockReturnValueOnce(gate.promise);
+    const failure = new Error('Runtime bindings unavailable');
+
+    const pending = Promise.allSettled([
+      ensureInitialized(echo, 'rin'),
+      ensureInitialized(echo, 'rin'),
+    ]);
+    gate.reject(failure);
+
+    expect(await pending).toEqual([
+      { status: 'rejected', reason: failure },
+      { status: 'rejected', reason: failure },
+    ]);
+    await expect(ensureInitialized(echo, 'rin')).resolves.toBeUndefined();
+    expect(resolveEchoRuntimeBindings).toHaveBeenCalledTimes(2);
+    expect(putFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('metadata の保存に失敗した場合も次の要求で初期化を完了する', async () => {
+    const { storage, putFn } = createMockStorage();
+    const echo = new Echo(createMockState(storage), createMockEnv());
+    putFn
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('Instance metadata unavailable'));
+
+    await expect(ensureInitialized(echo, 'rin')).rejects.toThrow(
+      'Instance metadata unavailable'
+    );
+    await expect(ensureInitialized(echo, 'rin')).resolves.toBeUndefined();
+
+    expect(resolveEchoRuntimeBindings).toHaveBeenCalledTimes(2);
+    expect(putFn).toHaveBeenLastCalledWith('name', 'リン');
+    expect(putFn).toHaveBeenCalledTimes(4);
   });
 
   it('legacy key を削除せずに初期化する', async () => {

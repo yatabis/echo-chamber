@@ -114,6 +114,8 @@ endpoint ごとの storage read:
 
 Dashboard detail の GET DTO は Durable Object instance 内で短時間だけ in-memory cache する。`GET /:id` と `GET /:id/summary`、`GET /:id/session-logs` は 30 秒、`GET /:id/action-analysis` は 60 秒を上限にする。これは Cloudflare edge cache ではないため DO request 数は減らないが、同じ DO instance が生きている間の連続 refresh では storage read を避けられる。
 
+cold initialization は同じ DO instance 内の並列 request / alarm で共有し、runtime bindings の読み込みと `id` / `name` の保存が完了するまで各要求を待機させる。待機による API / DO request、storage read / write、外部 API call の追加は 0。初期化に失敗した場合は待機中の要求にも失敗を返し、次の要求で初期化を再試行する。その場合に限り、KV の設定読み込みと、失敗までに実行した初期化・保存処理が再度発生する。
+
 ### Manual wake / sleep
 
 Dashboard からではなく API として存在する操作。
