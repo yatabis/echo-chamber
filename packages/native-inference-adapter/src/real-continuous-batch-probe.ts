@@ -251,7 +251,7 @@ function generation(input: {
     instance_id: input.instanceId,
     state_transition: input.stateTransition,
     stream_tokens: false,
-    input: [{ role: 'developer', content: input.prompt }],
+    input: [{ role: 'system', content: input.prompt }],
     tools: [],
     max_new_tokens: input.maxNewTokens,
     sampling: { ...GREEDY_SAMPLING, seed: input.seed },

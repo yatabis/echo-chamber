@@ -435,18 +435,10 @@ export function toModelOutput(
 /**
  * provider-neutral message を Chat Completions message に変換する。
  *
- * Chat Completions 互換 endpoint の chat template 互換性を優先し、`developer`
- * は常に `user` として渡す。
+ * endpointの対応ロールにかかわらず、呼び出し側が指定したロールを保持する。
  */
 function toChatMessage(message: ModelMessage): ChatCompletionMessageParam {
   const content = toChatMessageContent(message.content);
-
-  if (message.role === 'developer') {
-    return {
-      role: 'user',
-      content,
-    };
-  }
 
   if (message.role === 'assistant' && hasImageContentPart(message.content)) {
     throw new Error(
@@ -454,15 +446,18 @@ function toChatMessage(message: ModelMessage): ChatCompletionMessageParam {
     );
   }
 
-  if (message.role === 'system' && hasImageContentPart(message.content)) {
+  if (
+    (message.role === 'system' || message.role === 'developer') &&
+    hasImageContentPart(message.content)
+  ) {
     throw new Error(
-      'Chat Completions API does not support system messages with image content'
+      `Chat Completions API does not support ${message.role} messages with image content`
     );
   }
 
-  if (message.role === 'system') {
+  if (message.role === 'system' || message.role === 'developer') {
     return {
-      role: 'system',
+      role: message.role,
       content: toChatTextOnlyContent(message.content),
     };
   }

@@ -6,6 +6,7 @@ import {
   type CognitiveModuleRunResult,
 } from './cognitive-module-orchestrator';
 import { CognitiveModuleSchemaValidationError } from './cognitive-module-schema';
+import { buildModelInputWithSystemPrompt } from './prompt-builder';
 
 import type {
   ModelInputItem,
@@ -15,14 +16,6 @@ import type {
 } from '../ports/model';
 
 const DEFAULT_MAX_OUTPUT_TOKENS = 2048;
-
-/** 共有context内のdeveloper messageをmoduleへの観測へ変換する。 */
-function toCognitiveModuleObservation(item: ModelInputItem): ModelInputItem {
-  if ('role' in item && item.role === 'developer') {
-    return { ...item, role: 'user' };
-  }
-  return item;
-}
 
 /** 1 phaseで使用するstructured output contract。 */
 export interface ModelCognitiveModuleOutputContract<TOutput> {
@@ -151,12 +144,6 @@ export class ModelCognitiveModuleRunner<
     context: CognitiveModuleRunContext,
     systemPrompt: string
   ): ModelInputItem[] {
-    return [
-      {
-        role: 'developer',
-        content: systemPrompt,
-      },
-      ...context.sharedContext.map(toCognitiveModuleObservation),
-    ];
+    return buildModelInputWithSystemPrompt(systemPrompt, context.sharedContext);
   }
 }

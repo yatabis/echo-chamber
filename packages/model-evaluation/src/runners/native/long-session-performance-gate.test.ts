@@ -23,7 +23,7 @@ import {
 
 import { EphemeralNativeStateRoots } from './ephemeral-state-roots';
 import {
-  LONG_SESSION_DEVELOPER_PROMPT,
+  LONG_SESSION_SYSTEM_PROMPT,
   LONG_SESSION_FINAL_TEXT,
   LONG_SESSION_GREEDY_SAMPLING,
   LONG_SESSION_MAX_NEW_TOKENS,
@@ -216,8 +216,8 @@ liveTest(
       schemaVersion: 2,
       generatedAt: new Date().toISOString(),
       conditions: {
-        prompt: LONG_SESSION_DEVELOPER_PROMPT,
-        promptSha256: sha256Text(LONG_SESSION_DEVELOPER_PROMPT),
+        prompt: LONG_SESSION_SYSTEM_PROMPT,
+        promptSha256: sha256Text(LONG_SESSION_SYSTEM_PROMPT),
         continuationSteps: config.continuationSteps,
         paddingRepetitionsPerStep: config.paddingRepetitions,
         paddingSha256: sha256Text(padding),

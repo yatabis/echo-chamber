@@ -184,8 +184,11 @@ describe('ThinkingEngine', () => {
       },
     ]);
     const firstRequestInput = generate.mock.calls[0]?.[0].input;
-    expect(firstRequestInput?.[0]).toEqual(promptMessages.mainSystemPrompt);
-    expect(firstRequestInput?.slice(1, -1)).toEqual(sharedContext);
+    expect(firstRequestInput?.[0]).toEqual({
+      role: 'system',
+      content: `${promptMessages.mainSystemPrompt.content}\n\n${promptMessages.sharedRuntimeContext.content}`,
+    });
+    expect(firstRequestInput?.slice(1, -1)).toEqual(sharedContext?.slice(1));
     expect(firstRequestInput?.[firstRequestInput.length - 1]).toEqual(
       preMainInput
     );
@@ -423,8 +426,10 @@ describe('ThinkingEngine', () => {
     expect(startupToolExecute).toHaveBeenCalledWith('{}');
     expect(generate).toHaveBeenCalledWith({
       input: [
-        promptMessages.mainSystemPrompt,
-        promptMessages.sharedRuntimeContext,
+        {
+          role: 'system',
+          content: `${promptMessages.mainSystemPrompt.content}\n\n${promptMessages.sharedRuntimeContext.content}`,
+        },
         {
           type: 'tool_call',
           callId: 'check_notifications',

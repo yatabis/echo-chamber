@@ -429,7 +429,7 @@ export async function createRuntimeInitialInput(
     toolContracts: tools.map((tool) => tool.contract),
   });
   const evaluationContinuityInput: ModelInputItem = {
-    role: 'developer',
+    role: 'system',
     content: [
       '評価用の継続情報:',
       JSON.stringify({

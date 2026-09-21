@@ -24,7 +24,7 @@ import { startLocalModelServer } from '../rapid-mlx/server-controller';
 
 import { EphemeralNativeStateRoots } from './ephemeral-state-roots';
 import {
-  LONG_SESSION_DEVELOPER_PROMPT,
+  LONG_SESSION_SYSTEM_PROMPT,
   LONG_SESSION_FINAL_TEXT,
   LONG_SESSION_GREEDY_SAMPLING,
   LONG_SESSION_MAX_NEW_TOKENS,
@@ -663,7 +663,7 @@ async function runRapidRound(
 ): Promise<SessionRound> {
   const sessionId = `long-comparison-rapid-${input.phase}-${input.index}`;
   const messages: ChatCompletionMessageParam[] = [
-    { role: 'user', content: LONG_SESSION_DEVELOPER_PROMPT },
+    { role: 'user', content: LONG_SESSION_SYSTEM_PROMPT },
   ];
   const cacheSteps: CacheStep[] = [];
   const initial = await client.chat.completions.create({
@@ -1010,8 +1010,8 @@ liveTest(
       schemaVersion: 2,
       generatedAt: new Date().toISOString(),
       conditions: {
-        prompt: LONG_SESSION_DEVELOPER_PROMPT,
-        promptSha256: sha256Text(LONG_SESSION_DEVELOPER_PROMPT),
+        prompt: LONG_SESSION_SYSTEM_PROMPT,
+        promptSha256: sha256Text(LONG_SESSION_SYSTEM_PROMPT),
         continuationSteps: config.continuationSteps,
         paddingRepetitionsPerStep: config.paddingRepetitions,
         paddingSha256: sha256Text(padding),

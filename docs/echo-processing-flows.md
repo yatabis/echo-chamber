@@ -126,7 +126,7 @@ flowchart TD
   contracts[実行可能なtool contracts] --> builder
   clock[開始時の現在日時] --> builder
 
-  builder --> mainPrompt[Main専用system prompt<br/>protocol上はdeveloper role]
+  builder --> mainPrompt[Main専用system prompt]
   builder --> runtime[共有runtime context]
   runtime --> base[初期共有context]
   startup[check_notificationsのcallとresult] --> base
@@ -150,18 +150,18 @@ Mainへは前session終了時のMemoryとEmotionを直接渡しません。保�
 
 ### 各LLM requestの内容
 
-| Request             | `input`の構成                                                                                        | 会話の継続方法                                                          | `tools`                   | 出力契約                                           |
-| ------------------- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | ------------------------- | -------------------------------------------------- |
-| Main turn 1         | Main専用prompt → 現在日時 → startup `check_notifications` call/result → 最初のCognitive handoff      | 初回なので過去のprovider応答なし                                        | 実行可能な全tool contract | 自然言語、tool call                                |
-| Main turn 2以降     | 直前turnのtool result、必要ならDiscord画像、そのturn用のCognitive handoff                            | Responses APIまたはChat Completions adapterが前turnまでのMain履歴を接続 | 実行可能な全tool contract | 自然言語、tool call                                |
-| Memory `pre_main`   | Recall専用prompt → その時点のCognitive共有context全体。初回は前session終了時のMemory / Emotionを含む | 毎回、共有contextの完全なsnapshotを新規requestとして渡す                | なし                      | `{ query }`のstrict JSON Schema                    |
-| Emotion `pre_main`  | Emotion専用prompt → Memoryと同一のCognitive共有context snapshot                                      | 毎回、共有contextの完全なsnapshotを新規requestとして渡す                | なし                      | `{ valence, arousal, labels }`のstrict JSON Schema |
-| Memory `post_main`  | Store専用prompt → 終了turnまでを含むCognitive共有context全体                                         | 独立した新規request                                                     | なし                      | `{ content, type }`のstrict JSON Schema            |
-| Emotion `post_main` | Emotion専用prompt → Memoryと同一の終了時snapshot                                                     | 独立した新規request                                                     | なし                      | `{ valence, arousal, labels }`のstrict JSON Schema |
+| Request             | `input`の構成                                                                                          | 会話の継続方法                                                          | `tools`                   | 出力契約                                           |
+| ------------------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- | ------------------------- | -------------------------------------------------- |
+| Main turn 1         | system（Main専用指示＋現在日時） → startup `check_notifications` call/result → 最初のCognitive handoff | 初回なので過去のprovider応答なし                                        | 実行可能な全tool contract | 自然言語、tool call                                |
+| Main turn 2以降     | 直前turnのtool result、必要ならDiscord画像、そのturn用のCognitive handoff                              | Responses APIまたはChat Completions adapterが前turnまでのMain履歴を接続 | 実行可能な全tool contract | 自然言語、tool call                                |
+| Memory `pre_main`   | Recall専用prompt → その時点のCognitive共有context全体。初回は前session終了時のMemory / Emotionを含む   | 毎回、共有contextの完全なsnapshotを新規requestとして渡す                | なし                      | `{ query }`のstrict JSON Schema                    |
+| Emotion `pre_main`  | Emotion専用prompt → Memoryと同一のCognitive共有context snapshot                                        | 毎回、共有contextの完全なsnapshotを新規requestとして渡す                | なし                      | `{ valence, arousal, labels }`のstrict JSON Schema |
+| Memory `post_main`  | Store専用prompt → 終了turnまでを含むCognitive共有context全体                                           | 独立した新規request                                                     | なし                      | `{ content, type }`のstrict JSON Schema            |
+| Emotion `post_main` | Emotion専用prompt → Memoryと同一の終了時snapshot                                                       | 独立した新規request                                                     | なし                      | `{ valence, arousal, labels }`のstrict JSON Schema |
 
 MemoryとEmotionは同じphaseで同一のimmutable snapshotを読みます。一方のmodel出力をもう一方へ渡すことはなく、両方の検証成功後にruntimeが結果をまとめてcommitします。
 
-Cognitive Moduleの各requestは、先頭にmodule専用の`developer` promptを1件置き、その後へ時系列のMain履歴を接続します。前sessionの状態と現在日時は`user` roleで渡します。Mainの自然言語出力は、`{ thought }`を入力とする`think` callと成功resultへ変換します。実際のtool call、tool result、画像入力は元のmodel input itemのまま共有します。`think`はCognitive共有contextだけの表現であり、実行可能なtoolとしては登録しません。
+Main・Cognitive Moduleとも、Coreが専用指示と現在日時を先頭の1件の`system`メッセージにまとめます。Cognitive Moduleではその後へ時系列のMain履歴を接続し、前sessionの状態は`user` roleで渡します。Mainの自然言語出力は、`{ thought }`を入力とする`think` callと成功resultへ変換します。実際のtool call、tool result、画像入力は元のmodel input itemのまま共有します。`think`はCognitive共有contextだけの表現であり、実行可能なtoolとしては登録しません。
 
 ### Cognitive共有contextの増え方
 
@@ -214,7 +214,7 @@ flowchart TD
 ```
 
 - OpenAI Responses APIでは、turn 1だけがMain初期input全体を持ちます。turn 2以降は今回分の増分と`previous_response_id`を送り、provider側に保存された直前までの履歴へ接続します。
-- OpenAI-compatible Chat Completionsでは、adapterが同じ思考session中のinputとassistant応答を`messages`へ累積し、毎turnその全体を送ります。互換chat templateを優先するため、coreの`developer` messageは`user` roleへ変換されます。
+- OpenAI-compatible Chat Completionsでは、adapterが同じ思考session中のinputとassistant応答を`messages`へ累積し、毎turnその全体を送ります。adapterはCoreから渡された`system`や`developer`を含むメッセージのroleを保持します。
 - `echo-session-cache-v1`はChat Completions requestへcache slot情報を加えるruntime最適化であり、上記のコンテキスト内容を選別する仕組みではありません。
 - Memory / Emotionは現状OpenAI Responses API固定ですが、`previous_response_id`では接続しません。各phaseで専用promptとCognitive共有context全体を改めて送ります。
 

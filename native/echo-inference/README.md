@@ -83,7 +83,7 @@ The adapter checks Main's pending result IDs, order and count before any
 runtime exchange. Both adapter and Rust renderer reject unmarked calls,
 missing/mismatched results and duplicate IDs within the suffix. With no
 pending call, an empty retry or complete runtime exchanges are admitted;
-arbitrary user/developer/assistant messages still require `new_session`.
+instruction and conversation messages require a complete prompt.
 This preserves the official Qwen template and the committed EOS boundary
 without reconstructing prior output or replaying the token history.
 
@@ -422,6 +422,24 @@ ECHO_NATIVE_MODEL_DIRECTORY=/absolute/path/to/model \
 pnpm --filter @echo-chamber/native-inference-adapter exec vitest run \
   src/real-request-controls.test.ts --silent=false
 ```
+
+## System-driven startup
+
+The Qwen template supports one leading system message. Native maps `developer`
+to `system` and combines consecutive leading instruction messages in input
+order, separated by a blank line. Both roles share the same instruction priority.
+System and developer messages must form the leading instruction block.
+
+Native also accepts autonomous startup from system instructions and tool
+observations. When there is no user query, the renderer uses the leading system
+message (index 0) as the reference for retaining assistant-history thinking.
+This extends the official template's user-query requirement; message envelopes
+and the non-thinking generation header follow the Qwen template.
+
+`oracles/qwen35_chat_template_parity.py` applies this role normalization and
+startup extension to the model's Jinja template. Fixtures record the original
+and effective template hashes; parity checks compare rendered text and exact
+tokenizer IDs.
 
 ## Cognitive continuation validation
 

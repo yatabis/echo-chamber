@@ -666,7 +666,7 @@ async function startWithClient(
 
 function modelRequest(): ModelRequest {
   return {
-    input: [{ role: 'developer', content: 'Think.' }],
+    input: [{ role: 'system', content: 'Think.' }],
     tools: [],
   };
 }
@@ -682,7 +682,7 @@ const MODULE_TOOL = {
 
 function moduleRequest(content: string): ModelRequest {
   return {
-    input: [{ role: 'developer', content }],
+    input: [{ role: 'system', content }],
     tools: [MODULE_TOOL],
   };
 }

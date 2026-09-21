@@ -175,7 +175,7 @@ function probeRequest(): ModelRequest {
   return {
     input: [
       {
-        role: 'developer',
+        role: 'system',
         content:
           'Your entire reply must be exactly this function call, with no prefix or suffix:\n\n<tool_call>\n<function=lookup_probe_code>\n<parameter=key>\necho_lifecycle\n</parameter>\n</function>\n</tool_call>',
       },

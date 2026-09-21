@@ -5,7 +5,7 @@ import type {
 
 export const LONG_SESSION_MAX_NEW_TOKENS = 64;
 export const LONG_SESSION_FINAL_TEXT = 'LONG_SESSION_COMPLETE';
-export const LONG_SESSION_DEVELOPER_PROMPT = [
+export const LONG_SESSION_SYSTEM_PROMPT = [
   'This is a deterministic long-session state-cache benchmark.',
   'Use only the advance_probe tool until the benchmark is complete.',
   'Begin by calling advance_probe with integer step 1.',
@@ -88,7 +88,7 @@ export function longSessionNativePrefixCommand(
     instance_id: instanceId,
     state_transition: 'initial',
     stream_tokens: true,
-    input: [{ role: 'developer', content: LONG_SESSION_DEVELOPER_PROMPT }],
+    input: [{ role: 'system', content: LONG_SESSION_SYSTEM_PROMPT }],
     tools: [LONG_SESSION_TOOL],
     max_new_tokens: LONG_SESSION_MAX_NEW_TOKENS,
     sampling: LONG_SESSION_GREEDY_SAMPLING,
@@ -121,7 +121,7 @@ export function longSessionNativeReplayCommand(
   results: readonly string[]
 ): NativeGenerateCommand {
   const input: NativeGenerateCommand['input'] = [
-    { role: 'developer', content: LONG_SESSION_DEVELOPER_PROMPT },
+    { role: 'system', content: LONG_SESSION_SYSTEM_PROMPT },
   ];
   for (const [index, result] of results.entries()) {
     const step = index + 1;

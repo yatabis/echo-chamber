@@ -708,7 +708,7 @@ describe('NativeInferenceModel', () => {
     await model.openState({ persistence: 'ephemeral' });
     const result = await runAgentSession({
       model,
-      initialInput: [{ role: 'developer', content: 'continue until finished' }],
+      initialInput: [{ role: 'system', content: 'continue until finished' }],
       tools: [
         {
           name: 'finish_thinking',
@@ -1076,7 +1076,7 @@ describe('NativeInferenceModel', () => {
 
     await model.openState({ persistence: 'ephemeral' });
     const initial = await model.generate({
-      input: [{ role: 'developer', content: 'memory system prompt' }],
+      input: [{ role: 'system', content: 'memory system prompt' }],
       tools: [TOOL],
     });
     if (initial.responseToken === undefined) {

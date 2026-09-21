@@ -71,7 +71,7 @@ function createMemoryRunner(
 }
 
 describe('ModelCognitiveModuleRunner', () => {
-  it('専用system promptだけをdeveloper roleにして共有contextを観測として渡す', async () => {
+  it('専用指示をsystem roleにし、共有contextのロールと内容を保持する', async () => {
     const usage = createUsage(12);
     const generate = vi.fn<ModelPort['generate']>().mockResolvedValue({
       output: [
@@ -102,11 +102,11 @@ describe('ModelCognitiveModuleRunner', () => {
     expect(generate).toHaveBeenCalledWith({
       input: [
         {
-          role: 'developer',
+          role: 'system',
           content:
             'あなたは記憶モジュールです。次のメインターンに役立つ記憶を想起してください。',
         },
-        { role: 'user', content: '現在日時: 2026年08月24日' },
+        { role: 'developer', content: '現在日時: 2026年08月24日' },
         { role: 'user', content: '現在の会話' },
         {
           type: 'tool_result',
@@ -118,6 +118,49 @@ describe('ModelCognitiveModuleRunner', () => {
       turnIndex: 1,
       responseFormat: createMemoryRecallCognitiveModuleOutputFormat(),
       maxOutputTokens: 2048,
+    });
+  });
+
+  it('共有contextのsystem指示を専用指示にまとめ、観測履歴の順序と内容を保つ', async () => {
+    const generate = vi.fn<ModelPort['generate']>().mockResolvedValue({
+      output: [
+        { type: 'message', role: 'assistant', content: '{"query":"memory"}' },
+      ],
+      usage: createUsage(1),
+    });
+    const observations: ModelInputItem[] = [
+      {
+        type: 'tool_call',
+        callId: 'previous',
+        toolName: 'search_memory',
+        input: '{}',
+      },
+      { type: 'tool_result', callId: 'previous', output: 'previous session' },
+      {
+        role: 'user',
+        content: [{ type: 'image', imageUrl: 'https://example.com/image.png' }],
+      },
+      { role: 'developer', content: 'caller-owned developer instruction' },
+    ];
+    const sharedContext: ModelInputItem[] = [
+      ...observations.slice(0, 2),
+      { role: 'system', content: '現在日時: 2026年09月21日' },
+      ...observations.slice(2),
+    ];
+    await createMemoryRunner({ generate }).run(createPhaseInput(), {
+      sharedContext,
+    });
+    expect(generate.mock.calls[0]?.[0].input).toEqual([
+      {
+        role: 'system',
+        content:
+          'あなたは記憶モジュールです。次のメインターンに役立つ記憶を想起してください。\n\n現在日時: 2026年09月21日',
+      },
+      ...observations,
+    ]);
+    expect(sharedContext[2]).toEqual({
+      role: 'system',
+      content: '現在日時: 2026年09月21日',
     });
   });
 
@@ -157,11 +200,11 @@ describe('ModelCognitiveModuleRunner', () => {
     expect(generate).toHaveBeenCalledWith({
       input: [
         {
-          role: 'developer',
+          role: 'system',
           content:
             'あなたは記憶モジュールです。完了した思考セッションから記憶を記銘してください。',
         },
-        { role: 'user', content: '現在日時: 2026年08月24日' },
+        { role: 'developer', content: '現在日時: 2026年08月24日' },
         {
           type: 'tool_call',
           callId: 'finish-1',

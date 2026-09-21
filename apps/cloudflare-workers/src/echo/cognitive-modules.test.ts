@@ -201,7 +201,7 @@ describe('createCognitiveModuleOrchestrator', () => {
     });
 
     const sharedContext: ModelRequest['input'] = [
-      { role: 'developer', content: '現在日時: 2026年08月24日' },
+      { role: 'system', content: '現在日時: 2026年08月24日' },
     ];
     const handoff = await orchestrator
       .beginActivation()
@@ -242,9 +242,14 @@ describe('createCognitiveModuleOrchestrator', () => {
       vi.mocked(emotionGenerate).mock.calls[0]?.[0],
       'initial Emotion request'
     );
-    const expectedSharedContext = [
-      { role: 'user' as const, content: '現在日時: 2026年08月24日' },
-    ];
+    const expectedSharedContext: ModelRequest['input'] = [];
+    for (const request of [memoryRequest, emotionRequest]) {
+      expect(request.input[0]).toMatchObject({ role: 'system' });
+      expect(request.input[0]).toHaveProperty(
+        'content',
+        expect.stringContaining('現在日時: 2026年08月24日')
+      );
+    }
     expect(memoryRequest.input.slice(1)).toEqual(expectedSharedContext);
     expect(emotionRequest.input.slice(1)).toEqual(expectedSharedContext);
     expect(memoryRequest.previousResponseToken).toBeUndefined();
@@ -320,7 +325,7 @@ describe('createCognitiveModuleOrchestrator', () => {
       createModel,
     }).beginActivation();
     const sharedContext: ModelRequest['input'] = [
-      { role: 'developer', content: '現在日時: 2026年08月24日' },
+      { role: 'system', content: '現在日時: 2026年08月24日' },
     ];
 
     const handoff = await activation.beforeMain(sharedContext);
@@ -350,7 +355,6 @@ describe('createCognitiveModuleOrchestrator', () => {
     for (const generate of generateFunctions) {
       expect(vi.mocked(generate).mock.calls[0]?.[0].input.slice(1)).toEqual([
         ...restoredSessionContext,
-        { role: 'user', content: '現在日時: 2026年08月24日' },
       ]);
     }
   });
@@ -367,7 +371,7 @@ describe('createCognitiveModuleOrchestrator', () => {
     }).beginActivation();
 
     const initialContext: ModelRequest['input'] = [
-      { role: 'developer', content: '現在日時: 2026年08月24日' },
+      { role: 'system', content: '現在日時: 2026年08月24日' },
     ];
     const preMainHandoff = await activation.beforeMain(initialContext);
     const finishCall = {
@@ -403,12 +407,10 @@ describe('createCognitiveModuleOrchestrator', () => {
     expect(memoryRequest.previousResponseToken).toBeUndefined();
     expect(emotionRequest.previousResponseToken).toBeUndefined();
     expect(memoryRequest.input.slice(1)).toEqual([
-      { role: 'user', content: '現在日時: 2026年08月24日' },
       ...preMainHandoff,
       finishCall,
     ]);
     expect(emotionRequest.input.slice(1)).toEqual([
-      { role: 'user', content: '現在日時: 2026年08月24日' },
       ...preMainHandoff,
       finishCall,
     ]);
@@ -443,7 +445,7 @@ describe('createCognitiveModuleOrchestrator', () => {
 
     await orchestrator
       .beginActivation()
-      .beforeMain([{ role: 'developer', content: '現在日時: 2026年08月24日' }]);
+      .beforeMain([{ role: 'system', content: '現在日時: 2026年08月24日' }]);
 
     expect(beforeModelRequest.mock.calls.map(([module]) => module)).toEqual([
       'memory',
@@ -475,9 +477,7 @@ describe('createCognitiveModuleOrchestrator', () => {
     await expect(
       orchestrator
         .beginActivation()
-        .beforeMain([
-          { role: 'developer', content: '現在日時: 2026年08月24日' },
-        ])
+        .beforeMain([{ role: 'system', content: '現在日時: 2026年08月24日' }])
     ).rejects.toThrow('Cognitive module phase failed');
     expect(generate).toHaveBeenCalledTimes(1);
   });

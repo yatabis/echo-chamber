@@ -33,7 +33,7 @@ const PREFIX_MAX_NEW_TOKENS = 64;
 const CONTINUATION_MAX_NEW_TOKENS = 64;
 const SWITCH_TTFT_TOLERANCE = 0.05;
 const STATE_MEMORY_OVERHEAD_TOLERANCE = 1.25;
-const DEVELOPER_PROMPT = [
+const SYSTEM_PROMPT = [
   'This is a deterministic state-cache benchmark.',
   'Your entire first reply must be exactly the following function call, with no prefix or suffix:',
   '',
@@ -290,7 +290,7 @@ function prefixCommand(
     instance_id: instanceId,
     state_transition: 'initial',
     stream_tokens: true,
-    input: [{ role: 'developer', content: DEVELOPER_PROMPT }],
+    input: [{ role: 'system', content: SYSTEM_PROMPT }],
     tools: [TOOL],
     max_new_tokens: PREFIX_MAX_NEW_TOKENS,
     sampling: GREEDY_SAMPLING,
@@ -359,7 +359,7 @@ function statelessReplayCommand(
     state_transition: 'initial',
     stream_tokens: true,
     input: [
-      { role: 'developer', content: DEVELOPER_PROMPT },
+      { role: 'system', content: SYSTEM_PROMPT },
       {
         type: 'tool_call',
         call_id: toolCall.call_id,
@@ -500,8 +500,8 @@ liveTest(
       schemaVersion: 1,
       generatedAt: new Date().toISOString(),
       conditions: {
-        prompt: DEVELOPER_PROMPT,
-        promptSha256: sha256Text(DEVELOPER_PROMPT),
+        prompt: SYSTEM_PROMPT,
+        promptSha256: sha256Text(SYSTEM_PROMPT),
         toolResult: TOOL_RESULT,
         prefixMaxNewTokens: PREFIX_MAX_NEW_TOKENS,
         continuationMaxNewTokens: CONTINUATION_MAX_NEW_TOKENS,

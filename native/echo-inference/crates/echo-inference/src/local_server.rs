@@ -1393,7 +1393,7 @@ mod tests {
               "instance_id": "rin",
               "state_transition": "initial",
               "stream_tokens": true,
-              "input": [{"role": "developer", "content": "continue"}],
+              "input": [{"role": "system", "content": "continue"}],
               "tools": [],
               "max_new_tokens": 2
             }"#,
@@ -1417,7 +1417,7 @@ mod tests {
               "instance_id": "rin",
               "state_transition": "initial",
               "stream_tokens": false,
-              "input": [{"role": "developer", "content": "continue"}],
+              "input": [{"role": "system", "content": "continue"}],
               "tools": [],
               "max_new_tokens": 2
             }"#,
@@ -1440,7 +1440,7 @@ mod tests {
               "request_id": "rin:missing-stream-policy",
               "instance_id": "rin",
               "state_transition": "initial",
-              "input": [{"role": "developer", "content": "continue"}],
+              "input": [{"role": "system", "content": "continue"}],
               "tools": [],
               "max_new_tokens": 2
             }"#,
@@ -1477,7 +1477,7 @@ mod tests {
               "instance_id": "rin",
               "state_transition": "new_session",
               "stream_tokens": false,
-              "input": [{"role": "developer", "content": "fresh"}],
+              "input": [{"role": "system", "content": "fresh"}],
               "tools": [],
               "max_new_tokens": 2
             }"#,

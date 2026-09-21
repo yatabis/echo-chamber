@@ -172,7 +172,7 @@ describe('OpenAIChatCompletionsModel', () => {
       expect.objectContaining({
         messages: [
           {
-            role: 'user',
+            role: 'developer',
             content: 'You are helpful.',
           },
           {
