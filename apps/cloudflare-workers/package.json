@@ -18,9 +18,9 @@
     "@echo-chamber/core": "workspace:*",
     "@echo-chamber/discord-adapter": "workspace:*",
     "@echo-chamber/openai-adapter": "workspace:*",
-    "hono": "4.13.7",
+    "hono": "4.13.8",
     "jose": "6.2.12",
     "openai": "6.49.0",
-    "zod": "4.6.2"
+    "zod": "4.6.5"
   }
 }
