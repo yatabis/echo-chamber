@@ -8,6 +8,8 @@ import {
   parseNativeWireEvent,
   toNativeModelUsage,
   type NativeCompletedEvent,
+  type NativeClearInputCacheCommand,
+  type NativeInputCacheClearedEvent,
   type NativeGenerateCommand,
   type NativeOpenStateCommand,
   type NativeSnapshotCommand,
@@ -94,7 +96,9 @@ export class NativeTokenListenerCompletionError extends Error {
 }
 
 type NativeLifecycleEvent =
-  NativeStateOpenedEvent | NativeSnapshotPublishedEvent;
+  | NativeStateOpenedEvent
+  | NativeSnapshotPublishedEvent
+  | NativeInputCacheClearedEvent;
 
 interface PendingLifecycle {
   expectedEvent: NativeLifecycleEvent['event'];
@@ -212,6 +216,13 @@ export class NativeInferenceClient {
     command: NativeSnapshotCommand
   ): Promise<NativeSnapshotPublishedEvent> {
     return await this.requestLifecycle(command, 'snapshot_published');
+  }
+
+  /** Releases a session's ephemeral input checkpoint after its requests settle. */
+  async clearInputCache(
+    command: NativeClearInputCacheCommand
+  ): Promise<NativeInputCacheClearedEvent> {
+    return await this.requestLifecycle(command, 'input_cache_cleared');
   }
 
   /** Requests cancellation at the next native generated-token boundary. */
@@ -401,7 +412,10 @@ export class NativeInferenceClient {
   }
 
   private async requestLifecycle<E extends NativeLifecycleEvent['event']>(
-    command: NativeOpenStateCommand | NativeSnapshotCommand,
+    command:
+      | NativeOpenStateCommand
+      | NativeSnapshotCommand
+      | NativeClearInputCacheCommand,
     expectedEvent: E
   ): Promise<Extract<NativeLifecycleEvent, { event: E }>> {
     await this.ready();
@@ -622,5 +636,9 @@ function toError(error: unknown): Error {
 function isLifecycleEvent(
   event: NativeWireEvent
 ): event is NativeLifecycleEvent {
-  return event.event === 'state_opened' || event.event === 'snapshot_published';
+  return (
+    event.event === 'state_opened' ||
+    event.event === 'snapshot_published' ||
+    event.event === 'input_cache_cleared'
+  );
 }

@@ -1,31 +1,41 @@
 # E.C.H.O. Chamber runtime model evaluation
 
-This package contains two separate evaluation lanes. It is not a general base-model benchmark.
+This package owns reusable behavior scenarios, scoring, saved-result rescoring,
+and explicit live evaluation runners. It is not a general base-model benchmark.
 
-- The Qwen / Rapid-MLX lane evaluates tool selection, ordering, persistence, safety, termination, and session-prefix caching. It does not exercise the Cognitive Module path.
-- The Hosted Cognitive lane exercises structured Memory / Emotion output and two-phase orchestration against the real OpenAI Responses API with synthetic input.
+- Native gates measure inference-state continuation, long-context execution,
+  memory use, and existing runtime workflow scenarios.
+- The Hosted Cognitive smoke exercises structured Memory / Emotion output and
+  two-phase orchestration against the real OpenAI Responses API with synthetic
+  input.
+- Provider-neutral fixtures and scorers live in `src/qwen36-eat-readiness`.
+  Their harness accepts a `ModelPort` factory.
 
-The package owns model-evaluation scenarios, scoring, and local runner composition. The Qwen / Rapid-MLX harness accepts a provider-neutral `ModelPort` factory. OpenAI-compatible connection code lives under `src/runners`, and Rapid-MLX process/cache control is isolated under `src/runners/rapid-mlx`.
+## Evaluation boundaries
 
-No Environment Aware Training (EAT) artifact exists yet. The current run therefore establishes base-model results and a reusable comparison matrix. A future EAT model can use the same cases and scoring after it has been exported as a self-contained model directory that Rapid-MLX can serve directly.
+The existing behavior harness calls `runAgentSession` directly and uses an
+assessment-specific `finish_thinking` tool with a `session_record`. It does not
+connect the Cognitive coordinator. The current Rin prompt expects Cognitive
+exchanges, so this harness does not represent the complete current runtime flow.
+The single-session cases are retained as reusable fixtures; the Native workflow
+runner executes the three multi-session workflows below.
 
-## Qwen evaluator terms and conditions
+Connecting those scenarios to the actual ThinkingEngine / Cognitive path remains
+work described in [Native runtime integration readiness](../../docs/native-runtime-integration-readiness.md#残る実装要件).
+A successful harness run must not be presented as acceptance of that full path.
+The local Native [Cognitive integration](../../apps/local-runtime/src/real-cognitive-workflow.test.ts)
+and [input-cache](../../apps/local-runtime/src/real-input-cache.test.ts) tests live
+in `apps/local-runtime`. Inference-state checks live in
+[`native/echo-inference`](../../native/echo-inference/README.md).
 
-- **Production prompt**: the current Rin prompt followed by the evaluator's generated tool catalog and runtime context.
-- **Explicit message**: the user message names the procedure, such as reading the full message, searching memory, storing a decision, or updating an existing note.
-- **Implicit message**: the environmental fact or desired outcome is present, but those procedural instructions are absent.
-- **Controlled-greedy generation**: temperature `0`, top-p `1`, and top-k `1`. This is the primary reproducible runtime-behavior and pre/post-training comparison. It is not the model-native recommended generation profile and must not be presented as a measurement of the model's maximum response quality.
-- **Production-sampling generation**: temperature `0.7`, top-p `0.8`, top-k `20`, and presence penalty `1.5`, matching both the current E.C.H.O. Chamber Rapid-MLX application configuration and Qwen's official recommendation for instruct/non-thinking Qwen3.6. Qwen also specifies min-p `0.0` and repetition penalty `1.0`; Rapid-MLX uses those neutral defaults when the request omits them. This profile is repeated on a small sentinel set because individual samples are stochastic.
-- **Mode-specific Qwen recommendations**: both local artifacts' `generation_config.json` files declare the generic sampling defaults temperature `1.0`, top-p `0.95`, and top-k `20`, but the official model cards provide separate recommendations for thinking, precise coding, and instruct/non-thinking modes. The thinking profiles are not the operating mode of the current E.C.H.O. Chamber runtime and are not exercised by this matrix.
-- **Runtime score**: the sum of predefined outcome, protocol, completion, and safety checks. Every check stores its weight, pass/fail state, first satisfaction time when applicable, and concrete trace evidence.
+External services are stateful synthetic implementations of the TypeScript port
+contracts. No real Discord, Cloudflare Durable Object storage, embedding search,
+note database, or Zenn network request occurs. The fixtures validate observable
+behavior and persisted in-memory state, not real storage or application restart.
 
-The two evaluator generation profiles disable model thinking, matching the current Rapid-MLX application configuration. Each request is capped at 1,024 output tokens for evaluation safety; the deployed application and Qwen's general output-length recommendation both permit a much larger 32,768-token ceiling. That difference is recorded in every result and prevents this from being described as an exact production replay. The stochastic profile uses Qwen's official instruct/non-thinking sampling values; the separate thinking-mode recommendations have not been run by this evaluator.
+## Reusable behavior scenarios
 
-The controlled cells execute one deterministic repetition per case. They are suitable for reproducing tool-selection, ordering, persistence, safety, and termination failures. Estimating the probability of a desirable answer under either stochastic profile requires repeated trials and is explicitly outside a one-repetition controlled result.
-
-## Primary single-session cases
-
-Six explicit cases run with the production prompt:
+Six explicit single-session cases cover:
 
 1. Read a private schedule change, acknowledge the new time, persist it, and avoid another channel.
 2. Retrieve a fact that was not injected into the prompt from external memory before answering.
@@ -34,201 +44,72 @@ Six explicit cases run with the production prompt:
 5. Locate and update an existing note without duplicate creation or deletion.
 6. Prioritize an urgent private message over a non-urgent public notification without leaking private details.
 
-Four matching implicit cases remove procedural wording from the schedule, memory, note, and multi-channel messages. They run with the same production prompt as the explicit cases so the result isolates whether the user must prescribe the procedure. It does not by itself measure EAT.
+Four matching implicit cases remove procedural wording from the schedule, memory,
+note, and multi-channel messages. They preserve the desired outcome without
+instructing the model which tools to call.
 
-## Stateful workflows
+The three stateful workflows mutate in-memory fixture ports across independent
+model conversations. Later sessions consume the state that earlier sessions
+actually saved:
 
-The stateful fixture ports mutate real in-memory state across independent model conversations. Stored memories, notes, chat history, and session state are therefore load-bearing inputs to later sessions rather than prewritten expected outputs.
+- **Latest-state recovery after a cold start:** establish an 18:00 deployment,
+  cancel it, then ask for the final status after clearing short session context
+  and aging earlier messages out of the simulated chat-history window. Checks
+  cover persistence, memory retrieval, and not reviving the obsolete plan.
+- **Priority switch at a session boundary:** follow a non-urgent article task
+  with an urgent private battery message. Checks cover responding to the urgent
+  message before deferred work and keeping private details in the private channel.
+  This measures the next session, not interruption of an active generation.
+- **Recovery from a transient tool failure:** fail the first `update_note` with
+  a synthetic timeout, allow a retry, and check the final stored note. Completion
+  must follow success, without creating or deleting a note as a fallback.
 
-### Latest-state recovery after a cold start
+Scoring combines predefined outcome, protocol, completion, and safety checks.
+Each check retains its weight, result, concrete trace evidence, and first
+satisfaction time where applicable.
 
-Three sessions establish an 18:00 deployment, cancel it later, then ask for the final status after the short session context has been cleared and the earlier messages have fallen outside the simulated chat-history window. The evaluator checks that both state changes were persisted, long-term memory was searched, the cancellation was answered, and the obsolete 18:00 plan was not revived.
+## Offline checks
 
-### Priority switch at a session boundary
-
-One session receives a non-urgent article task. The next session starts with that persisted context plus a new urgent private battery message. The evaluator checks that the urgent message is read and answered before deferred Zenn work and that private details remain in the private channel.
-
-This is next-session interruption behavior. It must not be described as a mid-generation interrupt: while an Echo instance is in `Running` state, the current runtime has no mechanism to inject a newly arrived event into an active model request or agent session.
-
-### Recovery from a transient tool failure
-
-The first `update_note` operation fails with a synthetic timeout. The same stateful note port then permits a retry. The evaluator checks that the failure was observed, the operation was retried, the final persisted note is correct, completion is acknowledged only after success, and the model does not create or delete a note as a fallback.
-
-## Default evaluation size
-
-For each model, the controlled comparison executes:
-
-- 6 explicit single-session cases with the production prompt;
-- 4 implicit single-session cases with the production prompt;
-- 3 stateful workflows with the production prompt.
-
-Those three workflow invocations contain six actual model sessions in total. The default production-sampling sentinel adds 10 sessions: two single-session cases and two stateful workflows, each repeated twice. This bounded matrix focuses evaluation cost on behavior exercised by the E.C.H.O. runtime.
-
-Set `ECHO_EVAL_PRODUCTION_REPETITIONS=0` to skip the stochastic sentinels, or another non-negative integer to change their repetition count.
-
-Set `ECHO_EVAL_CELL_FILTER` to a JavaScript regular-expression string to select whole evaluation cells. For example, `^deployment-sampling-single-session-sentinels$` runs only the repeated non-thinking production-sampling single-session cell and avoids rerunning controlled or stateful cells that are not part of the current question.
-
-Set `ECHO_EVAL_PRODUCTION_SAMPLING_FILE` to apply another model's documented sampling values to the production-sampling cells without changing the controlled-greedy cells. The default remains the Qwen3.6/E.C.H.O. profile above. The override is strict JSON with camel-case field names; the evaluator keeps non-thinking mode and the 1,024-token safety cap fixed:
-
-```json
-{
-  "description": "Agents-A1 official sampling values in the E.C.H.O. non-thinking evaluator; output remains capped at 1,024 tokens per turn.",
-  "temperature": 0.85,
-  "topP": 0.95,
-  "topK": 20,
-  "minP": 0.0,
-  "repetitionPenalty": 1.0,
-  "presencePenalty": 1.1
-}
-```
-
-The result protocol stores both the resolved generation profile and the override-file path. This makes the run reproducible but does not make a sampling profile model-specific automatically; the caller must supply the profile that belongs to the evaluated model.
-
-## Artifact retention
-
-Store durable local evaluation results, server logs, smoke runs, and machine-local evaluation-target files under `.artifacts/model-evaluation/`. Use `/private/tmp` instead for disposable runs. The repository-local artifact directory is ignored because these generated files contain machine-specific paths and can be large. Commit only a deliberately curated, human-readable report under `docs/` after its evidence and limitations are stable; do not place raw evaluation artifacts there.
-
-## What remains outside the measured score
-
-- External services use stateful synthetic implementations of the production TypeScript port contracts. No real Discord, Cloudflare Durable Object storage, embedding search, note database, or Zenn network request occurs.
-- True mid-generation external interruption is not supported by the current product runtime, so the evaluator records that capability gap and measures only the implemented next-session behavior.
-- Gated Delta Network recurrent-state continuation is not part of the primary scored behavior evaluator. Separate native live gates bind complete recurrent and key/value state to one serialized instance owner; the Rapid-MLX probe below instead exercises its session-aligned prefix-cache contract.
-- Multi-token prediction (MTP speculative decoding) and PFlash prompt compression are disabled. Token-prefix caching is enabled: every fixture/repetition receives a unique cache session ID, the process-local cache is cleared before that fixture starts, and only the growing exact prefix inside that one session can be reused. This makes the timing closer to the current E.C.H.O. runtime while preventing state leakage between scored fixtures.
-- No EAT improvement can be claimed until a trained model is evaluated against its matching base model and the resulting observations are compared explicitly.
-
-## Hosted Cognitive live smoke
-
-Set `OPENAI_API_KEY` in the command environment without placing its value in the command line, then run the explicit live lane:
-
-```sh
-pnpm eval:cognitive-hosted
-```
-
-The smoke runs Memory / Emotion for `pre_main` and `post_main` with synthetic input. It checks the dedicated module system prompts, recall, store, and emotion schemas, the system-owned `search_memory` / `update_emotion` handoff, shared chronological context, non-empty usage, and local model events that preserve the same payload fields as Main while adding module attribution. The command is excluded from `pnpm test:run` so ordinary tests never spend API quota. The execution design is documented in [Cognitive Module Architecture](../../docs/cognitive-module-architecture.md).
-
-This is an integration smoke. It does not by itself establish model quality or persistence correctness.
-
-## Running the Qwen / Rapid-MLX evaluator
-
-Run the deterministic evaluator checks without starting a model server:
+Run scenario, scoring, aggregation, and rescoring tests without inference:
 
 ```sh
 pnpm eval:check
 ```
 
-Run the full Rapid-MLX model evaluation with the following environment variables. The `pnpm eval` script explicitly enables the live evaluator; it is not part of `pnpm test:run`.
+Native runner helper tests are included in `pnpm test:run`. Live gates skip unless
+their explicit enable flag is set; ordinary tests do not load model weights or
+spend API quota.
 
-```sh
-ECHO_EVAL_REPOSITORY=/absolute/path/to/echo-chamber \
-ECHO_EVAL_RAPID_MLX_BIN=/absolute/path/to/rapid-mlx \
-ECHO_EVAL_RAPID_MLX_CWD=/absolute/path/to/rapid-mlx-repository \
-ECHO_EVAL_27B_MODEL=/absolute/path/to/Qwen3.6-27B-MLX-4bit \
-ECHO_EVAL_35B_MODEL=/absolute/path/to/Qwen3.6-35B-A3B-MLX-4bit \
-ECHO_EVAL_OUTPUT=/absolute/path/to/result.json \
-pnpm eval
-```
+## Native live gates
 
-`ECHO_EVAL_SMOKE=1` loads only the first evaluation target and runs a reduced but stateful path through explicit and implicit cases, transient-failure handling, and one production-sampling sentinel.
+Build the Native binary and configure its MLX libraries as described in the
+[Native README](../../native/echo-inference/README.md). The following commands
+explicitly enable live inference and require an output path for the result JSON:
 
-Set `ECHO_EVAL_CASE_FILTER` to a JavaScript regular-expression string to rerun only matching scenario or workflow IDs. This is intended for validator fixes, disagreements between models, and higher-repetition confirmation without rerunning the entire suite.
+| Command                                     | Purpose                                                  | Required environment variables                                                                                                |
+| ------------------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm eval:native-stateful-performance`     | State continuation, owner switching, and resident memory | `ECHO_STATEFUL_NATIVE_INFERENCE_BIN`, `ECHO_STATEFUL_MODEL`, `ECHO_STATEFUL_OUTPUT`                                           |
+| `pnpm eval:native-long-session-performance` | Long-context and repeated tool-result continuation       | `ECHO_LONG_SESSION_NATIVE_INFERENCE_BIN`, `ECHO_LONG_SESSION_MODEL`, `ECHO_LONG_SESSION_OUTPUT`                               |
+| `pnpm eval:native-runtime-workflow`         | The three existing behavior workflows                    | `ECHO_NATIVE_WORKFLOW_INFERENCE_BIN`, `ECHO_NATIVE_WORKFLOW_MODEL`, `ECHO_NATIVE_WORKFLOW_OUTPUT`, `ECHO_NATIVE_LIBRARY_PATH` |
 
-To replace the two default model variables with an explicit list, set `ECHO_EVAL_TARGETS_FILE` to a JSON file. A normal run evaluates every listed model sequentially in file order. Each `modelPath` must be a self-contained model directory that Rapid-MLX can serve directly:
+Additional opt-in tests under `src/runners/native` cover context-length curves,
+sustained execution, and chunked-prefill parity. Each file declares its enable
+flag and required environment variables.
 
-```json
-[
-  {
-    "id": "qwen36-35b-a3b-base",
-    "displayName": "Qwen3.6-35B-A3B base",
-    "modelPath": "/models/base",
-    "servedModelName": "base-eval"
-  },
-  {
-    "id": "qwen36-35b-a3b-eat-v1",
-    "displayName": "Qwen3.6-35B-A3B EAT v1",
-    "modelPath": "/models/eat-v1",
-    "servedModelName": "eat-v1-eval"
-  }
-]
-```
+### Native workflow runner
 
-The target file does not label, pair, or automatically compare base and EAT models, and it does not attach a separate adapter to a base model. Those capabilities must be implemented together with the eventual EAT artifact format rather than inferred from target names.
+One resident Native process hosts a stable model/state owner per workflow. Tool
+results within a harness session use `continuation`; subsequent harness sessions
+use `new_session`. Token streaming is disabled. After each workflow, the runner
+publishes a `current.safetensors` snapshot outside the workflow elapsed time and
+removes the evaluation state during cleanup.
 
-The output JSON checkpoints after every completed case. It records source commits and dirty paths, a hash of the current Rin prompt and the application LLM configuration, model architecture fields, exact cell definitions, every tool call and model exchange, persisted final state, timings, token usage, scoring evidence, and server cleanup status.
-
-## Session prefix-cache probe
-
-The primary behavior evaluation uses the dedicated session-scoped token-prefix cache. This gated integration probe compares the same growing E.C.H.O. histories with prefix caching disabled, with a cold session cache, and with one continuing session. It verifies the pinned and rolling entry counts, increasing cached-token counts, output equality against the cache-disabled baseline, and two 512-token long-output cases.
-
-This is the relevant contract for Qwen3.6 because its linear-attention layers carry Gated Delta Network recurrent state that cannot be treated as an ordinary trimmable key/value cache. The probe tests the E.C.H.O.-specific session boundary instead of the superseded generic exact-prompt cache experiment.
-
-```sh
-ECHO_EVAL_RAPID_MLX_BIN=/absolute/path/to/rapid-mlx \
-ECHO_EVAL_RAPID_MLX_CWD=/absolute/path/to/rapid-mlx-repository \
-ECHO_EVAL_TARGETS_FILE=/absolute/path/to/evaluation-targets.json \
-ECHO_SESSION_PREFIX_CACHE_PROBE_OUTPUT=/absolute/path/to/session-prefix-cache-result.json \
-pnpm eval:session-prefix-cache
-```
-
-## Native versus Rapid-MLX long-session gate
-
-This explicit live gate compares one initial tool call plus eight tool-result
-continuations on the local Qwen3.6-35B-A3B artifact. It runs one warmup and
-three measured sessions per engine by default and admits native only when:
-
-- every logical step and per-step prompt growth matches;
-- every completion count and final output hash matches;
-- native reuses the exact preceding committed state at every step;
-- Rapid-MLX reuses the checkpoint expected from its 2,048-token aligned,
-  next-request publication policy;
-- final visible TTFT and total time are no more than five percent slower than
-  Rapid-MLX.
-
-This is a production-contract comparison. It deliberately retains
-Rapid-MLX's tool-parser prompt injection and both engines' different cache
-publication policies, records their prompt-token difference, and does not
-mislabel the result as a token-identical kernel benchmark. The separate
-short-context gate remains the matched prompt/decode comparison.
-
-Rapid-MLX uses
-`cache={mode:auto, session_id, session_slot:rolling}` in this gate.
-`gdn_state_id` is intentionally omitted: it retains recurrent-only state, not
-the complete GDN-plus-KV boundary, and combining it with the session cache
-would overwrite recurrent state before the residual prompt suffix is
-processed.
-
-```sh
-ECHO_LONG_COMPARISON_NATIVE_INFERENCE_BIN=/absolute/path/to/echo-inference \
-ECHO_LONG_COMPARISON_MODEL=/absolute/path/to/Qwen3.6-35B-A3B-MLX-4bit \
-ECHO_LONG_COMPARISON_RAPID_MLX_BIN=/absolute/path/to/rapid-mlx \
-ECHO_LONG_COMPARISON_RAPID_MLX_CWD=/absolute/path/to/rapid-mlx-repository \
-ECHO_LONG_COMPARISON_OUTPUT=/absolute/path/to/native-rapid-long-session.json \
-ECHO_NATIVE_LIBRARY_PATH=/absolute/path/to/mlx-c/build:/absolute/path/to/mlx/lib \
-pnpm eval:native-rapid-long-session-performance
-```
-
-## Native production-workflow gate
-
-This live gate connects the stateful Native adapter to the existing E.C.H.O.
-runtime workflow harness. It uses the current Rin production prompt, the
-canonical runtime tool catalog, the real agent loop, and the harness's
-stateful synthetic chat, memory, note, and context ports. It does not start the
-future local application or SQLite persistence layer, so its timings measure
-model requests and workflow execution rather than a complete local deployment.
-
-One resident native process hosts one stable model/state owner per workflow.
-Within a harness session, tool-result requests use `continuation`; the next
-harness session for the same existence uses `new_session`. Token streaming is
-disabled. After every workflow, the gate publishes the single
-`current.safetensors` snapshot outside the workflow elapsed time and then
-removes all evaluation state during cleanup.
-
-The artifact retains every scored workflow trace and bounded Native runtime
-metrics. It reports newly processed and cached tokens, input/decode/request
-timings, decode throughput, Metal memory, the actual state transition selected
-by the adapter, and snapshot size. Admission requires all behavior checks and
-session completions to pass, continuation cache reuse to be observed, and at
-least one production-shaped request of 8,192 or more newly processed tokens to
-execute through multiple adaptive-prefill model calls.
+Artifacts retain scored traces, new and cached token counts, input/decode/request
+timings, throughput, Metal memory, state transitions, and snapshot size. Admission
+requires all behavior checks and session completions to pass, continuation cache
+reuse, and a request with at least 8,192 newly processed tokens using multiple
+adaptive-prefill model calls. These are the runner's criteria, not a statement
+that the current fixtures or models pass them.
 
 ```sh
 ECHO_NATIVE_WORKFLOW_INFERENCE_BIN=/absolute/path/to/echo-inference \
@@ -238,27 +119,54 @@ ECHO_NATIVE_LIBRARY_PATH=/absolute/path/to/mlx-c/build:/absolute/path/to/mlx/lib
 pnpm eval:native-runtime-workflow
 ```
 
-The default generation profile is reproducible `controlled-greedy`. Set
-`ECHO_NATIVE_WORKFLOW_PROFILE=production-sampling` to use the current Qwen
-non-thinking deployment sampling values. `ECHO_NATIVE_WORKFLOW_FILTER` accepts
-a JavaScript regular expression over workflow IDs; `ECHO_NATIVE_WORKFLOW_SEED`
-and `ECHO_NATIVE_WORKFLOW_MAX_TURNS` control the recorded seed schedule and
-per-session agent-loop ceiling. The optional
-`ECHO_NATIVE_WORKFLOW_STATE_MODE=fresh-session-ablation` creates a new Native
-state owner at every harness session. It exists only to isolate the behavioral
-effect of cross-session GDN carry and is not a production candidate.
-`ECHO_NATIVE_WORKFLOW_STATE_MODE=recurrent-only-ablation` keeps one stable
-owner and the ordinary `new_session` transition, but clears the short-range
-GDN convolution history while retaining the recurrent matrix. The runner sets
-the corresponding Native startup policy itself and verifies the policy echoed
-by the engine. `convolution-only-ablation` retains the convolution history and
-clears the recurrent matrix, completing the two-component boundary ablation.
-All ablation modes are diagnostic only; omitting the variable retains complete
-GDN state.
+The default `controlled-greedy` profile uses temperature `0`, top-p `1`, and top-k
+`1`. Set `ECHO_NATIVE_WORKFLOW_PROFILE=production-sampling` for temperature `0.7`,
+top-p `0.8`, top-k `20`, min-p `0`, presence penalty `1.5`, and repetition penalty
+`1`. Both profiles disable thinking and cap output at 1,024 tokens per turn.
+These fixed evaluation settings do not constitute an exact production replay;
+a single trial also does not estimate success probability under sampling.
 
-## Rescoring a saved result
+`ECHO_NATIVE_WORKFLOW_FILTER` accepts a JavaScript regular expression over workflow
+IDs. `ECHO_NATIVE_WORKFLOW_SEED` and `ECHO_NATIVE_WORKFLOW_MAX_TURNS` control the
+recorded seed schedule and per-session agent-loop ceiling.
 
-When only scoring rules change, reuse the recorded model exchanges and tool traces instead of rerunning inference. This command overwrites the specified result JSON after appending a rescore-history entry. It cannot evaluate evidence that the original run did not record. Rescoring an older result removes its legacy `promptAblationComparison` summary because the current evaluator no longer recomputes that provisional-prompt experiment.
+`ECHO_NATIVE_WORKFLOW_STATE_MODE` defaults to carrying complete GDN state. Its
+optional diagnostic modes isolate cross-session state effects:
+
+- `fresh-session-ablation`: create a fresh Native state owner for every session.
+- `recurrent-only-ablation`: retain the recurrent matrix and clear convolution history.
+- `convolution-only-ablation`: retain convolution history and clear the recurrent matrix.
+
+## Hosted Cognitive live smoke
+
+Set `OPENAI_API_KEY` in the command environment without placing its value in the
+command line, then run:
+
+```sh
+pnpm eval:cognitive-hosted
+```
+
+The smoke runs Memory / Emotion for `pre_main` and `post_main` with synthetic
+input. It checks module system prompts, recall/store/emotion schemas, the
+system-owned `search_memory` / `update_emotion` handoff, shared chronological
+context, non-empty usage, and model-event attribution. It is excluded from
+`pnpm test:run` and uses the real API only when explicitly enabled.
+See [Cognitive Module Architecture](../../docs/cognitive-module-architecture.md)
+for the execution design. This smoke does not establish model quality or real
+persistence correctness.
+
+## Saved results
+
+Keep generated result JSON and logs under the ignored
+`.artifacts/model-evaluation/` directory, or use `/private/tmp` for disposable
+runs. Curated reports may live under `docs/`; raw machine-specific artifacts do not.
+
+When only scoring rules change, reuse saved model exchanges and tool traces.
+The following command overwrites the specified result JSON after appending a
+rescore-history entry. It expects the saved artifact's `candidates` structure;
+it does not accept arbitrary Native diagnostic reports. It cannot evaluate
+missing evidence or add Cognitive coverage to an older trace. Rescoring removes
+the legacy `promptAblationComparison` summary, which is no longer recomputed.
 
 ```sh
 ECHO_EVAL_RESCORE_PATH=/absolute/path/to/result.json \

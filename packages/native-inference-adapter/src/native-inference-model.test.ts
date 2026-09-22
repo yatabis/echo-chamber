@@ -94,6 +94,134 @@ class FakeTransport implements NativeInferenceTransport {
 }
 
 describe('NativeInferenceModel', () => {
+  it('bounds an independent input cache to one explicit session without rewriting input', async () => {
+    const { model, transport } = setupModel(
+      undefined,
+      undefined,
+      'independent'
+    );
+    const respond = autoResponder();
+    transport.onSend = (command, current): void => {
+      if (command.type === 'clear_input_cache') {
+        current.emit({
+          event: 'input_cache_cleared',
+          request_id: command.request_id,
+          instance_id: command.instance_id,
+        });
+      } else respond(command, current);
+    };
+    await model.openState({ persistence: 'ephemeral' });
+    model.beginInputCacheSession('session-one');
+    expect(() => {
+      model.beginInputCacheSession('nested');
+    }).toThrow('active');
+    const input = request('complete cognitive input');
+    await model.generate(input);
+    await model.generate(input);
+    await model.endInputCacheSession();
+    await model.generate(input);
+    model.beginInputCacheSession('session-two');
+    await model.generate(input);
+    await model.endInputCacheSession();
+    const commands = transport.commands.filter(
+      (command) => command.type === 'generate'
+    );
+    expect(commands.map((command) => command.input_cache_scope)).toEqual([
+      'session-one',
+      'session-one',
+      undefined,
+      'session-two',
+    ]);
+    expect(
+      commands.every(
+        (command) =>
+          JSON.stringify(command.input) === JSON.stringify(input.input)
+      )
+    ).toBe(true);
+    expect(
+      transport.commands.filter(
+        (command) => command.type === 'clear_input_cache'
+      )
+    ).toHaveLength(2);
+    const main = setupModel().model;
+    expect(() => {
+      main.beginInputCacheSession('main');
+    }).toThrow('independent');
+  });
+
+  it('isolates independent requests and refuses continuation or durable state', async () => {
+    const { model, transport } = setupModel(
+      undefined,
+      undefined,
+      'independent'
+    );
+    transport.onSend = autoResponder();
+    await expect(
+      model.openState({ persistence: 'durable', snapshotRoot: '/state/rin' })
+    ).rejects.toThrow('independent');
+    expect(transport.commands).toHaveLength(0);
+    await model.openState({ persistence: 'ephemeral' });
+    const first = await model.generate(request('first context'));
+    await expect(
+      model.generate({
+        ...request('delta'),
+        previousResponseToken: first.responseToken,
+      })
+    ).rejects.toThrow('independent');
+    await model.generate(request('complete next context'));
+    const commands = transport.commands.filter(
+      (item) => item.type === 'generate'
+    );
+    expect(commands.map((item) => item.state_transition)).toEqual([
+      'initial',
+      'reset',
+    ]);
+    expect(commands[1]?.input).toEqual(request('complete next context').input);
+    expect(model.state().snapshotDirty).toBe(false);
+  });
+
+  it('retains the old state on cancellation but resets it before an independent retry', async () => {
+    const { model, transport } = setupModel(
+      undefined,
+      undefined,
+      'independent'
+    );
+    transport.onSend = autoResponder();
+    await model.openState({ persistence: 'ephemeral' });
+    await model.generate(request('old context'));
+    const before = model.state();
+    const controller = new AbortController();
+    transport.onSend = (wire, current): void => {
+      if (wire.type === 'generate') controller.abort();
+      if (wire.type === 'cancel')
+        current.emit({
+          event: 'cancelled',
+          request_id: wire.request_id,
+          usage: {
+            cached_prefix_tokens: 0,
+            input_tokens_processed: 12,
+            generated_tokens: 3,
+          },
+        });
+    };
+    const input = request('retry context');
+    await expect(
+      model.generate({ ...input, signal: controller.signal })
+    ).rejects.toMatchObject({ name: 'AbortError', usage: { totalTokens: 15 } });
+    expect(model.state()).toEqual(before);
+    transport.onSend = autoResponder();
+    await model.generate(input);
+    const commands = transport.commands.filter(
+      (item) => item.type === 'generate'
+    );
+    expect(commands.map((item) => item.state_transition)).toEqual([
+      'initial',
+      'reset',
+      'reset',
+    ]);
+    expect(commands[1]?.input).toEqual(commands[2]?.input);
+  });
+
   it('applies a request-local output limit without changing the default', async () => {
     const { model, transport } = setupModel();
     transport.onSend = autoResponder();
@@ -708,7 +836,7 @@ describe('NativeInferenceModel', () => {
     await model.openState({ persistence: 'ephemeral' });
     const result = await runAgentSession({
       model,
-      initialInput: [{ role: 'developer', content: 'continue until finished' }],
+      initialInput: [{ role: 'system', content: 'continue until finished' }],
       tools: [
         {
           name: 'finish_thinking',
@@ -1076,7 +1204,7 @@ describe('NativeInferenceModel', () => {
 
     await model.openState({ persistence: 'ephemeral' });
     const initial = await model.generate({
-      input: [{ role: 'developer', content: 'memory system prompt' }],
+      input: [{ role: 'system', content: 'memory system prompt' }],
       tools: [TOOL],
     });
     if (initial.responseToken === undefined) {
@@ -1307,7 +1435,8 @@ describe('NativeInferenceModel', () => {
 
 function setupModel(
   onToken?: () => void,
-  events?: EchoEventPort
+  events?: EchoEventPort,
+  statePolicy?: 'continuous' | 'independent'
 ): {
   model: NativeInferenceModel;
   transport: FakeTransport;
@@ -1319,6 +1448,7 @@ function setupModel(
     instanceId: 'rin',
     maxTokens: 128,
     seedSource: (): number => 42,
+    ...(statePolicy === undefined ? {} : { statePolicy }),
     ...(onToken === undefined ? {} : { onToken }),
     ...(events === undefined ? {} : { events }),
   });
@@ -1349,9 +1479,11 @@ function autoResponder(options: CompletedOptions = {}) {
         event: 'state_opened',
         request_id: wire.request_id,
         instance_id: wire.instance_id,
-        persistence: 'durable',
+        persistence: wire.persistence,
         restored: false,
-        current_path: '/state/rin/current.safetensors',
+        ...(wire.persistence === 'durable'
+          ? { current_path: '/state/rin/current.safetensors' }
+          : {}),
       });
     } else if (wire.type === 'generate') {
       transport.emit(completed(wire, options));

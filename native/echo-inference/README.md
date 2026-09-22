@@ -22,10 +22,10 @@ E.C.H.O.'s [Cognitive Module workflow](../../docs/cognitive-module-architecture.
 runs Memory and Emotion before each Main turn and at session completion. Native
 accepts their committed results in Main's continuation input.
 
-Running Memory/Emotion themselves on Native requires request-level structured
-output, output limits, abort propagation, and state boundaries for each module
-activation. Local domain storage and the application entry point also require
-integration. See [Native runtime integration](../../docs/native-runtime-integration-readiness.md)
+LocalNativeInferenceRuntime.think() connects all three Native models to the
+Core workflow with injected domain storage and tools. Memory/Emotion use
+independent calls with constrained output, output limits and abort propagation.
+Durable domain storage and application startup still require integration. See [Native runtime integration](../../docs/native-runtime-integration-readiness.md)
 for these requirements and the validation coverage of each boundary.
 
 ## State contract
@@ -49,20 +49,26 @@ The local E.C.H.O. composition opens three stable lanes per existence:
 - `memory`: process-local and ephemeral;
 - `emotion`: process-local and ephemeral.
 
-Memory and emotion may generate in parallel from their own KV/GDN states.
+Memory and emotion generate in parallel from complete inputs, reusing only
+compatible input-prefix KV/GDN checkpoints within the same thinking session.
 They never commit into `main`, never snapshot, and do not consume each other's
 same-turn result. The module-workload probe exercises a main thought path
 that consumes both outputs.
 
-The three request transitions are:
+The request transitions are:
 
-- `initial`: no current state exists; start from empty GDN and attention state;
+- `initial`: no current state exists; start from a compatible input-only
+  checkpoint when available, otherwise empty KV/GDN;
 - `continuation`: reuse the complete current KV/GDN state and process only the
   newly supplied suffix;
 - `new_session`: by default retain the current GDN convolution and recurrent
-  state, clear every attention KV cache, and process a complete fresh prompt.
+  state, clear every attention KV cache, and process a complete fresh prompt;
+- `reset`: require a current state, start from a compatible input-only checkpoint
+  when available, otherwise empty KV/GDN, and replace the current state only
+  after the complete request succeeds.
 
-The TypeScript adapter derives that transition from two facts. A
+With the default `continuous` state policy, the TypeScript adapter derives
+that transition from two facts. A
 `previousResponseToken` supplied after a successful response from the same
 live adapter process selects `continuation`. If it is absent, an existing state
 selects `new_session`, otherwise the request is `initial`. The token is an
@@ -70,6 +76,31 @@ opaque, process-local continuation capability, not an LLM token or durable
 cursor. Its contents are not decoded or persisted. Restoring a process starts
 with state but no live response token, so its first request is necessarily a
 `new_session`.
+
+Local Memory/Emotion adapters use `statePolicy: independent`: calls use `initial`
+until a generated state is first committed, then `reset`, including retries and
+new sessions.
+This policy rejects `previousResponseToken` and durable state. A failed reset
+leaves the old current state untouched; that state is never reused by the next
+independent call. Core owns continuity through committed domain data in the
+next full input.
+
+`runThinkingSession()` gives each auxiliary lane a session-scoped input cache.
+The Native tokenizer identifies the boundary before the assistant generation
+header. One checkpoint per lane retains the exact tokens and their KV/GDN,
+bound to that session and resident model/tokenizer owner. A later full input
+reuses it only when its entire cached prefix matches; only the remaining suffix
+is prefilled. The checkpoint grows with the canonical context. Generation uses
+private working state and never appends its raw output to this input cache.
+Memory's recall/store instruction change invalidates the prefix and requires a
+fresh prefill; Emotion can reuse its growing context across that boundary.
+
+A completed input checkpoint survives subsequent generation failure or
+cancellation, so retry can reuse it. Cancellation before that boundary preserves
+the preceding checkpoint. `clear_input_cache` releases the checkpoint on session
+success or failure; the next session starts with no input cache. The protocol
+allows `input_cache_scope` only on ephemeral `initial`/`reset` requests, never
+on Main's durable lane or continuous state transitions.
 
 Exact `continuation` accepts the ordered results for Main's pending calls,
 followed optionally by complete runtime-owned tool call/result pairs. The
@@ -83,7 +114,7 @@ The adapter checks Main's pending result IDs, order and count before any
 runtime exchange. Both adapter and Rust renderer reject unmarked calls,
 missing/mismatched results and duplicate IDs within the suffix. With no
 pending call, an empty retry or complete runtime exchanges are admitted;
-arbitrary user/developer/assistant messages still require `new_session`.
+instruction and conversation messages require a complete prompt.
 This preserves the official Qwen template and the committed EOS boundary
 without reconstructing prior output or replaying the token history.
 
@@ -341,11 +372,13 @@ production durable-state layout.
 
 `serve-stdio` reads one JSON command per stdin line and writes one typed event
 per stdout line. The second argument bounds active plus waiting generation
-requests. Protocol version 13 admits:
+requests. Protocol version 15 admits:
 
 - `open_state`: register either a durable lane with a fixed snapshot root or
   an ephemeral process-local lane;
-- `generate`: process one `initial`, `continuation`, or `new_session` request;
+- `generate`: process one `initial`, `continuation`, `new_session`, or `reset` request,
+  optionally reusing an ephemeral input checkpoint with `input_cache_scope`;
+- `clear_input_cache`: release an ephemeral lane's input checkpoint;
 - `cancel`: request rollback at the next cancellation boundary;
 - `snapshot`: atomically replace a durable lane's fixed current payload;
 - `shutdown`: close the resident owner.
@@ -362,7 +395,7 @@ The native protocol is a trusted-local child-process contract, not an
 OpenAI-compatible HTTP API. E.C.H.O.'s provider-neutral `ModelPort` mapping is
 owned by `packages/native-inference-adapter`.
 
-Adapter and engine must both use protocol version 13; mismatched versions are
+Adapter and engine must both use protocol version 15; mismatched versions are
 rejected at startup. The snapshot format has its own schema version, validated
 when opening durable state.
 
@@ -422,6 +455,43 @@ ECHO_NATIVE_MODEL_DIRECTORY=/absolute/path/to/model \
 pnpm --filter @echo-chamber/native-inference-adapter exec vitest run \
   src/real-request-controls.test.ts --silent=false
 ```
+
+## Cognitive workflow verification
+
+The opt-in test uses actual Core Memory/Emotion prompts and three Native models
+across two thinking sessions per sampling profile. The first session checks a
+note through a tool; the second reviews the committed result. It covers a mid-generation
+Memory cancellation, retry without re-running successful Emotion, domain-result
+handoff and next-session input. Main uses a bounded test task and local tools;
+domain search/storage are an in-memory fixture, not the local persistence layer.
+
+```sh
+ECHO_NATIVE_BINARY=/absolute/path/to/echo-inference \
+ECHO_NATIVE_MODEL_DIRECTORY=/absolute/path/to/model \
+ECHO_NATIVE_LIBRARY_PATH=/absolute/path/to/mlx-c/build:/absolute/path/to/mlx/lib \
+  pnpm --filter @echo-chamber/local-runtime exec vitest run src/real-cognitive-workflow.test.ts
+```
+
+Set `ECHO_NATIVE_COGNITIVE_REPORT_DIRECTORY` to an existing directory to retain
+commands, responses, domain commits and usage. Ordinary tests skip this GPU path.
+
+## System-driven startup
+
+The Qwen template supports one leading system message. Native maps `developer`
+to `system` and combines consecutive leading instruction messages in input
+order, separated by a blank line. Both roles share the same instruction priority.
+System and developer messages must form the leading instruction block.
+
+Native also accepts autonomous startup from system instructions and tool
+observations. When there is no user query, the renderer uses the leading system
+message (index 0) as the reference for retaining assistant-history thinking.
+This extends the official template's user-query requirement; message envelopes
+and the non-thinking generation header follow the Qwen template.
+
+`oracles/qwen35_chat_template_parity.py` applies this role normalization and
+startup extension to the model's Jinja template. Fixtures record the original
+and effective template hashes; parity checks compare rendered text and exact
+tokenizer IDs.
 
 ## Cognitive continuation validation
 
@@ -550,15 +620,20 @@ pnpm --filter @echo-chamber/local-runtime probe:real-lifecycle \
 
 ## Real-model state integrity test
 
-The Rust `state_integrity` test compares every KV/GDN tensor after interrupted
+The Rust `state_integrity` tests compare every KV/GDN tensor after interrupted
 generation and retry, including cancellation of one row in a six-row batch.
 It freezes independent tensor references in temporary safetensors files so
 shared GPU buffers cannot hide a mutation. See the
 [validation contract](docs/architecture.md#validation) for the comparison
 conditions and coverage.
 
-Ordinary `cargo test` skips this model-dependent test. With the MLX environment
-configured, run it from `native/echo-inference`:
+The input-cache regression additionally checks cold/incremental state equality
+under matched prefill chunk boundaries, generation isolation, partial-prefill
+and decode cancellation, batched sibling isolation, session/prompt invalidation,
+and explicit release.
+
+Ordinary `cargo test` skips these model-dependent tests. With the MLX environment
+configured, run them from `native/echo-inference`:
 
 ```sh
 ECHO_NATIVE_TEST_MODEL=/absolute/path/to/model \
@@ -568,6 +643,21 @@ ECHO_NATIVE_TEST_MODEL=/absolute/path/to/model \
 
 Successful runs remove their temporary reference directory. Failed runs retain
 the directory printed in the log for diagnosis.
+
+## Growing-context input cache test
+
+From the repository root, the growing-context probe measures cached versus cold
+prefill work and latency with the same final full input:
+
+```sh
+ECHO_NATIVE_BINARY=/absolute/path/to/echo-inference \
+ECHO_NATIVE_MODEL_DIRECTORY=/absolute/path/to/local-model \
+  pnpm --filter @echo-chamber/local-runtime exec vitest run src/real-input-cache.test.ts
+```
+
+Set `ECHO_NATIVE_COGNITIVE_REPORT_DIRECTORY` to an existing directory to retain
+per-request token counts and timings. Timing is diagnostic; the regression
+asserts token work rather than a machine-dependent latency threshold.
 
 ## Evidence
 

@@ -1,10 +1,15 @@
 import { formatJapaneseDatetime } from '../utils/datetime';
 
 import type { CognitiveModulePhase } from './cognitive-module-orchestrator';
-import type { ModelToolContract } from '../ports/model';
+import type {
+  ModelInputItem,
+  ModelMessageContent,
+  ModelMessageContentPart,
+  ModelToolContract,
+} from '../ports/model';
 
 /**
- * Agent の初期 developer prompt を組み立てるための入力。
+ * Agent の起動時の指示と共有contextを組み立てるための入力。
  * static prompt、本時刻、利用可能ツール一覧をまとめて受け取る。
  */
 export interface BuildAgentPromptInput {
@@ -14,11 +19,11 @@ export interface BuildAgentPromptInput {
 }
 
 /**
- * prompt builder が返す developer message。
+ * prompt builder が返す専用指示またはruntime contextのメッセージ。
  * E.C.H.O. Chamber の model protocol に渡す中間表現として使う。
  */
 export interface AgentPromptMessage {
-  role: 'developer';
+  role: 'system';
   content: string;
 }
 
@@ -141,7 +146,7 @@ export function buildAgentPromptMessages(
 
   return {
     mainSystemPrompt: {
-      role: 'developer',
+      role: 'system',
       content: [
         input.systemPrompt,
         toolCatalog,
@@ -149,8 +154,39 @@ export function buildAgentPromptMessages(
       ].join('\n\n'),
     },
     sharedRuntimeContext: {
-      role: 'developer',
+      role: 'system',
       content: runtimeContext,
     },
   };
+}
+
+/**
+ * Coreの専用指示と共有system contextを、先頭のsystemメッセージに組み立てる。
+ * 共有contextでは前sessionの状態が日時に先行するため、systemだけを取り出す。
+ * その他のメッセージ・tool履歴はrole、内容、順序を変えず接続する。
+ */
+export function buildModelInputWithSystemPrompt(
+  systemPrompt: string,
+  sharedContext: readonly ModelInputItem[]
+): ModelInputItem[] {
+  const instructions: ModelMessageContent[] = [systemPrompt];
+  const observations: ModelInputItem[] = [];
+  for (const item of sharedContext) {
+    if ('role' in item && item.role === 'system') {
+      instructions.push(item.content);
+    } else {
+      observations.push(item);
+    }
+  }
+  const content = instructions.every(
+    (instruction) => typeof instruction === 'string'
+  )
+    ? instructions.join('\n\n')
+    : instructions.flatMap<ModelMessageContentPart>((instruction, index) => [
+        ...(index === 0 ? [] : [{ type: 'text' as const, text: '\n\n' }]),
+        ...(typeof instruction === 'string'
+          ? [{ type: 'text' as const, text: instruction }]
+          : instruction),
+      ]);
+  return [{ role: 'system', content }, ...observations];
 }

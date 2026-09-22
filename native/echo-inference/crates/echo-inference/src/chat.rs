@@ -53,8 +53,7 @@ Reminder:
 pub enum EchoMessageRole {
     /// Leading system instruction.
     System,
-    /// Provider-neutral instruction mapped to `user`, matching the current
-    /// E.C.H.O. Chat Completions adapter.
+    /// Provider-neutral instruction represented as Qwen `system` content.
     Developer,
     /// User message.
     User,
@@ -351,9 +350,11 @@ impl Qwen35ChatTokenizer {
 
     /// Renders and tokenizes one complete E.C.H.O. input history.
     ///
-    /// `developer` messages become Qwen `user` messages, exactly matching the
-    /// current Chat Completions adapter. Thinking is disabled, and images fail
-    /// closed because the native runtime currently owns only the language path.
+    /// `developer` falls back to `system`; leading instructions share one
+    /// system envelope in input order, as required by the Qwen template.
+    /// A leading system instruction can start an autonomous session without a
+    /// user query. Thinking is disabled, and images fail closed because the
+    /// native runtime currently owns only the language path.
     ///
     /// # Errors
     ///
@@ -371,6 +372,36 @@ impl Qwen35ChatTokenizer {
             rendered,
             token_ids: encoding.get_ids().to_vec(),
         })
+    }
+
+    /// Returns the exact input prefix before the template's generation-only header.
+    ///
+    /// # Errors
+    /// Returns an error if this is not a complete prompt or tokenization changes
+    /// the prefix at the header boundary. No prompt contents are modified.
+    pub fn input_cache_prefix(&self, encoded: &EncodedChatPrompt) -> Result<Vec<u32>, ChatError> {
+        let prefix = encoded
+            .rendered
+            .strip_suffix(NON_THINKING_GENERATION_PROMPT)
+            .ok_or_else(|| ChatError::InvalidPrompt {
+                detail: "input cache requires a full generation prompt".into(),
+            })?;
+        let tokens =
+            self.tokenizer
+                .encode(prefix, false)
+                .map_err(|source| ChatError::Tokenizer {
+                    detail: source.to_string(),
+                })?;
+        let tokens = tokens.get_ids().to_vec();
+        if tokens.is_empty()
+            || tokens.len() >= encoded.token_ids.len()
+            || !encoded.token_ids.starts_with(&tokens)
+        {
+            return Err(ChatError::InvalidPrompt {
+                detail: "generation header is not a stable token boundary".into(),
+            });
+        }
+        Ok(tokens)
     }
 
     /// Encodes Main results and committed runtime exchanges against resident state.
@@ -617,13 +648,13 @@ fn validate_continuation_exchanges(input: &[EchoInputItem]) -> Result<(), ChatEr
 }
 
 fn normalize_messages(input: &[EchoInputItem]) -> Result<Vec<TemplateMessage>, ChatError> {
-    input
+    let mut messages = input
         .iter()
         .map(|item| match item {
             EchoInputItem::Message(message) => {
                 let role = match message.role {
-                    EchoMessageRole::System => TemplateRole::System,
-                    EchoMessageRole::Developer | EchoMessageRole::User => TemplateRole::User,
+                    EchoMessageRole::System | EchoMessageRole::Developer => TemplateRole::System,
+                    EchoMessageRole::User => TemplateRole::User,
                     EchoMessageRole::Assistant => TemplateRole::Assistant,
                 };
                 Ok(TemplateMessage {
@@ -664,7 +695,23 @@ fn normalize_messages(input: &[EchoInputItem]) -> Result<Vec<TemplateMessage>, C
                 tool_calls: Vec::new(),
             }),
         })
-        .collect()
+        .collect::<Result<Vec<_>, ChatError>>()?;
+
+    // Qwen admits one leading system message. Keep all initial instructions in
+    // input order without moving later instructions across conversation history.
+    let instruction_count = messages
+        .iter()
+        .take_while(|message| message.role == TemplateRole::System)
+        .count();
+    if instruction_count > 1 {
+        messages[0].content = messages[..instruction_count]
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        drop(messages.drain(1..instruction_count));
+    }
+    Ok(messages)
 }
 
 fn render_content(content: &EchoMessageContent) -> Result<String, ChatError> {
@@ -701,8 +748,17 @@ fn last_query_index(messages: &[TemplateMessage]) -> Result<usize, ChatError> {
                 Some(index)
             }
         })
+        // Core can start an autonomous session from system instructions and tool
+        // observations alone. Anchor that history at the leading system without
+        // injecting a user query or changing the instruction role.
+        .or_else(|| {
+            messages
+                .first()
+                .filter(|message| message.role == TemplateRole::System)
+                .map(|_| 0)
+        })
         .ok_or_else(|| ChatError::InvalidPrompt {
-            detail: "no user query found in messages".into(),
+            detail: "no user query or leading system instruction found in messages".into(),
         })
 }
 
@@ -1013,13 +1069,82 @@ mod tests {
     }
 
     #[test]
-    fn developer_maps_to_user_for_echo_startup_compatibility() {
+    fn developer_instruction_uses_the_system_envelope() {
         let rendered = render_chat_prompt(&EchoChatPrompt {
             input: vec![text(EchoMessageRole::Developer, "persona")],
             tools: Vec::new(),
         })
-        .expect("valid prompt");
-        assert!(rendered.starts_with("<|im_start|>user\npersona<|im_end|>\n"));
+        .expect("developer falls back to system");
+        assert_eq!(
+            rendered,
+            "<|im_start|>system\npersona<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+        );
+    }
+
+    #[test]
+    fn leading_instruction_messages_preserve_content_and_order() {
+        for roles in [
+            [EchoMessageRole::System, EchoMessageRole::Developer],
+            [EchoMessageRole::Developer, EchoMessageRole::System],
+            [EchoMessageRole::Developer, EchoMessageRole::Developer],
+            [EchoMessageRole::System, EchoMessageRole::System],
+        ] {
+            let rendered = render_chat_prompt(&EchoChatPrompt {
+                input: vec![
+                    text(roles[0], "first"),
+                    text(roles[1], "second"),
+                    text(EchoMessageRole::User, "hello"),
+                ],
+                tools: Vec::new(),
+            })
+            .expect("leading instructions can share a system envelope");
+            assert_eq!(
+                rendered,
+                "<|im_start|>system\nfirst\n\nsecond<|im_end|>\n<|im_start|>user\nhello<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+            );
+        }
+    }
+
+    #[test]
+    fn developer_and_system_share_instruction_placement_constraints() {
+        for role in [EchoMessageRole::Developer, EchoMessageRole::System] {
+            let error = render_chat_prompt(&EchoChatPrompt {
+                input: vec![
+                    text(EchoMessageRole::User, "hello"),
+                    text(role, "late instruction"),
+                ],
+                tools: Vec::new(),
+            })
+            .expect_err("instructions cannot move across conversation history");
+            assert!(
+                matches!(error, ChatError::InvalidPrompt { detail } if detail.contains("beginning"))
+            );
+            assert!(render_chat_continuation(&[text(role, "new instruction")]).is_err());
+        }
+    }
+
+    #[test]
+    fn system_driven_startup_does_not_invent_a_user_message() {
+        let rendered = render_chat_prompt(&EchoChatPrompt {
+            input: vec![text(EchoMessageRole::System, "persona\n\ncurrent time")],
+            tools: Vec::new(),
+        })
+        .expect("system-driven startup");
+        assert_eq!(
+            rendered,
+            "<|im_start|>system\npersona\n\ncurrent time<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+        );
+    }
+
+    #[test]
+    fn assistant_only_history_cannot_start_a_session() {
+        assert!(
+            render_chat_prompt(&EchoChatPrompt {
+                input: vec![text(EchoMessageRole::Assistant, "hello")],
+                tools: Vec::new(),
+            })
+            .is_err()
+        );
     }
 
     #[test]

@@ -6,15 +6,15 @@ Native backend で E.C.H.O. の思考 session を実行するための接続範�
 
 Native 推論基盤は、モデルの常駐実行、TypeScript adapter、KV/GDN の継続、キャンセル時の rollback、Main state の保存・復旧を提供する。確定済みの Cognitive 結果を Main の継続入力へ渡す経路も実装されている。
 
-Memory/Emotion 自身の Native 生成から domain 保存までを含む、アプリケーション全体の実行は未接続である。推論 state の snapshot はモデル内部の状態を保存するもので、Memory・Emotion・Note 等の domain 保存は別途必要になる。
+LocalNativeInferenceRuntime.think() は、Native の Main・Memory・Emotion を既存の ThinkingEngine/Cognitive coordinator に接続する。保存先と tool は呼び出し側が注入する。ローカルの永続保存実装とアプリケーション起動設定は未接続であり、推論 state の snapshot とは別に Memory・Emotion・Note 等の domain 保存が必要になる。
 
 | 境界                                             | 実装状況                                                                                              |
 | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
-| Main への Cognitive handoff                      | Core formatter、Native adapter、protocol v13、Rust renderer が対応                                    |
+| Main への Cognitive handoff                      | Core formatter、Native adapter、protocol v15、Rust renderer が対応                                    |
 | ThinkingEngine と Cognitive coordinator の処理順 | モデル応答・domain 保存先・transport を fixture にした結合テストで検証                                |
 | Cognitive request の指定                         | `responseFormat` の生成時のスキーマ制約・最終出力の契約検証、request ごとの出力上限、abort を実装済み |
-| Memory/Emotion の推論 state                      | 独立した ephemeral lane は実装済み。phase・再試行・次 activation との対応が未接続                     |
-| ローカルアプリケーション                         | provider を注入できる composition、domain 保存、実行入口、全体の実モデル評価が必要                    |
+| Memory/Emotion の推論 state                      | 前回の生成状態は引き継がず、同一 session の入力 checkpoint を条件付きで再利用                         |
+| ローカルアプリケーション                         | Native composition と Core の実行入口は実装済み。永続保存・起動設定・実運用 workflow の評価が必要     |
 
 ## Main の継続入力
 
@@ -28,7 +28,7 @@ Native は次の順序で継続入力を受理する。
 
 Main に未解決 call がなければ、空の再試行または確定済み runtime exchange を受理する。新しい通常 message は `new_session` を必要とする。adapter と Rust renderer は、由来のない call、未解決・不一致の組、suffix 内の重複 ID を拒否する。
 
-`origin` は runtime が付ける入力専用属性で、モデル出力から引き継がない。これは確定済みの履歴を識別するためのもので、`update_emotion` を Main の実行可能 tool として登録するものではない。Native adapter と engine は protocol version 13 で揃える。
+`origin` は runtime が付ける入力専用属性で、モデル出力から引き継がない。これは確定済みの履歴を識別するためのもので、`update_emotion` を Main の実行可能 tool として登録するものではない。Native adapter と engine は protocol version 15 で揃える。
 
 ## Cognitive request の実行契約
 
@@ -40,7 +40,7 @@ Main に未解決 call がなければ、空の再試行または確定済み ru
 
 `signal` が開始前に abort 済みなら生成を送らず、実行中なら generate の後に cancel を送る。adapter は terminal event まで lane を占有する。`cancelled` なら直前の KV/GDN と継続情報を維持し、`completed` が競合に勝った場合は確定済みの応答を受理する。cancel の送信失敗で engine の状態が不明になった client は、以降の要求を拒否する。
 
-長さ制限による未完了と、エンジン・通信経路の不変条件に反する最終出力は、エンジンが EOS で閉じて確定した state を保持したまま使用量付きのエラーを返す。キャンセルでは、完了した prefill chunk と生成済み token の使用量を protocol v13 の `cancelled.usage` で返す。Cognitive coordinator は `ModelGenerationError` の使用量を失敗・再試行後も集計する。domain commit の可否と、モデル内部で state が確定したかどうかは別の境界である。
+長さ制限による未完了と、エンジン・通信経路の不変条件に反する最終出力は、エンジンが EOS で閉じて確定した state を保持したまま使用量付きのエラーを返す。キャンセルでは、完了した prefill chunk と生成済み token の使用量を protocol v15 の `cancelled.usage` で返す。Cognitive coordinator は `ModelGenerationError` の使用量を失敗・再試行後も集計する。domain commit の可否と、モデル内部で state が確定したかどうかは別の境界である。
 
 ## 検証方法と確認範囲
 
@@ -59,19 +59,45 @@ state integrity テストはテンソルの値・shape・dtype を比較する�
 
 通常の Node テスト、Rust テスト、実モデル probe は実行条件が異なる。モデルと Metal を必要とする検証は明示的に実行する。環境設定とコマンドは[Native README](../native/echo-inference/README.md#build)を参照する。
 
+## Memory/Emotion の状態と composition
+
+Memory/Emotion の計算の基準は、Core が各呼び出しへ渡す専用指示と共有 context 全体とする。前回の生成後の GDN を残して同じ履歴を再入力する意味を追加しないため、local runtime は両 adapter を `statePolicy: independent` で構築する。Main の既存の継続仕様は変更しない。
+
+初回は `initial`、既存 state がある呼び出しは `reset` を使う。どちらも前回の生成後の KV/GDN は引き継がず、成功時だけ lane の current state を置き換える。独立呼び出しは `previousResponseToken` と durable 保存を拒否する。
+
+`runThinkingSession()` は Memory/Emotion に同じ session ID を渡す。Native は各 lane に1個、生成ヘッダー直前の入力トークン列と KV/GDN を保持する。同じ session 内で保存済みトークン列全体が今回の入力の先頭と一致するときだけ再利用し、追加部分を計算して checkpoint を更新する。Core の入力内容やロールは変更しない。生成は別の作業用状態から進め、前回の生の生成結果は入力キャッシュへ混ぜない。
+
+Memory の想起から記銘への指示変更は一致しないため全入力を再計算する。Emotion は同じ指示と伸長した共有 context なら再利用できる。生成の途中 abort 後も、完了済みの入力 checkpoint は再試行に使える。入力 checkpoint の完成前に中断した場合は以前の checkpoint を保持する。session の成功・失敗どちらでも `clear_input_cache` で解放する。session 間の継続は domain 保存と初期 context が担当する。
+
+Core は同じ phase の再試行に同じ入力を渡し、成功済みの sibling を保持する。この再試行契約と、Native の入力キャッシュの寿命は別々に管理する。
+
+[共通 factory](../packages/core/src/agent/model-cognitive-module.ts) は Core の prompt・schema・handoff と、注入された model/domain/retry policy を束ねる。Hosted の SDK・環境設定・期限・retry 判定は Worker 側に残る。[local runtime](../apps/local-runtime/src/local-native-inference-runtime.ts) の `think()` は Native model を注入し、session の排他と Main checkpoint に既存の `runThinkingSession()` を使う。呼び出し側は domain、tool、Main prompt、Cognitive の retry policy・期限・出力上限を指定する。
+
+[実モデル Cognitive テスト](../apps/local-runtime/src/real-cognitive-workflow.test.ts) は、Core の実際の Memory/Emotion prompt と schema で、greedy/production sampling の各2 sessionを実行する。初回は tool で確認した結果を使って終了し、次回は前 session の確定結果を参照する。Main の各生成前の `pre_main` と終了後の `post_main`、2回目の session の Memory の途中 abort と再試行、成功済み Emotion の保持、全使用量の照合、前 session の確定結果の再入力を確認する。3 module の生成・Native transport・Core orchestration は実装を使用し、Main の課題と tool は検証用、domain の検索・保存はメモリ上の fixture とする。永続化・再起動や、新しい課題を session をまたいで遂行する運用品質の受け入れを代替しない。
+
+Rust の state integrity テストは、単独・バッチの `reset` 後の全 KV/GDN が同じ入力を空から実行した対照と一致すること、およびキャンセル・observer 失敗で直前の全テンソルが保たれることを確認する。入力キャッシュのテストは、同じ chunk 境界での空からの計算との一致、生成による入力 checkpoint の汚染がないこと、prefill/生成の中断、batch 内の分離、session・指示変更時の不使用と解放も確認する。
+
+[長文入力キャッシュの実モデルテスト](../apps/local-runtime/src/real-input-cache.test.ts)は、伸長する context と同じ最終入力の cold 実行を比較し、再利用 token 数と新規計算 token 数が全入力に一致することを確認する。プリフィル時間は診断値として記録し、マシン依存の速度倍率を合否条件にはしない。
+
+## 保留中の設計判断
+
+Native Cognitive 統合を進めるため、以下は現行実装を維持する。ただし、設計上の妥当性について合意済みとは扱わない。ローカルの起動・session 完了・異常時復旧を接続する際に再評価する。
+
+### 独立推論の状態遷移指定
+
+Memory/Emotion 用 adapter は、確定済み state の有無に応じて `initial` と `reset` を送り分ける。両者の独立推論と入力キャッシュの再利用条件は同じであり、呼び出し側の存在認識と Native 内部の state を照合することは、推論の正しさに必須ではない。
+
+検討点は、この区別と毎回の `state_transition` 指定を Memory/Emotion に要求する必要性である。独立推論の方針を Native の state 登録時に設定し、初回登録・置き換えを Native 内部で扱う形も候補とする。Main の継続仕様は、この見直しとは分けて扱う。
+
+### キャッシュ解放と session 完了の結合
+
+現在は `clear_input_cache` の完了通知を待ち、解放に失敗すると、推論本体が成功していても `think()` がエラーを返す。確定済みの domain 更新や実行済み tool は巻き戻さず、Main checkpoint の保存は引き続き試みる。
+
+session ID による再利用の分離と、解放要求を後続の推論が追い越さない処理順序は、完了通知の待機とは別に成立する。検討点は、解放完了を session の成功条件に含める必要性と、解放失敗をどこへ報告するかである。待機を外す場合も、処理順序、残存キャッシュの寿命、通信・Native process 障害の通知を定義する必要がある。
+
 ## 残る実装要件
 
-### 1. Auxiliary state と phase の寿命を対応させる
-
-Core runner は各 phase で共有 context 全体を渡し、`previousResponseToken` を付けない。既存 state がある Native では `new_session` となり、既定で GDN を保持して KV を初期化する。一方、[local runtime](../apps/local-runtime/src/local-native-inference-runtime.ts)は Memory/Emotion の ephemeral lane をプロセス内で保持する。
-
-この組み合わせでは共有 context の再入力と過去 GDN の持ち越しが重なる。phase ごとに初期化するか、確定 state から差分を入力するかを定義する必要がある。再試行、成功済み sibling、次 activation の開始状態をそれぞれ定め、Main の durable lane との独立性を維持する。
-
-### 2. Provider と domain を注入できる composition を作る
-
-[Cognitive factory](../apps/cloudflare-workers/src/echo/cognitive-modules.ts)の prompt 組み立てと module 設定を、model/domain の実装を注入できる形にする。共通の handoff formatter は Core が所有し、Hosted の SDK・環境設定・retry policy は Worker 側が所有する。
-
-### 3. 実際の Cognitive 経路で workflow を評価する
+### 1. 実運用の Cognitive workflow を評価する
 
 [既存 workflow harness](../packages/model-evaluation/src/qwen36-eat-readiness/runtime-workflow-harness.ts)は `runAgentSession` を直接呼び、Cognitive coordinator を接続せず、評価専用の `session_record` 付き終了契約を使う。各 turn の Cognitive exchange を前提とする[Main prompt](../packages/core/src/llm/prompts/rin.ts)とは入力・終了契約が異なる。
 
@@ -79,7 +105,7 @@ Core runner は各 phase で共有 context 全体を渡し、`previousResponseTo
 
 長文 prefill の評価では、新規入力が8,192 tokens 以上となる fixture を用意する。chunked prefill は BF16 の演算順序が変わるため、単一実行との state の bit 一致を前提にしない。比較条件は[long-input prefill](../native/echo-inference/README.md#long-input-prefill)に従う。
 
-### 4. ローカル保存・起動・再起動を接続する
+### 2. ローカル保存・起動・再起動を接続する
 
 Memory/Emotion の domain 保存には version、idempotency、一括 commit が必要になる。Memory 検索には local SQL と embedding/reranking の境界を接続し、Note 等には既存の storage interface を利用する。
 
@@ -97,4 +123,4 @@ Memory/Emotion の domain 保存には version、idempotency、一括 commit が
 - [Native architecture](../native/echo-inference/docs/architecture.md): lane の所有権、状態遷移、保存・復旧の契約。
 - [Native README](../native/echo-inference/README.md): MLX 環境、build、probe コマンド。
 - [model-evaluation README](../packages/model-evaluation/README.md): 評価シナリオ、実行条件、結果の保存方針。
-- [Cloudflare runtime budget](./cloudflare-runtime-budget.md): Hosted composition を変更する際の request・storage 予算。`origin` の伝達自体は既存入力への属性追加で、API/DO request、rows read/written、外部 API call を追加しない。
+- [Cloudflare runtime budget](./cloudflare-runtime-budget.md): Hosted composition を変更する際の request・storage 予算。`origin` の伝達と Cognitive 構築の共通化は、API/DO request、rows read/written、外部 API call を追加しない。

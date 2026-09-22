@@ -194,12 +194,10 @@ pnpm --filter @echo-chamber/cloudflare-workers exec wrangler kv key put --bindin
 | `pnpm test:run`                                      | `core` / `contracts` / adapter / runtime / worker のテスト実行     |
 | `pnpm test:coverage`                                 | `core` / `contracts` / adapter / runtime / worker の coverage 集約 |
 | `pnpm eval:check`                                    | モデル評価器のシナリオ・採点・集計ロジックを検証                   |
-| `pnpm eval`                                          | Rapid-MLX上でQwen3.6のE.C.H.O. runtime評価を実行                   |
-| `pnpm eval:native-rapid-performance`                 | nativeとRapid-MLXの同条件性能ゲートを実機実行                      |
 | `pnpm eval:native-stateful-performance`              | nativeの状態継続・存在切替・常駐メモリゲートを実機実行             |
 | `pnpm eval:native-long-session-performance`          | nativeの長コンテキスト・反復continuationゲートを実機実行           |
-| `pnpm eval:native-rapid-long-session-performance`    | nativeとRapid-MLXの実運用長セッション契約を比較                    |
-| `pnpm eval:session-prefix-cache`                     | 専用session prefix-cache contractを実機検証                        |
+| `pnpm eval:native-runtime-workflow`                  | 既存の行動評価シナリオをNativeで実行（Cognitive経路への移行前）    |
+| `pnpm eval:cognitive-hosted`                         | Hosted Memory／Emotionを実APIで検証                                |
 | `pnpm eval:rescore`                                  | 保存済み評価結果を現在の採点条件で再採点                           |
 | `pnpm lint:check` / `pnpm typecheck` / `pnpm check`  | 品質チェック                                                       |
 

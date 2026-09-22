@@ -18,8 +18,8 @@ use super::chat::{
 };
 use super::runtime::{
     BatchAdmission, BatchGenerationObserver, GenerationDirective, GenerationObserver,
-    InferenceRequest, InferenceResponse, RequestState, ResidentEngine, ResidentEngineConfig,
-    ResidentEngineInfo, RuntimeError, RuntimeTokenUsage, StatePersistence,
+    InferenceRequest, InferenceResponse, InputCacheRequest, RequestState, ResidentEngine,
+    ResidentEngineConfig, ResidentEngineInfo, RuntimeError, RuntimeTokenUsage, StatePersistence,
 };
 use super::sampling::SamplingConfig;
 use super::structured_output::StructuredOutputFormat;
@@ -27,7 +27,7 @@ use super::tool_output::{
     EchoAssistantRole, EchoOutputItem, ParsedQwenOutput, parse_qwen_output_with_tools,
 };
 
-const PROTOCOL_VERSION: u32 = 13;
+const PROTOCOL_VERSION: u32 = 15;
 
 /// Admission and backpressure limits for the dedicated local stdio server.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -78,6 +78,8 @@ impl LocalServerConfig {
 enum WireCommand {
     Generate {
         #[serde(default)]
+        input_cache_scope: Option<String>,
+        #[serde(default)]
         response_format: Option<Box<StructuredOutputFormat>>,
         request_id: String,
         instance_id: InstanceId,
@@ -104,10 +106,15 @@ enum WireCommand {
         request_id: String,
         instance_id: InstanceId,
     },
+    ClearInputCache {
+        request_id: String,
+        instance_id: InstanceId,
+    },
     Shutdown,
 }
 
 struct AcceptedGenerate {
+    input_cache_scope: Option<String>,
     response_format: Option<Box<StructuredOutputFormat>>,
     request_id: String,
     instance_id: InstanceId,
@@ -129,6 +136,10 @@ enum AcceptedCommand {
         snapshot_root: Option<PathBuf>,
     },
     Snapshot {
+        request_id: String,
+        instance_id: InstanceId,
+    },
+    ClearInputCache {
         request_id: String,
         instance_id: InstanceId,
     },
@@ -187,6 +198,10 @@ enum WireEvent {
         restored: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         current_path: Option<PathBuf>,
+    },
+    InputCacheCleared {
+        request_id: String,
+        instance_id: InstanceId,
     },
     SnapshotPublished {
         request_id: String,
@@ -369,6 +384,7 @@ fn dispatch_wire_command(
 ) -> Result<bool, LocalServerError> {
     match command {
         WireCommand::Generate {
+            input_cache_scope,
             response_format,
             request_id,
             instance_id,
@@ -392,6 +408,7 @@ fn dispatch_wire_command(
                 return Ok(false);
             };
             let accepted = AcceptedCommand::Generate(AcceptedGenerate {
+                input_cache_scope,
                 response_format,
                 request_id: request_id.clone(),
                 instance_id,
@@ -445,6 +462,20 @@ fn dispatch_wire_command(
             }
             command_sender
                 .send(AcceptedCommand::Snapshot {
+                    request_id,
+                    instance_id,
+                })
+                .map_err(|_| LocalServerError::ChannelClosed("command receiver"))?;
+        }
+        WireCommand::ClearInputCache {
+            request_id,
+            instance_id,
+        } => {
+            if !admit_request_id(&request_id, event_sender)? {
+                return Ok(false);
+            }
+            command_sender
+                .send(AcceptedCommand::ClearInputCache {
                     request_id,
                     instance_id,
                 })
@@ -588,6 +619,21 @@ fn run_command_loop(
             } => {
                 run_snapshot(engine, events, request_id, &instance_id)?;
             }
+            AcceptedCommand::ClearInputCache {
+                request_id,
+                instance_id,
+            } => match engine.clear_input_cache(&instance_id) {
+                Ok(()) => send_event(
+                    events,
+                    WireEvent::InputCacheCleared {
+                        request_id,
+                        instance_id,
+                    },
+                )?,
+                Err(error) => {
+                    send_request_failure(events, &request_id, "clear_input_cache", &error)?;
+                }
+            },
             AcceptedCommand::Shutdown => return Ok(()),
         }
     }
@@ -701,7 +747,7 @@ fn encode_generate_input(
     prompt: &EchoChatPrompt,
 ) -> Result<EncodedChatPrompt, LocalServerError> {
     match state_transition {
-        RequestState::Initial | RequestState::NewSession => {
+        RequestState::Initial | RequestState::NewSession | RequestState::Reset => {
             tokenizer.encode_prompt(prompt).map_err(Into::into)
         }
         RequestState::Continuation => tokenizer.encode_continuation(prompt).map_err(Into::into),
@@ -783,7 +829,7 @@ impl SessionToolCatalogs {
             RequestState::Continuation => {
                 self.committed.get(instance_id).cloned().unwrap_or_default()
             }
-            RequestState::Initial | RequestState::NewSession => provided,
+            RequestState::Initial | RequestState::NewSession | RequestState::Reset => provided,
         }
     }
 
@@ -897,6 +943,7 @@ impl StdioBatchGenerationCoordinator<'_> {
         generate: AcceptedGenerate,
     ) -> Result<Option<BatchAdmission>, LocalServerError> {
         let AcceptedGenerate {
+            input_cache_scope,
             response_format,
             request_id,
             instance_id,
@@ -920,8 +967,22 @@ impl StdioBatchGenerationCoordinator<'_> {
             )?;
             return Ok(None);
         }
-        let encoded = match encode_generate_input(self.tokenizer, state_transition, &prompt) {
-            Ok(encoded) => encoded,
+        let prepared_input = encode_generate_input(self.tokenizer, state_transition, &prompt)
+            .and_then(|encoded| {
+                let input_cache = input_cache_scope
+                    .map(|scope| {
+                        self.tokenizer
+                            .input_cache_prefix(&encoded)
+                            .map(|prefix_tokens| InputCacheRequest {
+                                scope,
+                                prefix_tokens,
+                            })
+                    })
+                    .transpose()?;
+                Ok((encoded, input_cache))
+            });
+        let (encoded, input_cache) = match prepared_input {
+            Ok(prepared) => prepared,
             Err(error) => {
                 remove_registration(self.registry, &request_id);
                 send_request_failure(self.events, &request_id, "chat", &error)?;
@@ -951,6 +1012,7 @@ impl StdioBatchGenerationCoordinator<'_> {
         self.rows.push(observer);
         Ok(Some(BatchAdmission {
             request: InferenceRequest {
+                input_cache,
                 response_format: response_format.map(|format| *format),
                 instance_id,
                 state_transition,
@@ -1266,6 +1328,7 @@ mod tests {
 
     fn accepted_generate(request_id: &str) -> AcceptedCommand {
         AcceptedCommand::Generate(AcceptedGenerate {
+            input_cache_scope: None,
             response_format: None,
             request_id: request_id.into(),
             instance_id: InstanceId::new(format!("instance-{request_id}")).expect("valid instance"),
@@ -1393,7 +1456,7 @@ mod tests {
               "instance_id": "rin",
               "state_transition": "initial",
               "stream_tokens": true,
-              "input": [{"role": "developer", "content": "continue"}],
+              "input": [{"role": "system", "content": "continue"}],
               "tools": [],
               "max_new_tokens": 2
             }"#,
@@ -1417,7 +1480,7 @@ mod tests {
               "instance_id": "rin",
               "state_transition": "initial",
               "stream_tokens": false,
-              "input": [{"role": "developer", "content": "continue"}],
+              "input": [{"role": "system", "content": "continue"}],
               "tools": [],
               "max_new_tokens": 2
             }"#,
@@ -1440,7 +1503,7 @@ mod tests {
               "request_id": "rin:missing-stream-policy",
               "instance_id": "rin",
               "state_transition": "initial",
-              "input": [{"role": "developer", "content": "continue"}],
+              "input": [{"role": "system", "content": "continue"}],
               "tools": [],
               "max_new_tokens": 2
             }"#,
@@ -1477,7 +1540,7 @@ mod tests {
               "instance_id": "rin",
               "state_transition": "new_session",
               "stream_tokens": false,
-              "input": [{"role": "developer", "content": "fresh"}],
+              "input": [{"role": "system", "content": "fresh"}],
               "tools": [],
               "max_new_tokens": 2
             }"#,

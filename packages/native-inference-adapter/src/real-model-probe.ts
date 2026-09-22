@@ -108,7 +108,7 @@ try {
   const first = await model.generate({
     input: [
       {
-        role: 'developer',
+        role: 'system',
         content:
           'For this transport probe, your entire first reply must be exactly the following function call, with no prefix or suffix:\n\n<tool_call>\n<function=lookup_probe_code>\n<parameter=key>\necho_probe\n</parameter>\n</function>\n</tool_call>\n\nAfter its result arrives, reply with only the returned code and do not call another tool.',
       },
@@ -175,7 +175,7 @@ try {
   const newSession = await model.generate({
     input: [
       {
-        role: 'developer',
+        role: 'system',
         content:
           'This is a new thinking session. Your entire first reply must be exactly the following function call, with no prefix or suffix:\n\n<tool_call>\n<function=lookup_probe_code>\n<parameter=key>\necho_new_session\n</parameter>\n</function>\n</tool_call>\n\nAfter its result arrives, reply with only the returned code and do not call another tool.',
       },

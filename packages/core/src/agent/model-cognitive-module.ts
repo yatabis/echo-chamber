@@ -1,11 +1,32 @@
 import {
+  formatCognitiveModuleHandoff,
+  formatInitialCognitiveModuleContext,
+} from './cognitive-module-handoff';
+import {
   CognitiveModuleOutputValidationError,
+  ParallelCognitiveModuleOrchestrator,
+  type CognitiveModuleOrchestrator,
+  type ParallelCognitiveModuleOrchestratorOptions,
   type CognitiveModulePhaseInput,
   type CognitiveModuleRunContext,
   type CognitiveModuleRunner,
   type CognitiveModuleRunResult,
 } from './cognitive-module-orchestrator';
-import { CognitiveModuleSchemaValidationError } from './cognitive-module-schema';
+import {
+  CognitiveModuleSchemaValidationError,
+  createMemoryRecallCognitiveModuleOutputFormat,
+  createMemoryStoreCognitiveModuleOutputFormat,
+  createEmotionCognitiveModuleOutputFormat,
+  parseMemoryRecallCognitiveModuleOutput,
+  parseMemoryStoreCognitiveModuleOutput,
+  parseEmotionCognitiveModuleOutput,
+  type MemoryCognitiveModuleOutput,
+} from './cognitive-module-schema';
+import {
+  buildModelInputWithSystemPrompt,
+  buildMemoryCognitiveModuleSystemPrompt,
+  buildEmotionCognitiveModuleSystemPrompt,
+} from './prompt-builder';
 
 import type {
   ModelInputItem,
@@ -16,12 +37,64 @@ import type {
 
 const DEFAULT_MAX_OUTPUT_TOKENS = 2048;
 
-/** 共有context内のdeveloper messageをmoduleへの観測へ変換する。 */
-function toCognitiveModuleObservation(item: ModelInputItem): ModelInputItem {
-  if ('role' in item && item.role === 'developer') {
-    return { ...item, role: 'user' };
-  }
-  return item;
+/** Provider実装と保存先を注入する、共通のCognitive構築入力。 */
+export interface ModelCognitiveModuleOrchestratorOptions extends Pick<
+  ParallelCognitiveModuleOrchestratorOptions,
+  'domain' | 'retryPolicy' | 'createActivationId' | 'createRequestSignal'
+> {
+  instanceName: string;
+  memoryModel: ModelPort;
+  emotionModel: ModelPort;
+  maxOutputTokens?: number;
+}
+
+/** Coreのprompt・schema・handoffを使い、同じ処理を各providerへ接続する。 */
+export function createModelCognitiveModuleOrchestrator(
+  options: ModelCognitiveModuleOrchestratorOptions
+): CognitiveModuleOrchestrator {
+  const recallFormat = createMemoryRecallCognitiveModuleOutputFormat();
+  const storeFormat = createMemoryStoreCognitiveModuleOutputFormat();
+  const emotionFormat = createEmotionCognitiveModuleOutputFormat();
+  const outputLimit =
+    options.maxOutputTokens === undefined
+      ? {}
+      : { maxOutputTokens: options.maxOutputTokens };
+  return new ParallelCognitiveModuleOrchestrator({
+    domain: options.domain,
+    retryPolicy: options.retryPolicy,
+    createActivationId: options.createActivationId,
+    ...(options.createRequestSignal === undefined
+      ? {}
+      : { createRequestSignal: options.createRequestSignal }),
+    memory: new ModelCognitiveModuleRunner<MemoryCognitiveModuleOutput>({
+      model: options.memoryModel,
+      ...outputLimit,
+      resolveSystemPrompt: ({ phase }) =>
+        buildMemoryCognitiveModuleSystemPrompt(options.instanceName, phase),
+      resolveOutputContract: ({ phase }) =>
+        phase === 'pre_main'
+          ? {
+              format: recallFormat,
+              parse: parseMemoryRecallCognitiveModuleOutput,
+            }
+          : {
+              format: storeFormat,
+              parse: parseMemoryStoreCognitiveModuleOutput,
+            },
+    }),
+    emotion: new ModelCognitiveModuleRunner({
+      model: options.emotionModel,
+      ...outputLimit,
+      resolveSystemPrompt: () =>
+        buildEmotionCognitiveModuleSystemPrompt(options.instanceName),
+      resolveOutputContract: () => ({
+        format: emotionFormat,
+        parse: parseEmotionCognitiveModuleOutput,
+      }),
+    }),
+    formatInitialContext: formatInitialCognitiveModuleContext,
+    formatHandoff: formatCognitiveModuleHandoff,
+  });
 }
 
 /** 1 phaseで使用するstructured output contract。 */
@@ -151,12 +224,6 @@ export class ModelCognitiveModuleRunner<
     context: CognitiveModuleRunContext,
     systemPrompt: string
   ): ModelInputItem[] {
-    return [
-      {
-        role: 'developer',
-        content: systemPrompt,
-      },
-      ...context.sharedContext.map(toCognitiveModuleObservation),
-    ];
+    return buildModelInputWithSystemPrompt(systemPrompt, context.sharedContext);
   }
 }

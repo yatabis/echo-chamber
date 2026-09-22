@@ -94,16 +94,16 @@ describe('buildEmotionCognitiveModuleSystemPrompt', () => {
 });
 
 describe('buildAgentPromptMessages', () => {
-  it('Main専用promptと共有runtime contextを別のdeveloper messageとして返す', () => {
+  it('Main専用指示をsystem roleにし、共有runtime contextと分離する', () => {
     const result = buildAgentPromptMessages({
       systemPrompt: '<persona>テスト用ペルソナ</persona>',
       currentDatetime: testCurrentDatetime,
       toolContracts: [createToolContract('only_bound_tool')],
     });
 
-    expect(result.mainSystemPrompt.role).toBe('developer');
+    expect(result.mainSystemPrompt.role).toBe('system');
     expect(result.sharedRuntimeContext).toEqual({
-      role: 'developer',
+      role: 'system',
       content:
         '<runtime_context>\n現在日時: 2025年01月26日 00:00:00\n</runtime_context>',
     });

@@ -1,7 +1,9 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::fmt;
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -16,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use super::decoder::MoeKernel;
 use super::full_model::{
     RuntimeModelExecution, compact_runtime_state, evaluate_runtime_execution,
-    execute_runtime_model, prepare_runtime_state, schedule_runtime_execution,
+    execute_runtime_model, schedule_runtime_execution,
 };
 use super::gdn::GdnKernel;
 use super::model_state::{MlxInferenceState, NewSessionGdnPolicy};
@@ -29,6 +31,9 @@ use super::weights::{BoundModelWeights, ShardedWeights};
 use super::{EngineError, ModelPlan, identify_model};
 
 mod continuous_batch;
+mod input_cache;
+pub use input_cache::InputCacheRequest;
+use input_cache::InputCheckpoint;
 
 pub(crate) use continuous_batch::{BatchAdmission, BatchGenerationObserver};
 
@@ -50,24 +55,33 @@ pub enum RequestState {
     /// full-attention KV is reset before the complete fresh prompt is
     /// processed.
     NewSession,
+    /// Replaces the generated lineage with a complete independent input.
+    /// Starts empty unless an explicit input-only checkpoint is compatible.
+    /// The old generated state remains committed until this request succeeds.
+    Reset,
 }
 
 impl From<RequestState> for ExpectedState {
     fn from(value: RequestState) -> Self {
         match value {
             RequestState::Initial => Self::Absent,
-            RequestState::Continuation | RequestState::NewSession => Self::Present,
+            RequestState::Continuation | RequestState::NewSession | RequestState::Reset => {
+                Self::Present
+            }
         }
     }
 }
 
 /// One specialized E.C.H.O. inference request.
 ///
-/// `input_tokens` contains only the tokens that this request must execute
-/// before generation. The resident state owns every previously committed
-/// token and appends this request atomically with its KV and GDN payload.
+/// `input_tokens` contains a continuation suffix or a complete fresh prompt.
+/// Input caching accepts the full prompt and validates its exact prefix before
+/// skipping model work. Generated KV/GDN commits atomically per request.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct InferenceRequest {
+    /// Optional input-only checkpoint, owned by one ephemeral session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_cache: Option<InputCacheRequest>,
     /// Strict generation grammar, independent of prompt tokens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_format: Option<StructuredOutputFormat>,
@@ -311,6 +325,7 @@ pub struct ResidentEngine {
     moe_kernel: MoeKernel,
     weights: BoundModelWeights,
     states: StateStore<MlxInferenceState>,
+    input_caches: RefCell<HashMap<InstanceId, InputCheckpoint>>,
     state_owners: HashMap<InstanceId, StateOwner>,
 }
 
@@ -420,6 +435,7 @@ impl ResidentEngine {
             moe_kernel,
             weights,
             states: StateStore::default(),
+            input_caches: RefCell::default(),
             state_owners: HashMap::new(),
         })
     }
@@ -501,9 +517,8 @@ impl ResidentEngine {
 
     /// Registers one process-local state lane without a filesystem authority.
     ///
-    /// This is used for the memory and emotion modules: their committed state
-    /// remains available for delta-prefill and retry during the resident
-    /// process lifetime, but can never replace the main Echo checkpoint.
+    /// Memory and emotion use these lanes with independent input checkpoints.
+    /// Their process-local state can never replace the main Echo checkpoint.
     ///
     /// # Errors
     ///
@@ -659,7 +674,7 @@ impl ResidentEngine {
 
     fn execute_with_observer<O: GenerationObserver>(
         &mut self,
-        request: InferenceRequest,
+        mut request: InferenceRequest,
         queue_wait: Duration,
         observer: &mut O,
     ) -> Result<InferenceResponse, RuntimeError> {
@@ -679,8 +694,10 @@ impl ResidentEngine {
             .begin(request.instance_id.clone(), request_state.into())?;
         let (cached_prefix_tokens, owned_initial_state) =
             self.prepare_initial_state(&request, request_state, &lease)?;
+        if request.input_cache.is_some() {
+            request.input_tokens.drain(..cached_prefix_tokens);
+        }
         let input_tokens_processed = request.input_tokens.len();
-        let input_ids = token_array(&request.input_tokens)?;
 
         let initial_state = if let Some(state) = owned_initial_state.as_ref() {
             state
@@ -691,13 +708,8 @@ impl ResidentEngine {
                 detail: "continuation request lost its committed base".into(),
             });
         };
-        let model_run = self.run_model(
-            &request,
-            &input_ids,
-            initial_state,
-            &mut output_constraint,
-            observer,
-        )?;
+        let model_run =
+            self.run_model(&request, initial_state, &mut output_constraint, observer)?;
         if observer.is_cancelled() {
             return Err(RuntimeError::Cancelled {
                 usage: RuntimeTokenUsage::observed(
@@ -762,7 +774,7 @@ impl ResidentEngine {
         request: &InferenceRequest,
         request_state: RequestState,
         lease: &StateLease<MlxInferenceState>,
-    ) -> Result<(usize, Option<MlxInferenceState>), RuntimeError> {
+    ) -> Result<(usize, Option<Rc<MlxInferenceState>>), RuntimeError> {
         let base = lease.base();
         if let Some(base) = base {
             if base.model != self.info.model {
@@ -772,22 +784,26 @@ impl ResidentEngine {
             }
             base.payload.validate(&self.plan, 1)?;
         }
+        if let Some(state) = self.cached_input(request) {
+            return Ok((state.sequence_length()?, Some(state)));
+        }
         match (request_state, base) {
-            (RequestState::Initial, None) => {
-                Ok((0, Some(MlxInferenceState::empty(&self.gpu, 1, &self.plan)?)))
-            }
+            (RequestState::Initial, None) | (RequestState::Reset, Some(_)) => Ok((
+                0,
+                Some(Rc::new(MlxInferenceState::empty(&self.gpu, 1, &self.plan)?)),
+            )),
             (RequestState::Continuation, Some(base)) => Ok((base.payload.sequence_length()?, None)),
             (RequestState::NewSession, Some(base)) => Ok((
                 0,
-                Some(base.payload.begin_new_session(
+                Some(Rc::new(base.payload.begin_new_session(
                     &self.gpu,
                     1,
                     &self.plan,
                     self.config.new_session_gdn_policy,
-                )?),
+                )?)),
             )),
             (RequestState::Initial, Some(_))
-            | (RequestState::Continuation | RequestState::NewSession, None) => {
+            | (RequestState::Continuation | RequestState::NewSession | RequestState::Reset, None) => {
                 Err(RuntimeError::InvalidRequest {
                     detail: "state-store precondition produced an inconsistent base".into(),
                 })
@@ -799,7 +815,6 @@ impl ResidentEngine {
     fn run_model<O: GenerationObserver>(
         &self,
         request: &InferenceRequest,
-        input_ids: &Array,
         initial_state: &MlxInferenceState,
         output_constraint: &mut Option<OutputConstraint>,
         observer: &mut O,
@@ -811,96 +826,13 @@ impl ResidentEngine {
             });
         }
         let model_started = Instant::now();
-        let input_started = Instant::now();
-        let input_shape = input_ids.shape();
-        let [input_batch_size, input_token_count] = <[usize; 2]>::try_from(input_shape.clone())
-            .map_err(|input_shape| {
-                EngineError::Unsupported(format!(
-                    "runtime token input must be rank 2, observed {input_shape:?}"
-                ))
-            })?;
-        let closing_capacity = usize::from(request.length_eos_token.is_some());
-        let additional_tokens = input_token_count
-            .checked_add(request.max_new_tokens)
-            .and_then(|tokens| tokens.checked_add(closing_capacity))
-            .ok_or_else(|| {
-                EngineError::Unsupported("runtime request token capacity overflow".into())
-            })?;
-        let runtime_state =
-            prepare_runtime_state(&self.gpu, initial_state, 1, additional_tokens, &self.plan)?;
-        let chunk_size = selected_prefill_chunk_size(self.config, input_token_count);
-        let mut input_graph_construction_nanos = 0_u64;
-        let mut input_materialization_nanos = 0_u64;
-        let (mut execution, input_model_execution_count) = if let Some(chunk_size) = chunk_size {
-            let mut state = runtime_state;
-            let mut final_execution = None;
-            let mut execution_count = 0_usize;
-            for chunk_start in (0..input_token_count).step_by(chunk_size) {
-                if observer.is_cancelled() {
-                    return Err(RuntimeError::Cancelled {
-                        usage: RuntimeTokenUsage::observed(
-                            initial_state.sequence_length()?,
-                            chunk_start,
-                            0,
-                        ),
-                        instance_id: request.instance_id.clone(),
-                    });
-                }
-                let chunk_stop = chunk_start
-                    .saturating_add(chunk_size)
-                    .min(input_token_count);
-                let graph_started = Instant::now();
-                let chunk = slice_token_chunk(
-                    &self.gpu,
-                    input_ids,
-                    input_batch_size,
-                    chunk_start,
-                    chunk_stop,
-                )?;
-                let chunk_execution = execute_runtime_model(
-                    &self.gpu,
-                    &chunk,
-                    state,
-                    &self.weights,
-                    &self.plan,
-                    &self.gdn_kernel,
-                    &self.moe_kernel,
-                )?;
-                input_graph_construction_nanos = input_graph_construction_nanos
-                    .saturating_add(duration_nanos(graph_started.elapsed()));
-                let materialization_started = Instant::now();
-                evaluate_runtime_execution(&self.gpu, &chunk_execution)?;
-                input_materialization_nanos = input_materialization_nanos
-                    .saturating_add(duration_nanos(materialization_started.elapsed()));
-                execution_count = execution_count.saturating_add(1);
-                if chunk_stop == input_token_count {
-                    final_execution = Some(chunk_execution);
-                    break;
-                }
-                state = chunk_execution.state;
-            }
-            let execution = final_execution.ok_or_else(|| {
-                EngineError::Unsupported("chunked prefill produced no execution".into())
-            })?;
-            (execution, execution_count)
-        } else {
-            let graph_started = Instant::now();
-            let execution = execute_runtime_model(
-                &self.gpu,
-                input_ids,
-                runtime_state,
-                &self.weights,
-                &self.plan,
-                &self.gdn_kernel,
-                &self.moe_kernel,
-            )?;
-            input_graph_construction_nanos = duration_nanos(graph_started.elapsed());
-            let materialization_started = Instant::now();
-            evaluate_runtime_execution(&self.gpu, &execution)?;
-            input_materialization_nanos = duration_nanos(materialization_started.elapsed());
-            (execution, 1)
-        };
-        let input_execution_nanos = duration_nanos(input_started.elapsed());
+        let input_token_count = request.input_tokens.len();
+        let prefill = self.prefill_input(request, initial_state, || observer.is_cancelled())?;
+        let mut execution = prefill.execution;
+        let input_execution_nanos = prefill.elapsed_nanos;
+        let input_graph_construction_nanos = prefill.graph_nanos;
+        let input_materialization_nanos = prefill.materialization_nanos;
+        let input_model_execution_count = prefill.execution_count;
 
         let decode_started = Instant::now();
         let mut generated_tokens = Vec::with_capacity(request.max_new_tokens);
@@ -1046,6 +978,7 @@ impl ResidentEngine {
     }
 
     fn validate_request(&self, request: &InferenceRequest) -> Result<(), RuntimeError> {
+        self.validate_input_cache(request)?;
         if request.input_tokens.is_empty() {
             return Err(RuntimeError::InvalidRequest {
                 detail: "input_tokens must contain at least one new input token".into(),
@@ -1093,27 +1026,6 @@ fn token_array(tokens: &[u32]) -> Result<Array, RuntimeError> {
         })
         .collect::<Result<Vec<_>, _>>()?;
     Array::from_i32_slice(&tokens, &[1, tokens.len()])
-        .map_err(EngineError::Mlx)
-        .map_err(RuntimeError::Engine)
-}
-
-fn slice_token_chunk(
-    gpu: &Gpu,
-    input_ids: &Array,
-    batch_size: usize,
-    start: usize,
-    stop: usize,
-) -> Result<Array, RuntimeError> {
-    let batch_size = i32::try_from(batch_size).map_err(|error| {
-        EngineError::Unsupported(format!("input batch size does not fit int32: {error}"))
-    })?;
-    let start = i32::try_from(start).map_err(|error| {
-        EngineError::Unsupported(format!("prefill chunk start does not fit int32: {error}"))
-    })?;
-    let stop = i32::try_from(stop).map_err(|error| {
-        EngineError::Unsupported(format!("prefill chunk stop does not fit int32: {error}"))
-    })?;
-    gpu.slice(input_ids, &[0, start], &[batch_size, stop], &[1, 1])
         .map_err(EngineError::Mlx)
         .map_err(RuntimeError::Engine)
 }
@@ -1488,6 +1400,7 @@ mod tests {
 
     fn request(instance: &str, token: u32) -> InferenceRequest {
         InferenceRequest {
+            input_cache: None,
             response_format: None,
             instance_id: InstanceId::new(instance).expect("valid test instance"),
             state_transition: RequestState::Initial,

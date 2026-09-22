@@ -2,7 +2,10 @@ import { emitEchoEvent } from '../ports/echo-event';
 import { getErrorMessage } from '../utils/error';
 
 import { CognitiveModulePhaseError } from './cognitive-module-orchestrator';
-import { buildAgentPromptMessages } from './prompt-builder';
+import {
+  buildAgentPromptMessages,
+  buildModelInputWithSystemPrompt,
+} from './prompt-builder';
 import {
   accumulateModelUsage,
   AgentSessionExecutionError,
@@ -301,7 +304,10 @@ export class ThinkingEngine {
     ];
 
     return {
-      mainInput: [promptMessages.mainSystemPrompt, ...sharedContext],
+      mainInput: buildModelInputWithSystemPrompt(
+        promptMessages.mainSystemPrompt.content,
+        sharedContext
+      ),
       sharedContext,
     };
   }

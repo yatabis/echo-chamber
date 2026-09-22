@@ -64,6 +64,8 @@ export type NativeSamplingSeedSource = () => number;
 export interface NativeInferenceModelOptions {
   client: NativeInferenceClient;
   instanceId: string;
+  /** Independent calls accept full input, without inheriting generated state. */
+  statePolicy?: 'continuous' | 'independent';
   /** Default output limit and ceiling for per-request maxOutputTokens. */
   maxTokens?: number;
   sampling?: Omit<NativeSamplingConfig, 'seed'>;
@@ -124,6 +126,8 @@ export class NativeInferenceIncompleteGenerationError extends ModelGenerationErr
  * new-session from whether current state exists. Token contents are opaque and
  * intentionally neither decoded nor compared. Continuation input must still
  * answer the exact pending tool calls emitted by the preceding completion.
+ * Independent policy accepts full-input calls without inheriting generated state.
+ * An explicit session may reuse a separately held, exact input-prefix checkpoint.
  */
 export class NativeInferenceModel implements ModelPort {
   private readonly maxTokens: number | undefined;
@@ -133,6 +137,9 @@ export class NativeInferenceModel implements ModelPort {
   private readonly onToken: NativeTokenListener | undefined;
   private readonly client: NativeInferenceClient;
   private readonly instanceId: string;
+  private readonly statePolicy: 'continuous' | 'independent';
+  private inputCacheScope: string | undefined;
+  private inputCacheUsed = false;
   private resolvedMaxTokens: number | undefined;
   private stateOpened = false;
   private persistence: NativeStatePersistence | undefined;
@@ -156,6 +163,7 @@ export class NativeInferenceModel implements ModelPort {
   constructor(options: NativeInferenceModelOptions) {
     this.client = options.client;
     this.instanceId = requireNonEmpty(options.instanceId, 'instanceId');
+    this.statePolicy = options.statePolicy ?? 'continuous';
     this.maxTokens = options.maxTokens;
     if (
       this.maxTokens !== undefined &&
@@ -176,6 +184,12 @@ export class NativeInferenceModel implements ModelPort {
   async openState(
     options: NativeStateOpenOptions
   ): Promise<NativeInferenceModelState> {
+    if (
+      this.statePolicy === 'independent' &&
+      options.persistence !== 'ephemeral'
+    ) {
+      throw new Error('independent native requests require ephemeral state');
+    }
     if (this.stateOpened) {
       throw new Error('native instance state is already open');
     }
@@ -234,6 +248,45 @@ export class NativeInferenceModel implements ModelPort {
       this.activeRequestId = undefined;
     }
     return this.state();
+  }
+
+  /** Enables input-only reuse for one session on an independent ephemeral lane. */
+  beginInputCacheSession(scope: string): void {
+    if (this.statePolicy !== 'independent' || !this.stateOpened)
+      throw new Error('input caching requires an open independent lane');
+    if (
+      this.inputCacheScope !== undefined ||
+      this.activeRequestId !== undefined
+    )
+      throw new Error('input cache session or request is already active');
+    if (scope.trim() === '')
+      throw new Error('input cache scope must not be empty');
+    this.inputCacheScope = scope;
+  }
+
+  /** Releases the session checkpoint even when a generation or Core phase failed. */
+  async endInputCacheSession(): Promise<void> {
+    if (this.activeRequestId !== undefined)
+      throw new Error(
+        'cannot end input cache session during an active request'
+      );
+    this.inputCacheScope = undefined;
+    if (!this.inputCacheUsed) return;
+    const requestId = this.beginLifecycleRequest();
+    try {
+      const event = await this.client.clearInputCache({
+        type: 'clear_input_cache',
+        request_id: requestId,
+        instance_id: this.instanceId,
+      });
+      if (event.instance_id !== this.instanceId)
+        throw new Error(
+          'native input cache release returned a different instance'
+        );
+      this.inputCacheUsed = false;
+    } finally {
+      this.activeRequestId = undefined;
+    }
   }
 
   /** Executes one native generation and accepts state only on completion. */
@@ -401,8 +454,12 @@ export class NativeInferenceModel implements ModelPort {
     if (!Number.isSafeInteger(seed) || seed < 0) {
       throw new Error('seedSource must return a non-negative safe integer');
     }
+    if (this.inputCacheScope !== undefined) this.inputCacheUsed = true;
     return {
       command: {
+        ...(this.inputCacheScope === undefined
+          ? {}
+          : { input_cache_scope: this.inputCacheScope }),
         type: 'generate',
         request_id: requestId,
         instance_id: this.instanceId,
@@ -519,6 +576,14 @@ export class NativeInferenceModel implements ModelPort {
   }
 
   private classifyRequestFlow(token: string | undefined): NativeRequestFlow {
+    if (this.statePolicy === 'independent') {
+      if (token !== undefined) {
+        throw new Error(
+          'independent native requests cannot continue a previous response'
+        );
+      }
+      return this.hasState ? 'reset' : 'initial';
+    }
     if (token !== undefined) {
       if (!this.hasState || this.responseToken === undefined) {
         throw new Error(

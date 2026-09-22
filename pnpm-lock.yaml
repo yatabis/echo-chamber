@@ -200,12 +200,6 @@ importers:
       '@echo-chamber/native-inference-adapter':
         specifier: workspace:*
         version: link:../native-inference-adapter
-      '@echo-chamber/openai-adapter':
-        specifier: workspace:*
-        version: link:../openai-adapter
-      openai:
-        specifier: 6.49.0
-        version: 6.49.0(ws@8.21.0)(zod@4.6.2)
 
   packages/native-inference-adapter:
     dependencies:
