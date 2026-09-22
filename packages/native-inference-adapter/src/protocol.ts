@@ -7,7 +7,7 @@ import type {
 } from '@echo-chamber/core/ports/model';
 
 /** Exact native wire contract required by this adapter. */
-export const NATIVE_INFERENCE_PROTOCOL_VERSION = 13;
+export const NATIVE_INFERENCE_PROTOCOL_VERSION = 15;
 
 /** Sampling controls admitted by the specialized native engine. */
 export interface NativeSamplingConfig {
@@ -21,7 +21,8 @@ export interface NativeSamplingConfig {
 }
 
 /** Relation between one request and the instance's single current state. */
-export type NativeStateTransition = 'initial' | 'continuation' | 'new_session';
+export type NativeStateTransition =
+  'initial' | 'continuation' | 'new_session' | 'reset';
 
 /** Whether one Native state lane is checkpointed or process-local. */
 export type NativeStatePersistence = 'durable' | 'ephemeral';
@@ -67,6 +68,8 @@ interface NativeWireToolContract {
 
 /** One request sent to the native NDJSON owner. */
 export interface NativeGenerateCommand {
+  /** Optional session identity for an ephemeral, exact input-prefix cache. */
+  input_cache_scope?: string;
   /** Strict output grammar enforced by the native sampler, never added to the prompt. */
   response_format?: ModelStructuredOutputFormat;
   type: 'generate';
@@ -105,9 +108,24 @@ export interface NativeSnapshotCommand {
   instance_id: string;
 }
 
+/** Releases the input checkpoint without changing committed generation state. */
+export interface NativeClearInputCacheCommand {
+  type: 'clear_input_cache';
+  request_id: string;
+  instance_id: string;
+}
+
+/** Acknowledges release of one process-local input checkpoint. */
+export interface NativeInputCacheClearedEvent {
+  event: 'input_cache_cleared';
+  request_id: string;
+  instance_id: string;
+}
+
 /** Commands owned by the typed TypeScript process/lifecycle adapter. */
 export type NativeWireCommand =
   | NativeGenerateCommand
+  | NativeClearInputCacheCommand
   | NativeOpenStateCommand
   | NativeSnapshotCommand
   | { type: 'cancel'; request_id: string }
@@ -265,6 +283,7 @@ export type NativeWireEvent =
       terminal: boolean;
     }
   | NativeCompletedEvent
+  | NativeInputCacheClearedEvent
   | {
       event: 'cancel_acknowledged';
       request_id: string;
@@ -293,6 +312,7 @@ const EVENT_NAMES = new Set<NativeWireEvent['event']>([
   'completed',
   'cancel_acknowledged',
   'cancelled',
+  'input_cache_cleared',
   'state_opened',
   'snapshot_published',
   'failed',
@@ -396,6 +416,10 @@ function validateEventEnvelope(
     return;
   }
   requireString(event, 'request_id');
+  if (event.event === 'input_cache_cleared') {
+    requireString(event, 'instance_id');
+    return;
+  }
   validateRequestEvent(event);
 }
 

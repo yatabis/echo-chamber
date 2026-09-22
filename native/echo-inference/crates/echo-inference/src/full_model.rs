@@ -471,6 +471,7 @@ pub fn run_resident_runtime_parity(
     let rin_prefix_ticket = enqueue_runtime_request(
         &mut scheduler,
         InferenceRequest {
+            input_cache: None,
             response_format: None,
             instance_id: rin.clone(),
             state_transition: RequestState::Initial,
@@ -484,6 +485,7 @@ pub fn run_resident_runtime_parity(
     let marie_prefix_ticket = enqueue_runtime_request(
         &mut scheduler,
         InferenceRequest {
+            input_cache: None,
             response_format: None,
             instance_id: marie.clone(),
             state_transition: RequestState::Initial,
@@ -497,6 +499,7 @@ pub fn run_resident_runtime_parity(
     let rin_generation_ticket = enqueue_runtime_request(
         &mut scheduler,
         InferenceRequest {
+            input_cache: None,
             response_format: None,
             instance_id: rin.clone(),
             state_transition: RequestState::Continuation,
@@ -510,6 +513,7 @@ pub fn run_resident_runtime_parity(
     let invalid_initial_ticket = enqueue_runtime_request(
         &mut scheduler,
         InferenceRequest {
+            input_cache: None,
             response_format: None,
             instance_id: rin.clone(),
             state_transition: RequestState::Initial,
@@ -523,6 +527,7 @@ pub fn run_resident_runtime_parity(
     let marie_continuation_ticket = enqueue_runtime_request(
         &mut scheduler,
         InferenceRequest {
+            input_cache: None,
             response_format: None,
             instance_id: marie.clone(),
             state_transition: RequestState::Continuation,
@@ -536,6 +541,7 @@ pub fn run_resident_runtime_parity(
     let cancelled_ticket = enqueue_runtime_request(
         &mut scheduler,
         InferenceRequest {
+            input_cache: None,
             response_format: None,
             instance_id: cancelled_instance.clone(),
             state_transition: RequestState::Initial,
@@ -801,6 +807,7 @@ pub fn run_new_session_parity(
     let fresh_prompt_tokens = manifest.prompt_token_ids[..manifest.prefix_length].to_vec();
     let first_session_prefix_response = engine
         .execute(InferenceRequest {
+            input_cache: None,
             response_format: None,
             instance_id: instance.clone(),
             state_transition: RequestState::Initial,
@@ -812,6 +819,7 @@ pub fn run_new_session_parity(
         .map_err(|error| state_operation_error("execute first-session prefix", error))?;
     let first_session_response = engine
         .execute(InferenceRequest {
+            input_cache: None,
             response_format: None,
             instance_id: instance.clone(),
             state_transition: RequestState::Continuation,
@@ -853,6 +861,7 @@ pub fn run_new_session_parity(
     let new_session_response = engine
         .execute_observed(
             InferenceRequest {
+                input_cache: None,
                 response_format: None,
                 instance_id: instance.clone(),
                 state_transition: RequestState::NewSession,
@@ -871,6 +880,7 @@ pub fn run_new_session_parity(
     let empty_ablation_response = engine
         .execute_observed(
             InferenceRequest {
+                input_cache: None,
                 response_format: None,
                 instance_id: ablation_instance.clone(),
                 state_transition: RequestState::Initial,
@@ -906,6 +916,7 @@ pub fn run_new_session_parity(
     continuation_lineage.push(continuation_input_token);
     let continuation_response = engine
         .execute(InferenceRequest {
+            input_cache: None,
             response_format: None,
             instance_id: instance.clone(),
             state_transition: RequestState::Continuation,

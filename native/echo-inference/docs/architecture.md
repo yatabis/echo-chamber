@@ -28,12 +28,12 @@ harness evolve together, but Cargo remains independent from pnpm.
   executes the model, owns composite KV/GDN state, renders the admitted chat
   template, parses Qwen tool output, persists current state, and serves the
   local NDJSON protocol.
-- `@echo-chamber/native-inference-adapter` maps protocol version 13 to the
+- `@echo-chamber/native-inference-adapter` maps protocol version 15 to the
   provider-neutral `ModelPort`. It owns only process-local continuation
   capability, lifecycle metadata, request limits, abort routing, and
   schema transport and final output-invariant validation, never model tensors.
 - `@echo-chamber/local-runtime` owns one native child process, one stable
-  main adapter plus optional memory and emotion adapters per E.C.H.O.
+  main adapter plus independent memory and emotion adapters per E.C.H.O.
   existence, per-state-lane exclusion, and main-state snapshotting at
   thinking-session boundaries.
 
@@ -60,7 +60,7 @@ would change this contract and requires a new architectural decision.
 LocalNativeInferenceRuntime.runThinkingSession(instance, callback)
   -> session callback receives the instance's Native models
      -> NativeInferenceModel.generate() for one state lane
-        -> protocol-v13 command over NDJSON
+        -> protocol-v15 command over NDJSON
            -> one resident Rust model owner
               -> exclusive state transaction
                  -> variable-width MLX/Metal execution
@@ -103,6 +103,19 @@ existence can open a durable `main` lane and process-local `memory` and
 and how to pass their committed results to Main; the engine owns each lane's
 model state independently of that application policy.
 
+`LocalNativeInferenceRuntime.think()` builds the existing Core ThinkingEngine
+with the three Native adapters, the shared Cognitive factory, and caller-owned
+tools/domain/retry policy. The factory keeps module prompts and output schemas
+identical across Hosted and Native; provider error classification stays outside Core.
+
+Memory/Emotion use independent complete-input requests. Their last generated
+state is retained as the lane's transactional current value but is not an input
+to later generation. Committed memory and emotion enter through Core's canonical
+context; only an exact input-prefix checkpoint can skip repeated prefill. Main's state policy is unchanged.
+This avoids adding repeated full-history ingestion into persistent auxiliary GDN.
+Input checkpoints are separate from current generated state and bound to one
+thinking session. Main does not use this cache.
+
 ## Composite state invariant
 
 For each independently named state lane, the process-local store contains
@@ -139,12 +152,13 @@ committed value unchanged.
 
 ## Request state transitions
 
-Every generation explicitly selects one of three transitions.
+Every generation explicitly selects one of four transitions.
 
 ### `initial`
 
-The instance must not yet have state. The runtime constructs empty GDN and
-attention state, processes a complete prompt, and commits the result.
+The instance must not yet have state. The runtime starts from a compatible
+input-only checkpoint when available, otherwise empty KV/GDN, processes the
+remaining prompt, and commits the result.
 
 ### `continuation`
 
@@ -152,7 +166,7 @@ The instance must have state. The runtime reuses the complete current KV/GDN
 payload and processes only the newly encoded suffix. The admitted chat suffix
 contains the ordered results for Main's pending calls, followed optionally by
 complete runtime-owned tool call/result pairs. With no pending call, an empty
-retry or complete runtime exchanges are admitted. Ordinary user/developer or
+retry or complete runtime exchanges are admitted. Ordinary user or
 assistant history still requires `new_session`, because it can cause Qwen's
 template to rewrite earlier thinking and is not necessarily append-only.
 
@@ -175,7 +189,42 @@ cache, then processes a complete fresh prompt. The old current state remains
 intact until this whole request commits, so a failure cannot leave a
 half-cleared existence.
 
-The adapter chooses the transition as follows:
+### `reset`
+
+The instance must have state. A request-local empty KV/GDN state processes the
+complete prompt, optionally starting from a compatible input-only checkpoint;
+normal commit atomically replaces the old current value.
+Cancellation or model failure leaves the old value intact. The engine-wide
+`new_session` GDN retention policy does not apply to `reset`.
+
+Independent Memory/Emotion adapters use `initial` when empty, then `reset` for
+every subsequent request. They reject continuation capabilities and durable
+storage. Continuous adapters, including Main, retain the existing transitions.
+
+### Cognitive input checkpoints
+
+The coordinator supplies `input_cache_scope` for Memory/Emotion requests within
+one `runThinkingSession()`. The admitted tokenizer renders the full prompt as
+usual and identifies its exact token prefix before the generation header. The
+engine stores one latest checkpoint per lane: session identity, prefix tokens,
+and materialized KV/GDN. Model and tokenizer identity are fixed by the resident
+owner. Reuse requires the same session and an exact match of the entire retained
+prefix. Changed instructions, edited history, shorter input, or a new session
+cause a cold prefill. In particular, Memory's recall/store switch is a cache miss.
+
+Prefill extends the checkpoint to the new input boundary. Generation starts
+from private buffers after that boundary; its raw output never becomes part of
+the input cache. A complete checkpoint remains useful after a cancelled or failed
+generation, while partial prefill leaves the previous checkpoint intact. These
+checkpoints are computation caches, not domain commits or continuation tokens.
+Session completion/failure sends `clear_input_cache` for each used lane. Nothing
+is persisted, and storage is bounded to one prefix/state pair per auxiliary lane.
+
+Cold and incremental prefill may select different BF16 kernel/chunk shapes.
+State parity tests hold chunk boundaries constant to isolate reuse correctness;
+real workflow and growing-context probes exercise the production chunk policy.
+
+The continuous adapter chooses the transition as follows:
 
 | Adapter condition                              | Transition     |
 | ---------------------------------------------- | -------------- |
@@ -277,7 +326,7 @@ earlier model request committed, that earlier current state is still
 snapshotted. A process crash can lose commits made since the last successful
 snapshot; resuming in the middle of that thinking session is unsupported.
 
-## Protocol version 13
+## Protocol version 15
 
 The local child-process protocol accepts only:
 
@@ -285,7 +334,8 @@ The local child-process protocol accepts only:
 snapshot_root }`;
 - `open_state { request_id, instance_id, persistence: "ephemeral" }`;
 - `generate { request_id, instance_id, state_transition, stream_tokens, input,
-tools, max_new_tokens, sampling, response_format? }`;
+tools, max_new_tokens, sampling, response_format?, input_cache_scope? }`;
+- `clear_input_cache { request_id, instance_id }`;
 - `cancel { request_id }`;
 - `snapshot { request_id, instance_id }`;
 - `shutdown`.
@@ -309,7 +359,8 @@ Terminal events have strict meanings:
 - `cancelled`: active request rolled back;
 - `failed`: active request did not commit;
 - `state_opened`: owner lock acquired and optional current state restored;
-- `snapshot_published`: fixed current file atomically replaced and synced.
+- `snapshot_published`: fixed current file atomically replaced and synced;
+- `input_cache_cleared`: ephemeral input checkpoint released, generated state unchanged.
 
 The protocol never sends model state, full prior prompts, revisions, or token
 history back to TypeScript. `state_sequence_length` is an observation derived

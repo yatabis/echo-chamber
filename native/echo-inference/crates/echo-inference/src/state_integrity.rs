@@ -10,8 +10,8 @@ use crate::chat::{EchoChatPrompt, Qwen35ChatTokenizer};
 use crate::model_state::{LayerState, MlxInferenceState};
 use crate::runtime::{
     BatchAdmission, BatchGenerationObserver, GenerationDirective, GenerationObserver,
-    InferenceRequest, InferenceResponse, RequestState, ResidentEngine, ResidentEngineConfig,
-    RuntimeError, RuntimeTokenUsage,
+    InferenceRequest, InferenceResponse, InputCacheRequest, RequestState, ResidentEngine,
+    ResidentEngineConfig, RuntimeError, RuntimeTokenUsage,
 };
 use crate::sampling::SamplingConfig;
 
@@ -25,12 +25,16 @@ struct FrozenState {
 impl FrozenState {
     fn capture(engine: &ResidentEngine, id: &InstanceId, directory: &Path) -> Self {
         let current = engine.current_state(id).expect("committed state");
-        let arrays: Vec<_> = current
-            .payload
-            .layers()
-            .iter()
-            .flat_map(LayerState::arrays)
-            .collect();
+        Self::capture_payload(engine, &current.payload, id.as_str(), directory)
+    }
+
+    fn capture_payload(
+        engine: &ResidentEngine,
+        state: &MlxInferenceState,
+        name: &str,
+        directory: &Path,
+    ) -> Self {
+        let arrays: Vec<_> = state.layers().iter().flat_map(LayerState::arrays).collect();
         engine
             .gpu()
             .eval(&arrays)
@@ -47,13 +51,12 @@ impl FrozenState {
             .zip(arrays)
             .map(|(name, array)| (name.as_str(), array))
             .collect();
-        let path = directory.join(format!("{}.safetensors", id.as_str()));
+        let path = directory.join(format!("{name}.safetensors"));
         assert!(!path.exists(), "must not overwrite a frozen reference");
         SafeTensors::save(&path, &tensors, &[]).expect("freeze tensor values");
         Self {
             path,
-            gdn_layers: current
-                .payload
+            gdn_layers: state
                 .layers()
                 .iter()
                 .map(|layer| matches!(layer, LayerState::Gdn { .. }))
@@ -62,10 +65,14 @@ impl FrozenState {
     }
 
     fn assert_matches(&self, engine: &ResidentEngine, id: &InstanceId) {
-        let reference = SafeTensors::load(&self.path).expect("load independent tensor values");
         let current = engine.current_state(id).expect("state after operation");
-        assert_eq!(current.payload.layer_count(), self.gdn_layers.len());
-        for (index, layer) in current.payload.layers().iter().enumerate() {
+        self.assert_payload(engine, &current.payload);
+    }
+
+    fn assert_payload(&self, engine: &ResidentEngine, state: &MlxInferenceState) {
+        let reference = SafeTensors::load(&self.path).expect("load independent tensor values");
+        assert_eq!(state.layer_count(), self.gdn_layers.len());
+        for (index, layer) in state.layers().iter().enumerate() {
             assert_eq!(
                 matches!(layer, LayerState::Gdn { .. }),
                 self.gdn_layers[index]
@@ -84,7 +91,7 @@ impl FrozenState {
                     difference.to_bits(),
                     0.0_f32.to_bits(),
                     "{} {name}: {difference}",
-                    id.as_str()
+                    self.path.display()
                 );
             }
         }
@@ -224,6 +231,7 @@ fn prompt(tokenizer: &Qwen35ChatTokenizer, label: &str) -> Vec<u32> {
 
 fn request(id: &InstanceId, transition: RequestState, input: &[u32], eos: u32) -> InferenceRequest {
     InferenceRequest {
+        input_cache: None,
         response_format: None,
         instance_id: id.clone(),
         state_transition: transition,
@@ -326,14 +334,15 @@ fn check_batch_interruption(
     directory: &Path,
     sentinel: &InstanceId,
     sentinel_frozen: &FrozenState,
+    transition: RequestState,
 ) {
     let eos = tokenizer.eos_token_id();
     let mut originals = Vec::new();
     let mut cancelled = Vec::new();
     let mut controls = Vec::new();
     for index in 0..6 {
-        let id = state_id(&format!("auxiliary.{index}"));
-        let control = state_id(&format!("reference.{index}"));
+        let id = state_id(&format!("auxiliary.{transition:?}.{index}"));
+        let control = state_id(&format!("reference.{transition:?}.{index}"));
         engine
             .open_ephemeral_state(id.clone())
             .expect("open auxiliary");
@@ -345,8 +354,8 @@ fn check_batch_interruption(
         frozen.restore_as(engine, &control);
         originals.push(frozen);
         let suffix = prompt(tokenizer, &format!("additional observation {index}"));
-        cancelled.push(request(&id, RequestState::Continuation, &suffix, eos));
-        controls.push(request(&control, RequestState::Continuation, &suffix, eos));
+        cancelled.push(request(&id, transition, &suffix, eos));
+        controls.push(request(&control, transition, &suffix, eos));
     }
     // Stopping the control row at the same boundary preserves the six-to-five
     // batch shape seen by every survivor of the cancelled cohort.
@@ -362,12 +371,16 @@ fn check_batch_interruption(
     );
     assert_eq!(
         usage.cached_prefix_tokens,
-        engine
-            .current_state(&cancelled[0].instance_id)
-            .expect("cancelled base")
-            .payload
-            .sequence_length()
-            .expect("prefix length")
+        if transition == RequestState::Continuation {
+            engine
+                .current_state(&cancelled[0].instance_id)
+                .expect("cancelled base")
+                .payload
+                .sequence_length()
+                .expect("prefix length")
+        } else {
+            0
+        }
     );
     assert!(
         baseline
@@ -383,7 +396,7 @@ fn check_batch_interruption(
         FrozenState::capture(engine, &controls[index].instance_id, directory)
             .assert_matches(engine, &cancelled[index].instance_id);
     }
-    let fresh = state_id("retry.reference");
+    let fresh = state_id(&format!("retry.reference.{transition:?}"));
     originals[0].restore_as(engine, &fresh);
     let mut control_request = cancelled[0].clone();
     control_request.instance_id = fresh.clone();
@@ -398,7 +411,7 @@ fn check_batch_interruption(
         .assert_matches(engine, &cancelled[0].instance_id);
     sentinel_frozen.assert_matches(engine, sentinel);
     eprintln!(
-        "PASS six-row cancellation: five survivors match same-shape controls, Main is unchanged, retry matches uninterrupted state"
+        "PASS six-row {transition:?} cancellation: five survivors match same-shape controls, Main is unchanged, retry matches uninterrupted state"
     );
 }
 
@@ -460,6 +473,66 @@ fn check_structured_interruption(
     );
 }
 
+/// A reset must erase both KV and GDN influence, not merely restart position IDs.
+fn check_reset_matches_initial(
+    engine: &mut ResidentEngine,
+    tokenizer: &Qwen35ChatTokenizer,
+    frozen: &FrozenState,
+    directory: &Path,
+) {
+    for width in [1, 2] {
+        let mut resets = Vec::new();
+        let mut controls = Vec::new();
+        for row in 0..width {
+            let id = state_id(&format!("reset.{width}.{row}"));
+            let control = state_id(&format!("cold.{width}.{row}"));
+            frozen.restore_as(engine, &id);
+            engine
+                .open_ephemeral_state(control.clone())
+                .expect("empty control");
+            let input = prompt(tokenizer, &format!("Independent module input {row}"));
+            resets.push(request(
+                &id,
+                RequestState::Reset,
+                &input,
+                tokenizer.eos_token_id(),
+            ));
+            controls.push(request(
+                &control,
+                RequestState::Initial,
+                &input,
+                tokenizer.eos_token_id(),
+            ));
+        }
+        if width == 1 {
+            let actual = engine.execute(resets[0].clone()).expect("reset");
+            let expected = engine.execute(controls[0].clone()).expect("cold input");
+            assert_eq!(actual.generated_tokens, expected.generated_tokens);
+            assert_eq!(actual.state_sequence_length, expected.state_sequence_length);
+            assert_eq!(actual.metrics.cached_prefix_tokens, 0);
+        } else {
+            // Both cohorts stop row zero at the same boundary, so their shapes match.
+            let actual = run_batch(engine, resets.clone(), Interruption::Stop);
+            let expected = run_batch(engine, controls.clone(), Interruption::Stop);
+            assert_eq!(actual.tokens, expected.tokens);
+            assert!(actual.outcomes.iter().all(|outcome| *outcome == Some(true)));
+            assert!(
+                expected
+                    .outcomes
+                    .iter()
+                    .all(|outcome| *outcome == Some(true))
+            );
+        }
+        for row in 0..width {
+            FrozenState::capture(engine, &controls[row].instance_id, directory)
+                .assert_matches(engine, &resets[row].instance_id);
+        }
+    }
+    eprintln!(
+        "PASS reset: single and batched generation match cold-start output and every KV/GDN tensor"
+    );
+}
+
 #[test]
 #[ignore = "requires ECHO_NATIVE_TEST_MODEL, local model weights and a Metal GPU"]
 fn real_model_transactions_preserve_all_committed_state_tensors() {
@@ -500,6 +573,8 @@ fn real_model_transactions_preserve_all_committed_state_tensors() {
     for (transition, interruption) in [
         (RequestState::Continuation, Interruption::Cancel),
         (RequestState::NewSession, Interruption::Cancel),
+        (RequestState::Reset, Interruption::Cancel),
+        (RequestState::Reset, Interruption::ObserverFailure),
         (RequestState::Continuation, Interruption::ObserverFailure),
     ] {
         check_single_interruption(
@@ -513,8 +588,232 @@ fn real_model_transactions_preserve_all_committed_state_tensors() {
         );
         frozen.assert_matches(&engine, &sentinel);
     }
-    check_batch_interruption(&mut engine, &tokenizer, &directory, &sentinel, &frozen);
+    for transition in [RequestState::Continuation, RequestState::Reset] {
+        check_batch_interruption(
+            &mut engine,
+            &tokenizer,
+            &directory,
+            &sentinel,
+            &frozen,
+            transition,
+        );
+    }
     check_structured_interruption(&mut engine, &tokenizer, &frozen, &directory);
+    check_reset_matches_initial(&mut engine, &tokenizer, &frozen, &directory);
     frozen.assert_matches(&engine, &sentinel);
     std::fs::remove_dir_all(&directory).expect("remove only test-owned references after success");
+}
+
+/// Cold references use the same chunk boundaries as incremental prefill, so
+/// exact comparison measures cache correctness independently of kernel rounding.
+fn cached_request(id: &InstanceId, prefix: &[u32], scope: &str) -> InferenceRequest {
+    let mut input = prefix.to_vec();
+    input.extend_from_slice(&[1, 2, 3, 4]);
+    let mut request = request(id, RequestState::Reset, &input, 248_046);
+    request.input_cache = Some(InputCacheRequest {
+        scope: scope.into(),
+        prefix_tokens: prefix.to_vec(),
+    });
+    request
+}
+
+struct CancelDuringPrefill(std::cell::Cell<usize>);
+
+impl GenerationObserver for CancelDuringPrefill {
+    fn is_cancelled(&self) -> bool {
+        let count = self.0.get() + 1;
+        self.0.set(count);
+        count >= 5
+    }
+    fn on_token(&mut self, _: u32) -> Result<GenerationDirective, String> {
+        panic!("must cancel before generation")
+    }
+}
+
+fn check_cache_cancellation(
+    engine: &mut ResidentEngine,
+    id: &InstanceId,
+    prefix: &[u32],
+    directory: &Path,
+) {
+    let previous = FrozenState::capture(engine, id, directory);
+    let checkpoint = engine.input_checkpoint(id).expect("prior checkpoint");
+    let frozen =
+        FrozenState::capture_payload(engine, &checkpoint, "input-before-cancel", directory);
+    let request = cached_request(id, prefix, "session-one");
+    let cancelled = engine.execute_observed(
+        request.clone(),
+        &mut CancelDuringPrefill(std::cell::Cell::new(0)),
+    );
+    let Err(RuntimeError::Cancelled { usage, .. }) = cancelled else {
+        panic!("prefill cancellation")
+    };
+    assert!(usage.input_tokens_processed > 0 && usage.input_tokens_processed < prefix.len() - 128);
+    assert_eq!(usage.cached_prefix_tokens, 128);
+    frozen.assert_payload(
+        engine,
+        &engine.input_checkpoint(id).expect("preserved prefix"),
+    );
+    previous.assert_matches(engine, id);
+
+    let cancelled =
+        engine.execute_observed(request.clone(), &mut Observer::new(Interruption::Cancel, 1));
+    assert!(matches!(cancelled, Err(RuntimeError::Cancelled { .. })));
+    previous.assert_matches(engine, id);
+    assert_eq!(
+        engine
+            .input_checkpoint(id)
+            .expect("completed input retained")
+            .sequence_length()
+            .expect("length"),
+        prefix.len()
+    );
+    let retry = engine
+        .execute(request)
+        .expect("retry from input checkpoint");
+    assert_eq!(retry.metrics.cached_prefix_tokens, prefix.len());
+    assert_eq!(retry.metrics.input_tokens_processed, 4);
+    eprintln!(
+        "PASS input cache: partial prefill keeps old checkpoint; decode cancellation retains completed input and rolls generated state back"
+    );
+}
+
+fn check_cache_batch(engine: &mut ResidentEngine, prefix: &[u32], directory: &Path) {
+    let mut requests = Vec::new();
+    let mut references = Vec::new();
+    for index in 0..2 {
+        let id = state_id(&format!("cache.batch.{index}"));
+        engine.open_ephemeral_state(id.clone()).expect("batch lane");
+        let mut request = cached_request(&id, prefix, "batch-session");
+        request.state_transition = RequestState::Initial;
+        let cold = engine.execute(request.clone()).expect("cold input");
+        assert_eq!(cold.metrics.cached_prefix_tokens, 0);
+        let checkpoint = engine.input_checkpoint(&id).expect("batch input");
+        references.push(FrozenState::capture_payload(
+            engine,
+            &checkpoint,
+            &format!("batch-input-{index}"),
+            directory,
+        ));
+        request.state_transition = RequestState::Reset;
+        requests.push(request);
+    }
+    let outcomes = run_batch(engine, requests.clone(), Interruption::Cancel);
+    assert_eq!(outcomes.outcomes, vec![Some(false), Some(true)]);
+    assert_eq!(
+        outcomes.cancelled_usage[0]
+            .expect("cancel usage")
+            .cached_prefix_tokens,
+        prefix.len()
+    );
+    for (request, frozen) in requests.iter().zip(references) {
+        frozen.assert_payload(
+            engine,
+            &engine
+                .input_checkpoint(&request.instance_id)
+                .expect("unchanged batch input"),
+        );
+    }
+    eprintln!(
+        "PASS input cache: independently owned checkpoints survive batched cancellation and sibling completion"
+    );
+}
+
+#[test]
+#[ignore = "requires ECHO_NATIVE_TEST_MODEL, local model weights and a Metal GPU"]
+fn real_model_input_cache_reuses_only_exact_session_prefixes() {
+    let model = std::env::var("ECHO_NATIVE_TEST_MODEL").expect("explicit model");
+    let directory = std::env::temp_dir().join(format!(
+        "echo-input-cache-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+    std::fs::create_dir(&directory).expect("test-owned directory");
+    let mut engine = ResidentEngine::load(
+        Path::new(&model),
+        ResidentEngineConfig {
+            prefill_chunk_size_tokens: Some(32),
+            prefill_chunk_at_or_above_tokens: 0,
+            ..ResidentEngineConfig::default()
+        },
+    )
+    .expect("model");
+    let tokenizer = Qwen35ChatTokenizer::load(Path::new(&model)).expect("tokenizer");
+    let prefix: Vec<_> = prompt(&tokenizer, "input prefix")
+        .into_iter()
+        .cycle()
+        .take(256)
+        .collect();
+    let warm = state_id("cache.warm");
+    let cold = state_id("cache.cold");
+    let prefill = state_id("cache.reference");
+    for id in [&warm, &cold, &prefill] {
+        engine.open_ephemeral_state(id.clone()).expect("open");
+    }
+    let mut first = cached_request(&warm, &prefix[..64], "session-one");
+    first.state_transition = RequestState::Initial;
+    assert_eq!(
+        engine
+            .execute(first)
+            .expect("first")
+            .metrics
+            .cached_prefix_tokens,
+        0
+    );
+    let second = engine
+        .execute(cached_request(&warm, &prefix[..128], "session-one"))
+        .expect("extended");
+    assert_eq!(second.metrics.cached_prefix_tokens, 64);
+    assert_eq!(second.metrics.input_tokens_processed, 68);
+    let mut baseline = cached_request(&cold, &prefix[..128], "session-one");
+    baseline.state_transition = RequestState::Initial;
+    let expected = engine.execute(baseline).expect("cold reference");
+    assert_eq!(second.generated_tokens, expected.generated_tokens);
+    FrozenState::capture(&engine, &cold, &directory).assert_matches(&engine, &warm);
+    let mut input_only = request(
+        &prefill,
+        RequestState::Initial,
+        &prefix[..128],
+        tokenizer.eos_token_id(),
+    );
+    input_only.max_new_tokens = 0;
+    input_only.length_eos_token = None;
+    engine.execute(input_only).expect("input-only reference");
+    FrozenState::capture(&engine, &prefill, &directory).assert_payload(
+        &engine,
+        &engine.input_checkpoint(&warm).expect("input cache"),
+    );
+    check_cache_cancellation(&mut engine, &warm, &prefix, &directory);
+    check_cache_batch(&mut engine, &prefix[..128], &directory);
+    let changed_session = engine
+        .execute(cached_request(&warm, &prefix, "session-two"))
+        .expect("new session");
+    assert_eq!(changed_session.metrics.cached_prefix_tokens, 0);
+    let mut changed_prefix = prefix.clone();
+    changed_prefix[0] = 42;
+    assert_eq!(
+        engine
+            .execute(cached_request(&warm, &changed_prefix, "session-two"))
+            .expect("phase change")
+            .metrics
+            .cached_prefix_tokens,
+        0
+    );
+    engine.clear_input_cache(&warm).expect("session cleanup");
+    assert!(engine.input_checkpoint(&warm).is_none());
+    assert_eq!(
+        engine
+            .execute(cached_request(&warm, &changed_prefix, "session-two"))
+            .expect("after cleanup")
+            .metrics
+            .cached_prefix_tokens,
+        0
+    );
+    eprintln!(
+        "PASS input cache: exact cold/incremental output and KV/GDN parity; no generated-state contamination; session/phase invalidation and explicit release"
+    );
+    std::fs::remove_dir_all(directory).expect("test cleanup");
 }

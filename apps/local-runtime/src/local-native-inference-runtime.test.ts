@@ -15,6 +15,11 @@ import type {
 } from '@echo-chamber/native-inference-adapter/native-inference-client';
 
 import { LocalNativeInferenceRuntime } from './local-native-inference-runtime';
+import {
+  CognitiveFixtureDomain,
+  createCognitiveFixtureTools,
+  COGNITIVE_FIXTURE_PROMPT,
+} from './testing/cognitive-fixture';
 
 type NativeWireCommand = Parameters<NativeInferenceTransport['send']>[0];
 type NativeWireEvent = Parameters<
@@ -37,6 +42,14 @@ class FakeTransport implements NativeInferenceTransport {
 
   async send(command: NativeWireCommand): Promise<void> {
     this.commands.push(command);
+    if (command.type === 'clear_input_cache') {
+      this.emit({
+        event: 'input_cache_cleared',
+        request_id: command.request_id,
+        instance_id: command.instance_id,
+      });
+      return;
+    }
     this.onSend?.(command, this);
     await Promise.resolve();
   }
@@ -225,7 +238,7 @@ describe('LocalNativeInferenceRuntime', () => {
     await runtime.shutdown();
   });
 
-  it('runs memory and emotion as independent ephemeral lanes with exact tool-response deltas', async () => {
+  it('runs memory and emotion from complete inputs without carrying prior inference state', async () => {
     const snapshotDirectory = await createSnapshotDirectory();
     const transport = new FakeTransport();
     const client = new NativeInferenceClient(transport);
@@ -258,23 +271,13 @@ describe('LocalNativeInferenceRuntime', () => {
     const runtime = await startWithClient(snapshotDirectory, client);
 
     await runtime.runThinkingSession('rin', async (_main, modules) => {
-      const [memoryInitial, emotionInitial] = await Promise.all([
+      await Promise.all([
         modules.memory.generate(moduleRequest('memory system prompt')),
         modules.emotion.generate(moduleRequest('emotion system prompt')),
       ]);
-      if (
-        memoryInitial.responseToken === undefined ||
-        emotionInitial.responseToken === undefined
-      ) {
-        throw new Error('auxiliary module returned no live continuation token');
-      }
       await Promise.all([
-        modules.memory.generate(
-          moduleDelta(memoryInitial.responseToken, 'new main-thought delta')
-        ),
-        modules.emotion.generate(
-          moduleDelta(emotionInitial.responseToken, 'new main-thought delta')
-        ),
+        modules.memory.generate(moduleRequest('complete memory context')),
+        modules.emotion.generate(moduleRequest('complete emotion context')),
       ]);
     });
 
@@ -289,8 +292,8 @@ describe('LocalNativeInferenceRuntime', () => {
     ).toEqual([
       { instanceId: 'rin.memory', transition: 'initial' },
       { instanceId: 'rin.emotion', transition: 'initial' },
-      { instanceId: 'rin.memory', transition: 'continuation' },
-      { instanceId: 'rin.emotion', transition: 'continuation' },
+      { instanceId: 'rin.memory', transition: 'reset' },
+      { instanceId: 'rin.emotion', transition: 'reset' },
     ]);
     expect(runtime.state('rin')).toMatchObject({
       persistence: 'durable',
@@ -313,9 +316,164 @@ describe('LocalNativeInferenceRuntime', () => {
       'generate',
       'generate',
       'generate',
+      'clear_input_cache',
+      'clear_input_cache',
     ]);
     await runtime.shutdown();
   });
+
+  it('runs real Core prompts through Native lanes, retries only the failed module and carries domain results into the next session', async () => {
+    const snapshotDirectory = await createSnapshotDirectory();
+    const { client, transport } = successfulClient(snapshotDirectory);
+    const lifecycle = transport.onSend;
+    const domain = new CognitiveFixtureDomain();
+    const { tools, calls } = createCognitiveFixtureTools();
+    let mainTurns = 0;
+    let memoryAttempts = 0;
+    let failedRequest: NativeGenerateCommand | undefined;
+    let controller: AbortController | undefined;
+    transport.onSend = (command, current): void => {
+      if (command.type === 'cancel') {
+        current.emit({
+          event: 'cancelled',
+          request_id: command.request_id,
+          usage: {
+            cached_prefix_tokens: 0,
+            input_tokens_processed: 11,
+            generated_tokens: 3,
+          },
+        });
+        return;
+      }
+      if (command.type !== 'generate') {
+        lifecycle?.(command, current);
+        return;
+      }
+      if (command.instance_id === 'rin') {
+        mainTurns += 1;
+        expect(domain.commits).toHaveLength(
+          mainTurns + Math.floor((mainTurns - 1) / 2)
+        );
+        current.emit(
+          completed(command, mainTurns * 10, mainFixtureOutput(mainTurns))
+        );
+        return;
+      }
+      const memory = command.instance_id === 'rin.memory';
+      if (memory && ++memoryAttempts === 1) {
+        failedRequest = command;
+        controller?.abort('injected timeout');
+        return;
+      }
+      current.emit(completed(command, 10, cognitiveOutput(command)));
+    };
+    const runtime = await startWithClient(snapshotDirectory, client);
+    const options = {
+      tools,
+      systemPrompt: COGNITIVE_FIXTURE_PROMPT,
+      cognitive: {
+        domain,
+        retryPolicy: {
+          maxAttempts: 2,
+          shouldRetry: (input: { error: unknown }): boolean =>
+            input.error instanceof Error && input.error.name === 'AbortError',
+        },
+        createRequestSignal: (): AbortSignal => {
+          const next = new AbortController();
+          controller ??= next;
+          return next.signal;
+        },
+      },
+    };
+    const first = await runtime.think('rin', options);
+    expect(first.cognitiveModules.phases.map((phase) => phase.phase)).toEqual([
+      'pre_main',
+      'pre_main',
+      'post_main',
+    ]);
+    expect(first.cognitiveModules.phases[0]?.memory.attempts).toBe(2);
+    expect(first.cognitiveModules.phases[0]?.emotion.attempts).toBe(1);
+    expect(first.cognitiveModules.usage.totalTokens).toBe(74);
+    expect(domain.state.previousSessionMemory?.content).toBe(
+      '図書館へ行く予定。'
+    );
+    await runtime.think('rin', options);
+    expect(domain.commits).toHaveLength(6);
+    expect(calls.filter((name) => name === 'finish_thinking')).toHaveLength(2);
+    assertCognitiveRequests(transport, failedRequest);
+    expect(
+      transport.commands.filter((command) => command.type === 'snapshot')
+    ).toHaveLength(2);
+    await runtime.shutdown();
+  });
+
+  it.each(['module', 'commit'] as const)(
+    'does not advance Main when %s fails in the Native Cognitive path',
+    async (failure) => {
+      const snapshotDirectory = await createSnapshotDirectory();
+      const { client, transport } = successfulClient(snapshotDirectory);
+      const lifecycle = transport.onSend;
+      const domain = new CognitiveFixtureDomain();
+      if (failure === 'commit')
+        vi.spyOn(domain, 'commitPhase').mockRejectedValue(
+          new Error('storage unavailable')
+        );
+      transport.onSend = (command, current): void => {
+        if (command.type !== 'generate') {
+          lifecycle?.(command, current);
+          return;
+        }
+        if (failure === 'module' && command.instance_id === 'rin.memory') {
+          current.emit({
+            event: 'failed',
+            request_id: command.request_id,
+            phase: 'inference',
+            error: 'injected engine failure',
+          });
+        } else {
+          const value =
+            command.instance_id === 'rin.memory'
+              ? { query: '図書館' }
+              : { valence: 0, arousal: 0, labels: [] };
+          current.emit(
+            completed(command, 10, [
+              {
+                type: 'message',
+                role: 'assistant',
+                content: JSON.stringify(value),
+              },
+            ])
+          );
+        }
+      };
+      const runtime = await startWithClient(snapshotDirectory, client);
+      await expect(
+        runtime.think('rin', {
+          tools: createCognitiveFixtureTools().tools,
+          systemPrompt: COGNITIVE_FIXTURE_PROMPT,
+          cognitive: {
+            domain,
+            retryPolicy: { maxAttempts: 1, shouldRetry: (): boolean => false },
+          },
+        })
+      ).rejects.toMatchObject({ name: 'ThinkingEngineExecutionError' });
+      expect(domain.commits).toHaveLength(0);
+      expect(domain.failures).toHaveLength(1);
+      expect(
+        transport.commands.some(
+          (command) =>
+            command.type === 'generate' && command.instance_id === 'rin'
+        )
+      ).toBe(false);
+      expect(runtime.state('rin').hasState).toBe(false);
+      expect(
+        transport.commands
+          .filter((command) => command.type === 'clear_input_cache')
+          .map((command) => command.instance_id)
+      ).toEqual(['rin.memory', 'rin.emotion']);
+      await runtime.shutdown();
+    }
+  );
 
   it('serializes sessions per instance and waits for one to finish before shutdown', async () => {
     const snapshotDirectory = await createSnapshotDirectory();
@@ -687,23 +845,6 @@ function moduleRequest(content: string): ModelRequest {
   };
 }
 
-function moduleDelta(
-  previousResponseToken: string,
-  content: string
-): ModelRequest {
-  return {
-    input: [
-      {
-        type: 'tool_result',
-        callId: 'main-observation',
-        output: content,
-      },
-    ],
-    tools: [MODULE_TOOL],
-    previousResponseToken,
-  };
-}
-
 function completed(
   command: NativeGenerateCommand,
   stateSequenceLength: number,
@@ -789,4 +930,118 @@ async function waitForCommand(
       transport.commands.some((command) => command.type === commandType)
     ).toBe(true);
   });
+}
+
+/** Confirm lineage isolation and the canonical shared input across two activations. */
+function assertCognitiveRequests(
+  transport: FakeTransport,
+  failedRequest: NativeGenerateCommand | undefined
+): void {
+  const commands = transport.commands.filter(
+    (command) => command.type === 'generate'
+  );
+  assertSystemInstructions(commands);
+  const memory = commands.filter(
+    (command) => command.instance_id === 'rin.memory'
+  );
+  const emotion = commands.filter(
+    (command) => command.instance_id === 'rin.emotion'
+  );
+  expect(memory.map((command) => command.state_transition)).toEqual([
+    'initial',
+    'initial',
+    'reset',
+    'reset',
+    'reset',
+    'reset',
+    'reset',
+  ]);
+  expect(emotion.map((command) => command.state_transition)).toEqual([
+    'initial',
+    'reset',
+    'reset',
+    'reset',
+    'reset',
+    'reset',
+  ]);
+  expect(memory[1]?.input).toEqual(failedRequest?.input);
+  assertInputCacheScopes(memory, emotion, transport);
+  expect(JSON.stringify(memory[4]?.input)).toContain('図書館へ行く予定。');
+  expect(memory[0]?.input[0]).not.toEqual(emotion[0]?.input[0]);
+  expect(memory[0]?.input.slice(1)).toEqual(emotion[0]?.input.slice(1));
+  expect(JSON.stringify(memory[2]?.input)).toContain('KITE-47');
+  for (const command of [...memory, ...emotion]) {
+    expect(command.tools).toEqual([]);
+    expect(JSON.stringify(command.input)).not.toContain(
+      COGNITIVE_FIXTURE_PROMPT
+    );
+  }
+  expect(
+    commands
+      .filter((command) => command.instance_id === 'rin')
+      .map((command) => command.state_transition)
+  ).toEqual(['initial', 'continuation', 'new_session', 'continuation']);
+}
+
+/** Every full input has exactly one system instruction, separate from observations. */
+function assertSystemInstructions(commands: NativeGenerateCommand[]): void {
+  for (const command of commands) {
+    if (command.state_transition !== 'continuation') {
+      expect(command.input[0]).toMatchObject({ role: 'system' });
+      expect(
+        command.input.filter((item) => 'role' in item && item.role === 'system')
+      ).toHaveLength(1);
+    }
+  }
+}
+
+/** Deterministic transport fixture; production schemas still validate every response. */
+function cognitiveOutput(
+  command: NativeGenerateCommand
+): NativeCompletedEvent['output'] {
+  let value: unknown = { valence: 0.2, arousal: 0.3, labels: ['平静'] };
+  if (command.instance_id === 'rin.memory') {
+    value =
+      command.response_format?.name === 'cognitive_memory_store'
+        ? { content: '図書館へ行く予定。', type: 'episode' }
+        : { query: '図書館' };
+  }
+  return [
+    { type: 'message', role: 'assistant', content: JSON.stringify(value) },
+  ];
+}
+
+/** Exercise a tool result followed by a successful Main finish in each activation. */
+function mainFixtureOutput(turn: number): NativeCompletedEvent['output'] {
+  return [
+    {
+      type: 'tool_call',
+      call_id: `main-${turn}`,
+      tool_name: turn % 2 === 1 ? 'inspect_note' : 'finish_thinking',
+      input:
+        turn % 2 === 1
+          ? '{}'
+          : JSON.stringify({
+              reason: 'KITE-47 checked',
+            }),
+    },
+  ];
+}
+
+/** A retry shares its session cache, while a new session gets a fresh identity. */
+function assertInputCacheScopes(
+  memory: NativeGenerateCommand[],
+  emotion: NativeGenerateCommand[],
+  transport: FakeTransport
+): void {
+  expect(
+    memory.slice(0, 4).map((command) => command.input_cache_scope)
+  ).toEqual(Array<string | undefined>(4).fill(memory[0]?.input_cache_scope));
+  expect(memory[0]?.input_cache_scope).toBeTypeOf('string');
+  expect(memory[4]?.input_cache_scope).not.toBe(memory[0]?.input_cache_scope);
+  expect(emotion[0]?.input_cache_scope).toBe(memory[0]?.input_cache_scope);
+  expect(emotion[3]?.input_cache_scope).toBe(memory[4]?.input_cache_scope);
+  expect(
+    transport.commands.filter((command) => command.type === 'clear_input_cache')
+  ).toHaveLength(4);
 }

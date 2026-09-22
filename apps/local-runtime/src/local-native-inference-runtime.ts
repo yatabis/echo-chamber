@@ -1,5 +1,14 @@
+import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 
+import { createModelCognitiveModuleOrchestrator } from '@echo-chamber/core/agent/model-cognitive-module';
+import type { ModelCognitiveModuleOrchestratorOptions } from '@echo-chamber/core/agent/model-cognitive-module';
+import { ThinkingEngine } from '@echo-chamber/core/agent/thinking-engine';
+import type {
+  ThinkingEngineInput,
+  ThinkingEngineResult,
+} from '@echo-chamber/core/agent/thinking-engine';
+import { ECHO_INSTANCE_DEFINITIONS } from '@echo-chamber/core/echo/instance-definitions';
 import { ECHO_INSTANCE_IDS } from '@echo-chamber/core/types/echo-config';
 import type { EchoInstanceId } from '@echo-chamber/core/types/echo-config';
 import { NativeInferenceClient } from '@echo-chamber/native-inference-adapter/native-inference-client';
@@ -13,8 +22,20 @@ import type {
 type RuntimeLifecycle = 'starting' | 'running' | 'stopping' | 'stopped';
 type InstanceModelOptions = Omit<
   NativeInferenceModelOptions,
-  'client' | 'instanceId'
+  'client' | 'instanceId' | 'statePolicy'
 >;
+
+/** Nativeの3 moduleをCoreへ接続する入力。保存・retry・期限は呼び出し側が所有する。 */
+export interface LocalNativeThinkingOptions extends Pick<
+  ThinkingEngineInput,
+  'tools' | 'systemPrompt' | 'events'
+> {
+  cognitive: Pick<
+    ModelCognitiveModuleOrchestratorOptions,
+    'domain' | 'retryPolicy' | 'createRequestSignal' | 'maxOutputTokens'
+  >;
+  createActivationId?(): string;
+}
 
 /** The three independently committed model-state lanes owned by one Echo. */
 export type NativeInferenceModule = 'main' | 'memory' | 'emotion';
@@ -106,11 +127,13 @@ export class LocalNativeInferenceRuntime {
         }),
         memory: new NativeInferenceModel({
           ...perModule?.memory,
+          statePolicy: 'independent',
           client,
           instanceId: moduleStateId(instanceId, 'memory'),
         }),
         emotion: new NativeInferenceModel({
           ...perModule?.emotion,
+          statePolicy: 'independent',
           client,
           instanceId: moduleStateId(instanceId, 'emotion'),
         }),
@@ -177,6 +200,30 @@ export class LocalNativeInferenceRuntime {
     return this.requireModules(instanceId)[module].state();
   }
 
+  /** CoreのCognitive/Mainフローを実行し、既存のsession境界でMainを保存する。 */
+  async think(
+    instanceId: EchoInstanceId,
+    options: LocalNativeThinkingOptions
+  ): Promise<ThinkingEngineResult> {
+    return await this.runThinkingSession(instanceId, async (main, modules) => {
+      const cognitiveModules = createModelCognitiveModuleOrchestrator({
+        ...options.cognitive,
+        instanceName: ECHO_INSTANCE_DEFINITIONS[instanceId].name,
+        memoryModel: modules.memory,
+        emotionModel: modules.emotion,
+        createActivationId: (): string =>
+          options.createActivationId?.() ?? `${instanceId}:${randomUUID()}`,
+      });
+      return await new ThinkingEngine({
+        model: main,
+        cognitiveModules,
+        tools: options.tools,
+        systemPrompt: options.systemPrompt,
+        ...(options.events === undefined ? {} : { events: options.events }),
+      }).think();
+    });
+  }
+
   /**
    * Runs one full thinking session with exclusive access to the stable model.
    *
@@ -200,11 +247,30 @@ export class LocalNativeInferenceRuntime {
     const modules = this.requireModules(instanceId);
     let outcome: OperationOutcome<T>;
     try {
+      const scope = randomUUID();
+      modules.memory.beginInputCacheSession(scope);
+      modules.emotion.beginInputCacheSession(scope);
       outcome = { ok: true, value: await operation(modules.main, modules) };
     } catch (error) {
       outcome = { ok: false, error };
     }
     this.executingSessions.delete(instanceId);
+    const cacheCleanup = await Promise.allSettled([
+      modules.memory.endInputCacheSession(),
+      modules.emotion.endInputCacheSession(),
+    ]);
+    const cleanupErrors = cacheCleanup.flatMap((result) =>
+      result.status === 'rejected' ? [toError(result.reason)] : []
+    );
+    if (cleanupErrors.length > 0) {
+      outcome = {
+        ok: false,
+        error: new AggregateError(
+          [...(!outcome.ok ? [toError(outcome.error)] : []), ...cleanupErrors],
+          'thinking session input cache cleanup failed'
+        ),
+      };
+    }
 
     let checkpointFailure: { error: unknown } | undefined;
     try {
@@ -263,9 +329,8 @@ export class LocalNativeInferenceRuntime {
         persistence: 'durable',
         snapshotRoot,
       });
-      // Auxiliary states deliberately have no durable authority: they may
-      // retain their own KV/GDN prefix and retry independently, but cannot
-      // replace the Echo's main current.safetensors.
+      // Generated auxiliary state is never inherited. A separate input-only
+      // checkpoint is bounded to each thinking session and never persisted.
       // eslint-disable-next-line no-await-in-loop
       await modules.memory.openState({ persistence: 'ephemeral' });
       // See the serialization reason above.

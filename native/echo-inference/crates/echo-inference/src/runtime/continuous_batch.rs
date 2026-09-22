@@ -6,8 +6,7 @@ use echo_mlx::Array;
 use super::{
     EngineError, GenerationDirective, GenerationFinishReason, Gpu, InferenceRequest,
     InferenceResponse, MlxInferenceState, ResidentEngine, RuntimeError, RuntimeMetrics,
-    RuntimeTokenUsage, commit_with_optional_metal_memory, duration_nanos,
-    selected_prefill_chunk_size, slice_token_chunk, token_array,
+    RuntimeTokenUsage, commit_with_optional_metal_memory, duration_nanos, token_array,
 };
 use crate::MAX_ACTIVE_BATCH_SIZE;
 use crate::full_model::{
@@ -331,7 +330,7 @@ impl ResidentEngine {
     fn prepare_batch_row<O: BatchGenerationObserver>(
         &self,
         request_index: usize,
-        request: InferenceRequest,
+        mut request: InferenceRequest,
         queue_wait: Duration,
         request_started: Instant,
         observer: &O,
@@ -360,15 +359,18 @@ impl ResidentEngine {
                 detail: "continuation request lost its committed base".into(),
             });
         };
-        let input_ids = token_array(&request.input_tokens)?;
+        if request.input_cache.is_some() {
+            request.input_tokens.drain(..cached_prefix_tokens);
+        }
         let model_started = Instant::now();
-        let (
-            execution,
-            input_execution_nanos,
-            input_graph_construction_nanos,
-            input_materialization_nanos,
-            input_model_execution_count,
-        ) = self.run_batch_prefill(request_index, &request, &input_ids, initial_state, observer)?;
+        let prefill = self.prefill_input(&request, initial_state, || {
+            observer.is_cancelled(request_index)
+        })?;
+        let execution = prefill.execution;
+        let input_execution_nanos = prefill.elapsed_nanos;
+        let input_graph_construction_nanos = prefill.graph_nanos;
+        let input_materialization_nanos = prefill.materialization_nanos;
+        let input_model_execution_count = prefill.execution_count;
         let RuntimeModelExecution { logits, state } = execution;
         let state = compact_runtime_state(&self.gpu, state, &self.plan)?;
         let decode_started = Instant::now();
@@ -399,113 +401,6 @@ impl ResidentEngine {
             decode_finalization_nanos: 0,
             state_advance_steps: 0,
         })
-    }
-
-    #[allow(clippy::too_many_lines)]
-    fn run_batch_prefill<O: BatchGenerationObserver>(
-        &self,
-        request_index: usize,
-        request: &InferenceRequest,
-        input_ids: &Array,
-        initial_state: &MlxInferenceState,
-        observer: &O,
-    ) -> Result<(RuntimeModelExecution, u64, u64, u64, usize), RuntimeError> {
-        let input_started = Instant::now();
-        let input_shape = input_ids.shape();
-        let [input_batch_size, input_token_count] = <[usize; 2]>::try_from(input_shape.clone())
-            .map_err(|input_shape| {
-                EngineError::Unsupported(format!(
-                    "runtime token input must be rank 2, observed {input_shape:?}"
-                ))
-            })?;
-        let closing_capacity = usize::from(request.length_eos_token.is_some());
-        let additional_tokens = input_token_count
-            .checked_add(request.max_new_tokens)
-            .and_then(|tokens| tokens.checked_add(closing_capacity))
-            .ok_or_else(|| {
-                EngineError::Unsupported("runtime request token capacity overflow".into())
-            })?;
-        let runtime_state =
-            prepare_runtime_state(&self.gpu, initial_state, 1, additional_tokens, &self.plan)?;
-        let chunk_size = selected_prefill_chunk_size(self.config, input_token_count);
-        let mut input_graph_construction_nanos = 0_u64;
-        let mut input_materialization_nanos = 0_u64;
-        let (execution, execution_count) = if let Some(chunk_size) = chunk_size {
-            let mut state = runtime_state;
-            let mut final_execution = None;
-            let mut execution_count = 0_usize;
-            for chunk_start in (0..input_token_count).step_by(chunk_size) {
-                if observer.is_cancelled(request_index) {
-                    return Err(RuntimeError::Cancelled {
-                        usage: RuntimeTokenUsage::observed(
-                            initial_state.sequence_length()?,
-                            chunk_start,
-                            0,
-                        ),
-                        instance_id: request.instance_id.clone(),
-                    });
-                }
-                let chunk_stop = chunk_start
-                    .saturating_add(chunk_size)
-                    .min(input_token_count);
-                let graph_started = Instant::now();
-                let chunk = slice_token_chunk(
-                    &self.gpu,
-                    input_ids,
-                    input_batch_size,
-                    chunk_start,
-                    chunk_stop,
-                )?;
-                let chunk_execution = execute_runtime_model(
-                    &self.gpu,
-                    &chunk,
-                    state,
-                    &self.weights,
-                    &self.plan,
-                    &self.gdn_kernel,
-                    &self.moe_kernel,
-                )?;
-                input_graph_construction_nanos = input_graph_construction_nanos
-                    .saturating_add(duration_nanos(graph_started.elapsed()));
-                let materialization_started = Instant::now();
-                evaluate_runtime_execution(&self.gpu, &chunk_execution)?;
-                input_materialization_nanos = input_materialization_nanos
-                    .saturating_add(duration_nanos(materialization_started.elapsed()));
-                execution_count = execution_count.saturating_add(1);
-                if chunk_stop == input_token_count {
-                    final_execution = Some(chunk_execution);
-                    break;
-                }
-                state = chunk_execution.state;
-            }
-            let execution = final_execution.ok_or_else(|| {
-                EngineError::Unsupported("chunked prefill produced no execution".into())
-            })?;
-            (execution, execution_count)
-        } else {
-            let graph_started = Instant::now();
-            let execution = execute_runtime_model(
-                &self.gpu,
-                input_ids,
-                runtime_state,
-                &self.weights,
-                &self.plan,
-                &self.gdn_kernel,
-                &self.moe_kernel,
-            )?;
-            input_graph_construction_nanos = duration_nanos(graph_started.elapsed());
-            let materialization_started = Instant::now();
-            evaluate_runtime_execution(&self.gpu, &execution)?;
-            input_materialization_nanos = duration_nanos(materialization_started.elapsed());
-            (execution, 1)
-        };
-        Ok((
-            execution,
-            duration_nanos(input_started.elapsed()),
-            input_graph_construction_nanos,
-            input_materialization_nanos,
-            execution_count,
-        ))
     }
 
     fn finish_zero_visible_tokens(

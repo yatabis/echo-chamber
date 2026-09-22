@@ -1,27 +1,9 @@
-import {
-  formatCognitiveModuleHandoff,
-  formatInitialCognitiveModuleContext,
-} from '@echo-chamber/core/agent/cognitive-module-handoff';
-import {
-  ParallelCognitiveModuleOrchestrator,
-  type CognitiveModuleName,
-  type CognitiveModuleDomainPort,
-  type CognitiveModuleOrchestrator,
+import type {
+  CognitiveModuleName,
+  CognitiveModuleDomainPort,
+  CognitiveModuleOrchestrator,
 } from '@echo-chamber/core/agent/cognitive-module-orchestrator';
-import {
-  createEmotionCognitiveModuleOutputFormat,
-  createMemoryRecallCognitiveModuleOutputFormat,
-  createMemoryStoreCognitiveModuleOutputFormat,
-  parseEmotionCognitiveModuleOutput,
-  parseMemoryRecallCognitiveModuleOutput,
-  parseMemoryStoreCognitiveModuleOutput,
-  type MemoryCognitiveModuleOutput,
-} from '@echo-chamber/core/agent/cognitive-module-schema';
-import { ModelCognitiveModuleRunner } from '@echo-chamber/core/agent/model-cognitive-module';
-import {
-  buildEmotionCognitiveModuleSystemPrompt,
-  buildMemoryCognitiveModuleSystemPrompt,
-} from '@echo-chamber/core/agent/prompt-builder';
+import { createModelCognitiveModuleOrchestrator } from '@echo-chamber/core/agent/model-cognitive-module';
 import type { EchoInstanceDefinition } from '@echo-chamber/core/echo/instance-definitions';
 import type {
   EchoEvent,
@@ -232,44 +214,17 @@ export function createCognitiveModuleOrchestrator(
     maxRetries: 0,
     events: createCognitiveModuleEventPort('emotion', input.events),
   });
-  const memoryRecallFormat = createMemoryRecallCognitiveModuleOutputFormat();
-  const memoryStoreFormat = createMemoryStoreCognitiveModuleOutputFormat();
-  const emotionFormat = createEmotionCognitiveModuleOutputFormat();
-
-  return new ParallelCognitiveModuleOrchestrator({
+  return createModelCognitiveModuleOrchestrator({
+    instanceName: input.instance.name,
+    memoryModel,
+    emotionModel,
     createActivationId: (): string => createCognitiveModuleActivationId(input),
-    memory: new ModelCognitiveModuleRunner<MemoryCognitiveModuleOutput>({
-      model: memoryModel,
-      resolveSystemPrompt: ({ phase }) =>
-        buildMemoryCognitiveModuleSystemPrompt(input.instance.name, phase),
-      resolveOutputContract: ({ phase }) =>
-        phase === 'pre_main'
-          ? {
-              format: memoryRecallFormat,
-              parse: parseMemoryRecallCognitiveModuleOutput,
-            }
-          : {
-              format: memoryStoreFormat,
-              parse: parseMemoryStoreCognitiveModuleOutput,
-            },
-    }),
-    emotion: new ModelCognitiveModuleRunner({
-      model: emotionModel,
-      resolveSystemPrompt: () =>
-        buildEmotionCognitiveModuleSystemPrompt(input.instance.name),
-      resolveOutputContract: () => ({
-        format: emotionFormat,
-        parse: parseEmotionCognitiveModuleOutput,
-      }),
-    }),
     retryPolicy: {
       maxAttempts: COGNITIVE_MODULE_MAX_ATTEMPTS,
       shouldRetry: ({ error }) => isRetryableCognitiveModuleError(error),
     },
     domain: input.domain,
-    formatInitialContext: formatInitialCognitiveModuleContext,
     createRequestSignal: () =>
       AbortSignal.timeout(COGNITIVE_MODULE_REQUEST_TIMEOUT_MS),
-    formatHandoff: formatCognitiveModuleHandoff,
   });
 }

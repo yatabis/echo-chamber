@@ -374,6 +374,36 @@ impl Qwen35ChatTokenizer {
         })
     }
 
+    /// Returns the exact input prefix before the template's generation-only header.
+    ///
+    /// # Errors
+    /// Returns an error if this is not a complete prompt or tokenization changes
+    /// the prefix at the header boundary. No prompt contents are modified.
+    pub fn input_cache_prefix(&self, encoded: &EncodedChatPrompt) -> Result<Vec<u32>, ChatError> {
+        let prefix = encoded
+            .rendered
+            .strip_suffix(NON_THINKING_GENERATION_PROMPT)
+            .ok_or_else(|| ChatError::InvalidPrompt {
+                detail: "input cache requires a full generation prompt".into(),
+            })?;
+        let tokens =
+            self.tokenizer
+                .encode(prefix, false)
+                .map_err(|source| ChatError::Tokenizer {
+                    detail: source.to_string(),
+                })?;
+        let tokens = tokens.get_ids().to_vec();
+        if tokens.is_empty()
+            || tokens.len() >= encoded.token_ids.len()
+            || !encoded.token_ids.starts_with(&tokens)
+        {
+            return Err(ChatError::InvalidPrompt {
+                detail: "generation header is not a stable token boundary".into(),
+            });
+        }
+        Ok(tokens)
+    }
+
     /// Encodes Main results and committed runtime exchanges against resident state.
     ///
     /// This path never reconstructs the preceding assistant output from
