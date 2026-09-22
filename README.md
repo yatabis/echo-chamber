@@ -37,7 +37,7 @@ native/
 
 ## 前提条件
 
-- Node.js `22.16.0`（`package.json` の Volta 設定準拠）
+- Node.js `24.21.0`（Volta・pnpm・CI で共通）
 - `pnpm`
 - Cloudflare アカウント
 - Discord Bot（Echo インスタンス用 + ログ通知用）
@@ -55,6 +55,7 @@ pnpm dev
 
 補足:
 
+- `pnpm-workspace.yaml` の `useNodeVersion` は、pnpm をインストールしたときの Node.js に依存せず、`pnpm run` / `pnpm exec` を指定バージョンで実行します。`pnpm exec node --version` で確認できます。
 - `pnpm dev` は `apps/cloudflare-workers` を対象に `wrangler types && wrangler dev` を実行します。
 - Workers AI はローカル模擬されず、ローカル開発でもリモートリソースへ接続して利用量が発生し得ます。
 - `pnpm dev` / `pnpm start` は、Access で保護された production / preview hostname と分離するため、ローカル開発セッションだけ Worker 名 `echo-chamber-local-dev` を使用します。この一時セッションは Wrangler の preview token で保護され、`pnpm deploy` の Worker 名 `echo-chamber` には影響しません。
