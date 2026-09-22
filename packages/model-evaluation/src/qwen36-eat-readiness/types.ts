@@ -8,18 +8,6 @@ export interface RuntimeContextSnapshot {
   createdAt: string;
 }
 
-/** Rapid-MLXで直接起動し、同じ評価条件を適用するローカルモデル。 */
-export interface LocalEvaluationTarget {
-  /** ログ名、結果識別子、評価セッションIDに使う一意なID。 */
-  id: string;
-  /** 実行ログへ表示する人間向けモデル名。 */
-  displayName: string;
-  /** Rapid-MLXが直接起動できる自己完結したモデルディレクトリ。 */
-  modelPath: string;
-  /** Rapid-MLXの公開名とChat Completions要求で共通して使うモデル名。 */
-  servedModelName: string;
-}
-
 export type RuntimeInstructionMode = 'explicit' | 'implicit';
 
 /**
