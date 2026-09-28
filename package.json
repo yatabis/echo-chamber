@@ -49,7 +49,7 @@
   "dependencies": {
     "@discordjs/rest": "2.6.3",
     "discord-api-types": "0.38.55",
-    "hono": "4.13.8",
+    "hono": "4.13.9",
     "openai": "6.49.0",
     "zod": "4.6.5"
   },
