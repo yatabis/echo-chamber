@@ -26,11 +26,11 @@
     "dashboard:build": "pnpm --filter @echo-chamber/dashboard build"
   },
   "devDependencies": {
-    "@cloudflare/vitest-plugin": "^1.1.13",
+    "@cloudflare/vitest-plugin": "^1.2.7",
     "@eslint/js": "^10.0.1",
     "@types/node": "^24.13.6",
-    "@typescript-eslint/eslint-plugin": "^8.70.0",
-    "@typescript-eslint/parser": "^8.70.0",
+    "@typescript-eslint/eslint-plugin": "^8.70.1",
+    "@typescript-eslint/parser": "^8.70.1",
     "@vitest/coverage-istanbul": "4.1.11",
     "@vitest/coverage-v8": "4.1.11",
     "@vitest/ui": "^4.1.11",
@@ -39,12 +39,12 @@
     "eslint-import-resolver-typescript": "^4.4.5",
     "eslint-plugin-import-x": "^4.17.1",
     "globals": "^16.5.0",
-    "prettier": "^3.9.8",
+    "prettier": "^3.9.9",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.70.0",
+    "typescript-eslint": "^8.70.1",
     "vite": "6.4.3",
     "vitest": "^4.1.11",
-    "wrangler": "^4.135.0"
+    "wrangler": "^4.140.0"
   },
   "dependencies": {
     "@discordjs/rest": "2.6.3",
