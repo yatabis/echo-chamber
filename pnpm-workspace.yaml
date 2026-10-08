@@ -2,4 +2,9 @@ packages:
   - 'apps/*'
   - 'packages/*'
 
-useNodeVersion: 24.21.0
+allowBuilds:
+  esbuild: true
+  eslint: true
+  sharp: true
+  unrs-resolver: true
+  workerd: true
