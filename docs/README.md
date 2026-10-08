@@ -5,6 +5,7 @@
 
 現在の現役ドキュメント:
 
+- [`maintenance-capability-inventory.md`](./maintenance-capability-inventory.md) — 整理に向けた能力・現行方式・検証の対応表とレビュー用草案
 - [`echo-processing-flows.md`](./echo-processing-flows.md) — Hosted runtimeの起動、思考セッション、tool、永続化、Dashboardまでの処理フロー
 - [`cognitive-module-architecture.md`](./cognitive-module-architecture.md) — Main、Memory、Emotion の役割、実行順序、保存、失敗時の動作
 - [`native-runtime-integration-readiness.md`](./native-runtime-integration-readiness.md) — Native推論基盤の検証結果、未接続のCognitive契約、次の実装と受け入れ条件

@@ -3,6 +3,14 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@12.6.0",
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": "24.21.0",
+      "onFail": "error"
+    }
+  },
   "scripts": {
     "deploy": "pnpm dashboard:build && pnpm --filter @echo-chamber/cloudflare-workers run deploy",
     "dev": "pnpm dashboard:build && pnpm --filter @echo-chamber/cloudflare-workers dev",
@@ -52,15 +60,6 @@
     "hono": "4.13.8",
     "openai": "6.49.0",
     "zod": "4.6.5"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild",
-      "eslint",
-      "sharp",
-      "unrs-resolver",
-      "workerd"
-    ]
   },
   "volta": {
     "node": "24.21.0"
