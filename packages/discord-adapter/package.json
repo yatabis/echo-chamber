@@ -17,6 +17,6 @@
   "dependencies": {
     "@discordjs/rest": "2.6.3",
     "@echo-chamber/core": "workspace:*",
-    "discord-api-types": "0.38.55"
+    "discord-api-types": "0.38.56"
   }
 }
