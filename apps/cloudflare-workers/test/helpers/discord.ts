@@ -1,3 +1,5 @@
+import { MessageType, UserPremiumType } from 'discord-api-types/v10';
+
 import type {
   RESTGetAPIChannelMessagesResult,
   RESTGetAPICurrentUserResult,
@@ -52,7 +54,7 @@ export function createDiscordMessagesResponse(
 
     const message: APIMessage = {
       id: `message-${index + 1}`,
-      type: 0,
+      type: MessageType.Default,
       content: msg.message,
       channel_id: 'test-channel-id',
       author,
@@ -93,6 +95,6 @@ export function createDiscordCurrentUserResponse(
     locale: 'en-US',
     verified: true,
     email: null,
-    premium_type: 0,
+    premium_type: UserPremiumType.None,
   };
 }
