@@ -257,7 +257,12 @@ async function runQualityCheck(check, repositoryRoot) {
   return new Promise((resolve) => {
     const child = spawn(check.command, check.args, {
       cwd: join(repositoryRoot, check.cwd ?? ''),
-      env: process.env,
+      env: {
+        ...process.env,
+        CI: 'true',
+        WRANGLER_LOG_PATH:
+          process.env.WRANGLER_LOG_PATH ?? join(STATE_DIRECTORY, 'wrangler'),
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = '';
