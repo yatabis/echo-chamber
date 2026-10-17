@@ -25,7 +25,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "jq -r '.' >> notifications.jsonl && pnpm lint && pnpm format && pnpm typecheck"
+            "command": "pnpm lint && pnpm format && pnpm typecheck"
           }
         ]
       }
