@@ -94,6 +94,11 @@ import {
 import { buildDashboardSessionLogsResponse } from './dashboard-activities';
 import { SqliteEchoEventArchive, getEventArchiveDay } from './event-archive';
 import {
+  ECHO_EVENT_ARCHIVE_EXPORT_HEADERS,
+  formatEchoEventArchiveExportCursor,
+  parseEchoEventArchiveExportQuery,
+} from './event-archive-export';
+import {
   DEFAULT_NOTIFICATION_REQUEST_BUDGET,
   ExternalRequestBudget,
   type ExternalRequestBudgetSnapshot,
@@ -309,6 +314,9 @@ export class Echo extends DurableObject<Env> {
       })
       .get('/action-analysis', (c) => {
         return c.json(this.getCachedActionAnalysisResponse());
+      })
+      .get('/archive/events', (c) => {
+        return this.createEventArchiveExportResponse(new URL(c.req.url));
       })
       .post('/wake', async (c) => {
         await this.wake(true);
@@ -939,6 +947,41 @@ export class Echo extends DurableObject<Env> {
       DASHBOARD_SESSION_LOGS_CACHE_TTL_MS
     );
     return response;
+  }
+
+  /**
+   * 保存済み Echo event を archive day ごとに 1 ページ分の NDJSON として返す。
+   *
+   * Dashboard の read cache は通さない。取り出し用の一回限りの読み出しで、
+   * 同じページを繰り返し読むことを想定しないため。
+   *
+   * @param url archive day・読み出し位置・件数を query に持つ request URL
+   * @returns NDJSON 本文と、続きの位置・rows read を載せた response
+   */
+  private createEventArchiveExportResponse(url: URL): Response {
+    const parsed = parseEchoEventArchiveExportQuery(url.searchParams);
+    if (!parsed.ok) {
+      return new Response(parsed.error, { status: 400 });
+    }
+
+    const page = this.eventArchive.exportEventsByArchiveDay(parsed.query);
+    const headers = new Headers({
+      'content-type': 'application/x-ndjson; charset=utf-8',
+      'cache-control': 'no-store',
+      [ECHO_EVENT_ARCHIVE_EXPORT_HEADERS.rowsRead]: String(page.rowsRead),
+      [ECHO_EVENT_ARCHIVE_EXPORT_HEADERS.eventCount]: String(page.lines.length),
+    });
+    if (page.nextCursor !== null) {
+      headers.set(
+        ECHO_EVENT_ARCHIVE_EXPORT_HEADERS.nextCursor,
+        formatEchoEventArchiveExportCursor(page.nextCursor)
+      );
+    }
+
+    return new Response(page.lines.map((line) => `${line}\n`).join(''), {
+      status: 200,
+      headers,
+    });
   }
 
   /**

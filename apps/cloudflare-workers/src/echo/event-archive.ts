@@ -3,12 +3,17 @@ import type { EchoEvent } from '@echo-chamber/core/ports/echo-event';
 import { formatDate } from '@echo-chamber/core/utils/datetime';
 
 import { DASHBOARD_ACTIVITY_EVENT_TYPES } from './dashboard-activity-events';
+import { ECHO_EVENT_ARCHIVE_EXPORT_MAX_BODY_CHARS } from './event-archive-export';
 
 import type {
   DashboardActionAnalysisEventRange,
   DashboardActionAnalysisMetrics,
   DashboardActionAnalysisToolMetrics,
 } from './dashboard-action-analysis';
+import type {
+  EchoEventArchiveExportCursor,
+  EchoEventArchiveExportQuery,
+} from './event-archive-export';
 import type { EchoEventArchive } from '../utils/echo-event';
 
 const EVENT_ARCHIVE_DAY_BOUNDARY_HOUR_JST = 3;
@@ -28,6 +33,10 @@ interface StoredEchoEventRow extends Record<string, SqlStorageValue> {
   streams_json: string;
   summary: string;
   payload_json: string;
+}
+
+interface StoredExportEventRow extends StoredEchoEventRow {
+  archive_rowid: number;
 }
 
 interface StoredActionAnalysisDailyStatsRow extends Record<
@@ -90,6 +99,21 @@ export interface EchoEventArchiveRange {
   startArchiveDay: string;
   endArchiveDay: string;
   events: DashboardEchoEvent[];
+}
+
+/** 1 ページ分の export 条件。本文量の上限は test から小さく指定できる。 */
+export interface EchoEventArchiveExportPageInput extends EchoEventArchiveExportQuery {
+  maxBodyChars?: number;
+}
+
+/** 保存済み event を NDJSON 行として返す 1 ページ分の結果。 */
+export interface EchoEventArchiveExportPage {
+  /** 改行を含まない JSON object 文字列。順に改行で連結すると NDJSON 本文になる。 */
+  lines: string[];
+  /** 続きがある場合、最後に返した event の位置。 */
+  nextCursor: EchoEventArchiveExportCursor | null;
+  /** このページの読み出しで SQLite が数えた rows read。 */
+  rowsRead: number;
 }
 
 const ACTION_ANALYSIS_EVENT_TYPES = [
@@ -336,6 +360,61 @@ export class SqliteEchoEventArchive implements EchoEventArchive {
         metrics: metrics.metrics,
       };
     });
+  }
+
+  /**
+   * 指定 archive day の保存済み event を、保存順に 1 ページ分だけ NDJSON 行として返す。
+   *
+   * 読み出し位置は作成時刻と rowid の組で表す。OFFSET は読み飛ばした行も rows read に
+   * 数えるため、ページが進むほど読み取りが膨らむので使わない。
+   *
+   * @param input archive day、読み出し位置、件数、本文量の上限
+   * @returns NDJSON 行、続きの位置、このページの rows read
+   */
+  exportEventsByArchiveDay(
+    input: EchoEventArchiveExportPageInput
+  ): EchoEventArchiveExportPage {
+    this.ensureSchema();
+    const limit = Math.max(1, Math.floor(input.limit));
+    const maxBodyChars =
+      input.maxBodyChars ?? ECHO_EVENT_ARCHIVE_EXPORT_MAX_BODY_CHARS;
+    const cursors: SqlStorageCursor<StoredExportEventRow>[] = [];
+    // 続きの有無を確かめるため、1 行だけ多く読む。
+    const rows = this.readExportRows({
+      archiveDay: input.archiveDay,
+      after: input.after,
+      limit: limit + 1,
+      cursors,
+    });
+    const lines: string[] = [];
+    let bodyChars = 0;
+    let lastPosition: EchoEventArchiveExportCursor | null = null;
+    let hasMore = false;
+
+    for (const row of rows) {
+      if (lines.length === limit) {
+        hasMore = true;
+        break;
+      }
+      const line = rowToExportLine(row);
+      // 1 件だけで上限を超える event も返し、読み出しが同じ位置で止まらないようにする。
+      if (lines.length > 0 && bodyChars + line.length + 1 > maxBodyChars) {
+        hasMore = true;
+        break;
+      }
+      lines.push(line);
+      bodyChars += line.length + 1;
+      lastPosition = {
+        createdAtMs: row.created_at_ms,
+        rowId: row.archive_rowid,
+      };
+    }
+
+    return {
+      lines,
+      nextCursor: hasMore ? lastPosition : null,
+      rowsRead: cursors.reduce((total, cursor) => total + cursor.rowsRead, 0),
+    };
   }
 
   /**
@@ -798,6 +877,75 @@ export class SqliteEchoEventArchive implements EchoEventArchive {
   }
 
   /**
+   * export 用に、指定位置より後の event を保存順に最大 `limit` 行読む。
+   *
+   * `(archive_day, created_at_ms)` index の各 entry は rowid を末尾の key として持つため、
+   * `ORDER BY created_at_ms, rowid` は並べ替えを挟まず index 順に読める。
+   * 続きは「同じ作成時刻の残り」と「それより後の作成時刻」を別々に読む。
+   * `(created_at_ms, rowid) > (?, ?)` の形では SQLite が index の範囲を作成時刻までしか
+   * 絞れず、同じ時刻の event を先頭から読み直して rows read が増えるため。
+   * 実行した cursor は rows read を集計するため `input.cursors` へ追加する。
+   */
+  private *readExportRows(input: {
+    archiveDay: string;
+    after: EchoEventArchiveExportCursor | null;
+    limit: number;
+    cursors: SqlStorageCursor<StoredExportEventRow>[];
+  }): Generator<StoredExportEventRow, void, undefined> {
+    const { archiveDay, after, cursors } = input;
+    let remaining = input.limit;
+
+    if (after !== null) {
+      const sameTimeCursor = this.sql.exec<StoredExportEventRow>(
+        `SELECT rowid AS archive_rowid, *
+         FROM echo_events
+         WHERE archive_day = ?
+           AND created_at_ms = ?
+           AND rowid > ?
+         ORDER BY rowid
+         LIMIT ?`,
+        archiveDay,
+        after.createdAtMs,
+        after.rowId,
+        remaining
+      );
+      cursors.push(sameTimeCursor);
+      for (const row of sameTimeCursor) {
+        remaining -= 1;
+        yield row;
+      }
+      if (remaining === 0) {
+        return;
+      }
+    }
+
+    const laterCursor =
+      after === null
+        ? this.sql.exec<StoredExportEventRow>(
+            `SELECT rowid AS archive_rowid, *
+             FROM echo_events
+             WHERE archive_day = ?
+             ORDER BY created_at_ms, rowid
+             LIMIT ?`,
+            archiveDay,
+            remaining
+          )
+        : this.sql.exec<StoredExportEventRow>(
+            `SELECT rowid AS archive_rowid, *
+             FROM echo_events
+             WHERE archive_day = ?
+               AND created_at_ms > ?
+             ORDER BY created_at_ms, rowid
+             LIMIT ?`,
+            archiveDay,
+            after.createdAtMs,
+            remaining
+          );
+    cursors.push(laterCursor);
+    yield* laterCursor;
+  }
+
+  /**
    * 指定 archive day 範囲の event を dashboard 用に取得する。
    */
   private getEventsByArchiveDayRange(
@@ -931,6 +1079,29 @@ function rowToDashboardEvent(row: StoredEchoEventRow): DashboardEchoEvent {
     summary: row.summary,
     payload: parseJsonObject(row.payload_json),
   };
+}
+
+/**
+ * 保存済み row を export の NDJSON 1 行にする。
+ *
+ * `streams_json` と `payload_json` は保存時にインデントなしの JSON.stringify で書いた文字列なので、
+ * 解析し直さずそのまま埋め込む。Free plan の CPU 時間内で大きな model exchange を返すため、
+ * 本文量に比例する解析と再文字列化を避ける。JSON.stringify は改行を escape するため、
+ * 埋め込んだ結果も 1 行に収まる。
+ */
+function rowToExportLine(row: StoredEchoEventRow): string {
+  return [
+    `{"id":${JSON.stringify(row.id)}`,
+    `"createdAtMs":${row.created_at_ms}`,
+    `"archiveDay":${JSON.stringify(row.archive_day)}`,
+    `"sessionId":${JSON.stringify(row.session_id)}`,
+    `"type":${JSON.stringify(row.type)}`,
+    `"category":${JSON.stringify(row.category)}`,
+    `"severity":${JSON.stringify(row.severity)}`,
+    `"streams":${row.streams_json}`,
+    `"summary":${JSON.stringify(row.summary)}`,
+    `"payload":${row.payload_json}}`,
+  ].join(',');
 }
 
 /**

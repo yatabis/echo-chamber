@@ -31,6 +31,7 @@
     "eval:native-long-session-performance": "pnpm --filter @echo-chamber/model-evaluation eval:native-long-session-performance",
     "eval:native-runtime-workflow": "pnpm --filter @echo-chamber/model-evaluation eval:native-runtime-workflow",
     "eval:rescore": "pnpm --filter @echo-chamber/model-evaluation eval:rescore",
+    "archive:export": "node apps/cloudflare-workers/scripts/export-event-archive.ts",
     "dashboard:build": "pnpm --filter @echo-chamber/dashboard build"
   },
   "devDependencies": {

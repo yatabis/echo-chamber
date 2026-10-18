@@ -10,7 +10,7 @@
     "cf-typegen": "wrangler types --strict-vars=false --config wrangler.jsonc",
     "test:run": "vitest run --config vitest.config.ts",
     "test:coverage": "vitest run --coverage --config vitest.config.ts",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p scripts/tsconfig.json"
   },
   "dependencies": {
     "@echo-chamber/cloudflare-runtime": "workspace:*",
