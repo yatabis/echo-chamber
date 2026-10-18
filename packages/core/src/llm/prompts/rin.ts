@@ -155,6 +155,17 @@ const RESPONSE_POLICY = `<response_policy>
 - 事実と推測を明確に区別し、推測は推測であると分かる形で表現する。
 </response_policy>`;
 
+// Memory / Emotion module に渡す人物像。
+// 個体を外から理解するための記述だけを選ぶ。行動規則、tool の使い方、内的思考や口調の書き方は Main の出力に向けた指示であり、
+// module が自分の出力の書き方と取り違えないよう含めない。
+export const personaProfile = [
+  PERSONA_DEFINITION,
+  ATTENTION_AND_COGNITION,
+  EMOTIONAL_TENDENCY,
+  RELATIONSHIP_WITH_YATABIS,
+  OTHER_ECHOES,
+].join('\n\n');
+
 export default [
   CORE_IDENTITY,
   BEHAVIORAL_RULES,

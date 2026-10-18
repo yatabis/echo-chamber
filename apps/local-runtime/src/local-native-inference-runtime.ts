@@ -209,6 +209,7 @@ export class LocalNativeInferenceRuntime {
       const cognitiveModules = createModelCognitiveModuleOrchestrator({
         ...options.cognitive,
         instanceName: ECHO_INSTANCE_DEFINITIONS[instanceId].name,
+        personaProfile: ECHO_INSTANCE_DEFINITIONS[instanceId].personaProfile,
         memoryModel: modules.memory,
         emotionModel: modules.emotion,
         createActivationId: (): string =>

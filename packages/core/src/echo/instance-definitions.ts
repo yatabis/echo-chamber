@@ -1,5 +1,9 @@
-import systemPromptMarie from '../llm/prompts/marie';
-import systemPromptRin from '../llm/prompts/rin';
+import systemPromptMarie, {
+  personaProfile as personaProfileMarie,
+} from '../llm/prompts/marie';
+import systemPromptRin, {
+  personaProfile as personaProfileRin,
+} from '../llm/prompts/rin';
 
 import { TOKEN_LIMITS } from './constants';
 
@@ -34,6 +38,8 @@ export interface EchoInstanceDefinition {
   id: EchoInstanceId;
   name: string;
   systemPrompt: string;
+  /** Memory / Emotion module の判断材料にする人物像。Main の system prompt と同じ記述の一部。 */
+  personaProfile: string;
   mainLlm: EchoMainLLMDefinition;
   cognitiveModules: EchoCognitiveModuleDefinition;
   tokenLimits: EchoTokenLimitDefinition;
@@ -44,6 +50,7 @@ export const ECHO_INSTANCE_DEFINITIONS = {
     id: 'rin',
     name: 'リン',
     systemPrompt: systemPromptRin,
+    personaProfile: personaProfileRin,
     mainLlm: {
       provider: 'openai',
       model: 'gpt-5.6-sol',
@@ -63,6 +70,7 @@ export const ECHO_INSTANCE_DEFINITIONS = {
     id: 'marie',
     name: 'マリー',
     systemPrompt: systemPromptMarie,
+    personaProfile: personaProfileMarie,
     mainLlm: {
       provider: 'openai',
       model: 'gpt-5.6-terra',

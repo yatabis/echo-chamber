@@ -43,6 +43,8 @@ export interface ModelCognitiveModuleOrchestratorOptions extends Pick<
   'domain' | 'retryPolicy' | 'createActivationId' | 'createRequestSignal'
 > {
   instanceName: string;
+  /** Memory / Emotion の判断材料にする個体の人物像。Main の行動規則や口調は含めない。 */
+  personaProfile: string;
   memoryModel: ModelPort;
   emotionModel: ModelPort;
   maxOutputTokens?: number;
@@ -70,7 +72,11 @@ export function createModelCognitiveModuleOrchestrator(
       model: options.memoryModel,
       ...outputLimit,
       resolveSystemPrompt: ({ phase }) =>
-        buildMemoryCognitiveModuleSystemPrompt(options.instanceName, phase),
+        buildMemoryCognitiveModuleSystemPrompt(
+          options.instanceName,
+          phase,
+          options.personaProfile
+        ),
       resolveOutputContract: ({ phase }) =>
         phase === 'pre_main'
           ? {
@@ -86,7 +92,10 @@ export function createModelCognitiveModuleOrchestrator(
       model: options.emotionModel,
       ...outputLimit,
       resolveSystemPrompt: () =>
-        buildEmotionCognitiveModuleSystemPrompt(options.instanceName),
+        buildEmotionCognitiveModuleSystemPrompt(
+          options.instanceName,
+          options.personaProfile
+        ),
       resolveOutputContract: () => ({
         format: emotionFormat,
         parse: parseEmotionCognitiveModuleOutput,
