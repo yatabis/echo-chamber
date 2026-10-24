@@ -114,25 +114,60 @@ const COGNITIVE_SHARED_CONTEXT_INSTRUCTION =
   '共有コンテキストにあるthinkはMainの自然言語出力を表します。その他のツール利用も含め、いずれもMainの履歴であり、あなた自身の過去の出力ではありません。';
 
 /**
+ * Cognitive Moduleの判断材料として、個体の人物像を区切って示す。
+ * 人物像は個体を理解する手がかりとして渡し、moduleに個体として振る舞わせる指示にはしない。
+ */
+function buildCognitivePersonaSection(
+  intro: string,
+  personaProfile: string
+): string {
+  return `${intro}\n<persona_profile>\n${personaProfile}\n</persona_profile>`;
+}
+
+/**
  * Memory Cognitive Moduleが現在phaseで担う役割をsystem promptにする。
+ *
+ * 人物像は phase ごとの指示より前に置き、想起と記銘で同じ前置きを共有する。
+ *
+ * @param instanceName 個体名
+ * @param phase 想起（pre_main）か記銘（post_main）か
+ * @param personaProfile 個体を理解するための人物像
  */
 export function buildMemoryCognitiveModuleSystemPrompt(
   instanceName: string,
-  phase: CognitiveModulePhase
+  phase: CognitiveModulePhase,
+  personaProfile: string
 ): string {
   const identity = `あなたはE.C.H.O. Chamberで動作する「${instanceName}」の記憶モジュールです。記憶の想起と記銘を担います。${COGNITIVE_SHARED_CONTEXT_INSTRUCTION}`;
-  return phase === 'pre_main'
-    ? `${identity}共有コンテキストから、「${instanceName}」が次の思考で必要とする可能性のある記憶を想起してください。その記憶を検索するためのクエリを1つ返してください。`
-    : `${identity}完了した思考セッションの共有コンテキストから、「${instanceName}」が記憶しておく内容を選んでください。記憶の本文と種類を返してください。`;
+  const persona = buildCognitivePersonaSection(
+    `次は「${instanceName}」の人物像です。${instanceName}が何に気づき、何を大切にし、誰とどのような関係にあるかを、想起と記銘の手がかりにしてください。`,
+    personaProfile
+  );
+  const task =
+    phase === 'pre_main'
+      ? `共有コンテキストから、「${instanceName}」が次の思考で必要とする可能性のある記憶を想起してください。その記憶を検索するためのクエリを1つ返してください。`
+      : `完了した思考セッションの共有コンテキストから、「${instanceName}」が記憶しておく内容を選んでください。記憶の本文と種類を返してください。`;
+  return [identity, persona, task].join('\n\n');
 }
 
 /**
  * Emotion Cognitive Moduleが現在の感情状態を更新するsystem promptを作る。
+ *
+ * @param instanceName 個体名
+ * @param personaProfile 個体を理解するための人物像
  */
 export function buildEmotionCognitiveModuleSystemPrompt(
-  instanceName: string
+  instanceName: string,
+  personaProfile: string
 ): string {
-  return `あなたはE.C.H.O. Chamberで動作する「${instanceName}」の感情モジュールです。「${instanceName}」の感情状態を管理します。${COGNITIVE_SHARED_CONTEXT_INSTRUCTION}共有コンテキストに基づいて現在の感情状態を更新してください。感情価（valence）、覚醒度（arousal）、ラベル（labels）を返してください。`;
+  const identity = `あなたはE.C.H.O. Chamberで動作する「${instanceName}」の感情モジュールです。「${instanceName}」の感情状態を管理します。${COGNITIVE_SHARED_CONTEXT_INSTRUCTION}`;
+  const persona = buildCognitivePersonaSection(
+    `次は「${instanceName}」の人物像です。${instanceName}の気質や感情の動き方、大切にしているもの、他者との関係を手がかりに、共有コンテキストの出来事が${instanceName}の感情をどう動かすかを考えてください。`,
+    personaProfile
+  );
+  const task =
+    '共有コンテキストに基づいて現在の感情状態を更新してください。感情価（valence）、覚醒度（arousal）、ラベル（labels）を返してください。';
+  return [identity, persona, task].join('\n\n');
 }
 
 /**

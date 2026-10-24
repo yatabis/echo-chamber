@@ -7,9 +7,14 @@ import {
   parseMemoryStoreCognitiveModuleOutput,
   type MemoryCognitiveModuleOutput,
 } from './cognitive-module-schema';
-import { ModelCognitiveModuleRunner } from './model-cognitive-module';
+import {
+  createModelCognitiveModuleOrchestrator,
+  ModelCognitiveModuleRunner,
+} from './model-cognitive-module';
 
 import type {
+  CognitiveModuleCommittedState,
+  CognitiveModuleDomainPort,
   CognitiveModuleOutputValidationError,
   CognitiveModulePhase,
   CognitiveModulePhaseInput,
@@ -298,5 +303,76 @@ describe('ModelCognitiveModuleRunner', () => {
       },
       usage,
     });
+  });
+});
+
+describe('createModelCognitiveModuleOrchestrator', () => {
+  it('Memory と Emotion の両方に、個体の人物像を含む専用指示を渡す', async () => {
+    const memoryGenerate = vi.fn<ModelPort['generate']>().mockResolvedValue({
+      output: [
+        {
+          type: 'message',
+          role: 'assistant',
+          content: JSON.stringify({ query: 'relevant memory' }),
+        },
+      ],
+      usage: createUsage(1),
+    });
+    const emotionGenerate = vi.fn<ModelPort['generate']>().mockResolvedValue({
+      output: [
+        {
+          type: 'message',
+          role: 'assistant',
+          content: JSON.stringify({
+            valence: 0.1,
+            arousal: 0.2,
+            labels: ['calm'],
+          }),
+        },
+      ],
+      usage: createUsage(1),
+    });
+    const committed: CognitiveModuleCommittedState = {
+      version: 0,
+      emotion: null,
+      previousSessionMemory: null,
+      recalledMemories: [],
+    };
+    const domain: CognitiveModuleDomainPort = {
+      beginActivation: async () => await Promise.resolve(committed),
+      startPhase: async () => {
+        await Promise.resolve();
+      },
+      commitPhase: async () =>
+        await Promise.resolve({ ...committed, version: committed.version + 1 }),
+      failPhase: async () => {
+        await Promise.resolve();
+      },
+    };
+    const orchestrator = createModelCognitiveModuleOrchestrator({
+      instanceName: 'リン',
+      personaProfile: '<persona_definition>\n冷静な個体\n</persona_definition>',
+      memoryModel: { generate: memoryGenerate },
+      emotionModel: { generate: emotionGenerate },
+      domain,
+      retryPolicy: { maxAttempts: 1, shouldRetry: () => false },
+      createActivationId: () => 'activation-1',
+    });
+
+    await orchestrator
+      .beginActivation()
+      .beforeMain([
+        { role: 'system', content: '<runtime_context>\n</runtime_context>' },
+      ]);
+
+    for (const generate of [memoryGenerate, emotionGenerate]) {
+      expect(generate).toHaveBeenCalledTimes(1);
+      expect(generate.mock.calls[0]?.[0].input[0]).toEqual({
+        role: 'system',
+        content: expect.stringContaining(
+          '<persona_profile>\n<persona_definition>\n冷静な個体\n</persona_definition>\n</persona_profile>'
+        ) as string,
+      });
+    }
   });
 });
