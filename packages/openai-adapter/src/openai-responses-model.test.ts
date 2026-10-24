@@ -171,8 +171,11 @@ describe('OpenAIResponsesModel', () => {
             strict: true,
           },
         ],
-        truncation: 'auto',
       })
+    );
+    // 文脈の上限を超えたときは、system prompt を含む先頭の入力を黙って落とさず、失敗として止める。
+    expect(mockCreateResponse.mock.calls[0]?.[0]).not.toHaveProperty(
+      'truncation'
     );
     expect(mockEmit).toHaveBeenCalledWith({
       type: 'model.provider.warning',
