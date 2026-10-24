@@ -39,6 +39,7 @@ import { createToolExecutionContext } from './tool-context';
 import { Echo } from './index';
 
 import type { DashboardActionAnalysisEventRange } from './dashboard-action-analysis';
+import type { SqliteEchoEventArchive } from './event-archive';
 
 const {
   mockEmbeddingService,
@@ -810,6 +811,105 @@ describe('Echo session logs route', () => {
     });
     expect(body).not.toHaveProperty('events');
     expect(getTodayEvents).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Echo event archive export route', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /**
+   * 初期化を省略した Echo と、export を差し替えた archive を返す。
+   */
+  function createExportEcho(): {
+    echo: Echo;
+    exportEventsByArchiveDay: Mock<
+      SqliteEchoEventArchive['exportEventsByArchiveDay']
+    >;
+  } {
+    const { storage } = createMockStorage();
+    const echo = new Echo(createMockState(storage), createMockEnv());
+    vi.spyOn(
+      echo as unknown as {
+        ensureInitialized(instanceId: 'rin' | 'marie'): Promise<void>;
+      },
+      'ensureInitialized'
+    ).mockResolvedValue(undefined);
+    const archive = (
+      echo as unknown as {
+        eventArchive: Pick<SqliteEchoEventArchive, 'exportEventsByArchiveDay'>;
+      }
+    ).eventArchive;
+    const exportEventsByArchiveDay = vi.spyOn(
+      archive,
+      'exportEventsByArchiveDay'
+    );
+
+    return { echo, exportEventsByArchiveDay };
+  }
+
+  it('保存済み event を NDJSON で返し、続きの位置と読み取り行数を header に載せる', async () => {
+    const { echo, exportEventsByArchiveDay } = createExportEcho();
+    exportEventsByArchiveDay.mockReturnValue({
+      lines: ['{"id":"event-1"}', '{"id":"event-2"}'],
+      nextCursor: { createdAtMs: 1786000000000, rowId: 7 },
+      rowsRead: 3,
+    });
+
+    const response = await echo.fetch(
+      new Request(
+        'http://example.com/rin/archive/events?day=2026-08-15&after=1786000000000:5&limit=100000'
+      )
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('{"id":"event-1"}\n{"id":"event-2"}\n');
+    expect(response.headers.get('content-type')).toContain(
+      'application/x-ndjson'
+    );
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(response.headers.get('x-echo-archive-next-cursor')).toBe(
+      '1786000000000:7'
+    );
+    expect(response.headers.get('x-echo-archive-rows-read')).toBe('3');
+    expect(response.headers.get('x-echo-archive-event-count')).toBe('2');
+    expect(exportEventsByArchiveDay).toHaveBeenCalledWith({
+      archiveDay: '2026-08-15',
+      after: { createdAtMs: 1786000000000, rowId: 5 },
+      limit: 500,
+    });
+  });
+
+  it('最後のページでは続きの位置を返さない', async () => {
+    const { echo, exportEventsByArchiveDay } = createExportEcho();
+    exportEventsByArchiveDay.mockReturnValue({
+      lines: [],
+      nextCursor: null,
+      rowsRead: 0,
+    });
+
+    const response = await echo.fetch(
+      new Request('http://example.com/rin/archive/events?day=2026-08-15')
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('');
+    expect(response.headers.has('x-echo-archive-next-cursor')).toBe(false);
+  });
+
+  it.each([
+    '/rin/archive/events',
+    '/rin/archive/events?day=2026-02-30',
+    '/rin/archive/events?day=2026-08-15&limit=0',
+    '/rin/archive/events?day=2026-08-15&after=not-a-cursor',
+  ])('不正な条件 %s は保存先を読まずに 400 を返す', async (path) => {
+    const { echo, exportEventsByArchiveDay } = createExportEcho();
+
+    const response = await echo.fetch(new Request(`http://example.com${path}`));
+
+    expect(response.status).toBe(400);
+    expect(exportEventsByArchiveDay).not.toHaveBeenCalled();
   });
 });
 

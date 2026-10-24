@@ -194,6 +194,9 @@ apps/cloudflare-workers/public/dashboard/
 # Local model evaluation artifacts
 /.artifacts/model-evaluation/
 
+# Hosted event archive exports (contain private conversations)
+/.artifacts/hosted-archive/
+
 # Playwright artifacts
 /.playwright-cli/
 /output/playwright/

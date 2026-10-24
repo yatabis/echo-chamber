@@ -126,6 +126,24 @@ Dashboard からではなく API として存在する操作。
 | manual sleep | `POST /:id/sleep` | 1           | state                      | state、alarm delete、state change event。delete は rows written として扱われる  |
 | local run    | `POST /:id/run`   | 1           | state 検証後の思考 session | local environment のみ。alarm 用の未読、token limit、next wake 判定は適用しない |
 
+### Event archive export
+
+Hosted の廃止前に、保持中の raw event をローカルへ取り出すための一時的な読み出し。Dashboard からは呼ばず、`pnpm archive:export` が archive day ごとに古い日から順に呼ぶ。
+
+| 項目           | 内容                                                                                                                                                      |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| API request    | `GET /:id/archive/events?day=YYYY-MM-DD[&after=<cursor>][&limit=<n>]` を 1 ページ 1 本                                                                    |
+| DO requests    | 1 ページあたり 1                                                                                                                                          |
+| Storage reads  | 指定 archive day の `echo_events` を `idx_echo_events_archive_day_created` 経由で最大 `limit` 件（既定 200、上限 500）と、続きと範囲終端の確認に最大 2 行 |
+| Storage writes | warm object なら 0。cold initialization では `id` / `name` 保存が発生する場合あり                                                                         |
+| 外部 API       | 0                                                                                                                                                         |
+
+続きの位置は作成時刻と rowid の組で表し、同じ作成時刻の残りとそれより後の作成時刻を別々の index range で読む。OFFSET や `(created_at_ms, rowid) > (?, ?)` の比較は、読み飛ばした行や同じ時刻の先頭からの行も rows read に数えるため使わない。実 SQLite のテストで、他の日の保存量や同じ作成時刻の件数に比例しないことを確認している。
+
+本文量の上限で件数より手前でもページを区切る。model exchange は会話履歴を含む全文を持ち、Free plan の CPU 時間内に収めるため、保存済みの JSON 文字列は解析し直さずに返す。response header の `x-echo-archive-rows-read` が、そのページの rows read を報告する。
+
+全件を 1 回取り出すと、保持中の event 行数とほぼ同じ rows read が発生する。1 日の 5,000,000 rows read は本番 Echo と共有するため、取り出しスクリプトは既定で 1 回の実行を 2,000,000 rows read までに止め、続きは次の UTC 日に再開する。
+
 ## Echo alarm の budget
 
 ### Skip path

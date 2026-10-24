@@ -200,6 +200,7 @@ pnpm --filter @echo-chamber/cloudflare-workers exec wrangler kv key put --bindin
 | `pnpm eval:native-runtime-workflow`                  | 既存の行動評価シナリオをNativeで実行（Cognitive経路への移行前）    |
 | `pnpm eval:cognitive-hosted`                         | Hosted Memory／Emotionを実APIで検証                                |
 | `pnpm eval:rescore`                                  | 保存済み評価結果を現在の採点条件で再採点                           |
+| `pnpm archive:export`                                | Hosted の保存済み event を `.artifacts/hosted-archive/` へ取り出す |
 | `pnpm lint:check` / `pnpm typecheck` / `pnpm check`  | 品質チェック                                                       |
 
 ## HTTP エンドポイント
@@ -223,6 +224,7 @@ pnpm --filter @echo-chamber/cloudflare-workers exec wrangler kv key put --bindin
 | `GET`  | `/{instanceId}/summary`         | 一覧用サマリー JSON                                    |
 | `GET`  | `/{instanceId}/session-logs`    | Dashboard 用 session log JSON                          |
 | `GET`  | `/{instanceId}/action-analysis` | Dashboard 用 action analysis JSON                      |
+| `GET`  | `/{instanceId}/archive/events`  | 保存済み event の archive day 単位の NDJSON 取り出し   |
 | `POST` | `/{instanceId}/wake`            | 強制 wake                                              |
 | `POST` | `/{instanceId}/sleep`           | 強制 sleep                                             |
 | `POST` | `/{instanceId}/run`             | 手動実行（`ENVIRONMENT=local` のみ）                   |
