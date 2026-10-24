@@ -42,6 +42,9 @@ const expectedInstanceRuntimeSettings = {
   },
 } as const;
 
+/** prompt の `<tag>...</tag>` 形式のセクションと、その tag 名。 */
+const PROMPT_SECTION_PATTERN = /<([a-z_]+)>[\s\S]*?<\/\1>/g;
+
 describe('echo instance definitions', () => {
   it('全 instance id を definition catalogue がカバーしている', () => {
     expect(Object.keys(ECHO_INSTANCE_DEFINITIONS).sort()).toEqual(
@@ -71,6 +74,30 @@ describe('echo instance definitions', () => {
         cognitiveModules: definition.cognitiveModules,
         tokenLimits: definition.tokenLimits,
       }).toEqual(expectedInstanceRuntimeSettings[instanceId]);
+    }
+  );
+
+  it.each(ECHO_INSTANCE_IDS)(
+    '%s の Cognitive 用の人物像は、Main と同じ記述のうち個体を理解するための部分だけを持つ',
+    (instanceId) => {
+      const { personaProfile, systemPrompt } =
+        getEchoInstanceDefinition(instanceId);
+      const sections = [...personaProfile.matchAll(PROMPT_SECTION_PATTERN)];
+
+      expect(sections.map((section) => section[1])).toEqual([
+        'persona_definition',
+        'attention_and_cognition',
+        'emotional_tendency',
+        'relationship_with_yatabis',
+        'other_echoes',
+      ]);
+      // Main と別の写しを持たず、同じ記述を共有していることを確かめる。
+      for (const [section] of sections) {
+        expect(systemPrompt).toContain(section);
+      }
+      expect(personaProfile).toBe(
+        sections.map(([section]) => section).join('\n\n')
+      );
     }
   );
 });

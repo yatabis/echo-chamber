@@ -14,7 +14,11 @@ Main と Memory/Emotion の責務、入力履歴、結果の確定、失敗時�
 
 ## 責務とインターフェース
 
-Main、Memory Module、Emotion Module は、現在日時、Main の出力、tool call / result、および確定済みの system-owned tool exchange からなる時系列 context を共有する。Memory Module と Emotion Module は、実行ごとにこの共有 context 全体を受け取り、その先頭へ自身専用の system prompt を1件だけ置く。Main の system prompt と tool catalog は Cognitive Module に渡さず、Cognitive Module の system prompt も共有 context へ保存しない。
+Main、Memory Module、Emotion Module は、現在日時、Main の出力、tool call / result、および確定済みの system-owned tool exchange からなる時系列 context を共有する。Memory Module と Emotion Module は、実行ごとにこの共有 context 全体を受け取り、その先頭へ自身専用の system prompt を1件だけ置く。Main の system prompt 全体と tool catalog は Cognitive Module に渡さず、Cognitive Module の system prompt も共有 context へ保存しない。
+
+Cognitive Module の system prompt には、個体の人物像を判断の手がかりとして含める。人物像は instance 定義の `personaProfile` で、Main の system prompt と同じ記述のうち、人格と価値観、何に気づきどう考えるか、感情の動き方、yatabis や他の Echo との関係だけを選ぶ。何を想起し記銘するか、出来事が感情をどう動かすかは、その個体が何に注意を向け、何を大切にするかに依存するためである。行動規則、tool の使い方、内的思考や口調の書き方は Main の出力に向けた指示であり、module が自身の出力の書き方と取り違えないよう含めない。人物像は phase ごとの指示より前に置き、Memory Module の想起と記銘で同じ前置きを共有する。
+
+人物像の分だけ、Memory Module と Emotion Module の各呼び出しの入力 token が増える。API request、DO request、storage の rows read / written、外部 API call の回数は変わらない。
 
 各 model の専用指示と共有の現在日時は、Core が先頭の1件の `system` メッセージにまとめる。
 

@@ -216,6 +216,7 @@ export function createCognitiveModuleOrchestrator(
   });
   return createModelCognitiveModuleOrchestrator({
     instanceName: input.instance.name,
+    personaProfile: input.instance.personaProfile,
     memoryModel,
     emotionModel,
     createActivationId: (): string => createCognitiveModuleActivationId(input),
