@@ -141,7 +141,6 @@ export class OpenAIResponsesModel implements ModelPort {
       },
       tool_choice: 'auto',
       tools: request.tools.map(toFunctionToolDefinition),
-      truncation: 'auto',
     };
   }
 

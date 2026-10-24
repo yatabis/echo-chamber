@@ -37,6 +37,22 @@ import type { ReasoningEffort } from 'openai/resources/shared';
 export type OpenAIChatCompletionsExtraBody = Record<string, unknown>;
 
 /**
+ * OpenAI 互換 server へ送る non-streaming Chat Completions request body。
+ *
+ * この adapter の接続先は LM Studio などの OpenAI 互換 server で、OpenAI 本体には Responses adapter を使う。
+ * OpenAI 本体は出力上限を `max_completion_tokens` へ移して `max_tokens` を非推奨にしたが、
+ * 互換 server には `max_tokens` だけを文書化しているものがある（LM Studio の OpenAI 互換 API など）。
+ * そのため SDK の非推奨の宣言を外し、互換 server の仕様として `max_tokens` を持つ。
+ */
+export type OpenAICompatibleChatCompletionCreateParams = Omit<
+  ChatCompletionCreateParamsNonStreaming,
+  'max_tokens'
+> & {
+  /** 1 回の応答で生成する token 数の上限。 */
+  max_tokens?: number;
+} & OpenAIChatCompletionsExtraBody;
+
+/**
  * 動的 request body 拡張へ渡す、adapter が保持する exchange 状態。
  */
 export interface OpenAIChatCompletionsRequestContext {
@@ -144,8 +160,7 @@ export class OpenAIChatCompletionsModel implements ModelPort {
    * @returns provider request body と Chat Completions response
    */
   private async createChatCompletionExchange(request: ModelRequest): Promise<{
-    params: ChatCompletionCreateParamsNonStreaming &
-      OpenAIChatCompletionsExtraBody;
+    params: OpenAICompatibleChatCompletionCreateParams;
     response: ChatCompletion;
   }> {
     this.messages.push(...this.toChatMessages(request.input));
@@ -208,8 +223,7 @@ export class OpenAIChatCompletionsModel implements ModelPort {
    */
   private async emitModelExchangeRecorded(
     request: ModelRequest,
-    params: ChatCompletionCreateParamsNonStreaming &
-      OpenAIChatCompletionsExtraBody,
+    params: OpenAICompatibleChatCompletionCreateParams,
     response: ChatCompletion
   ): Promise<void> {
     const audit = projectChatCompletionsWebToolExchange(
@@ -293,7 +307,7 @@ export class OpenAIChatCompletionsModel implements ModelPort {
    */
   private createParams(
     request: ModelRequest
-  ): ChatCompletionCreateParamsNonStreaming & OpenAIChatCompletionsExtraBody {
+  ): OpenAICompatibleChatCompletionCreateParams {
     const requestBodyExtension = this.options.requestBodyExtension?.({
       hasCompletedExchange: this.hasCompletedChatExchange,
     });
