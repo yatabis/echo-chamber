@@ -2,6 +2,14 @@ packages:
   - 'apps/*'
   - 'packages/*'
 
+# GitHub's dependency graph reads only the first YAML document of pnpm-lock.yaml.
+# pnpm 12 writes a boot document (packageManagerDependencies) first, which hides
+# every project dependency and silently closed the Dependabot alerts.
+# `ignore` is the only pmOnFail value that stops writing that document; CI still
+# pins pnpm through `packageManager` and engines.pnpm guards the major version.
+# Remove once dependabot/dependabot-core#15904 is fixed.
+pmOnFail: ignore
+
 allowBuilds:
   esbuild: true
   eslint: true

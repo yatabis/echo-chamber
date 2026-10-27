@@ -11,6 +11,9 @@
       "onFail": "error"
     }
   },
+  "engines": {
+    "pnpm": "^12.6.0"
+  },
   "scripts": {
     "deploy": "pnpm dashboard:build && pnpm --filter @echo-chamber/cloudflare-workers run deploy",
     "dev": "pnpm dashboard:build && pnpm --filter @echo-chamber/cloudflare-workers dev",
