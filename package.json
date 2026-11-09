@@ -38,7 +38,7 @@
     "dashboard:build": "pnpm --filter @echo-chamber/dashboard build"
   },
   "devDependencies": {
-    "@cloudflare/vitest-plugin": "^1.4.11",
+    "@cloudflare/vitest-plugin": "^1.6.0",
     "@eslint/js": "^10.0.1",
     "@types/node": "^24.19.2",
     "@typescript-eslint/eslint-plugin": "^8.72.1",
@@ -56,7 +56,7 @@
     "typescript-eslint": "^8.72.1",
     "vite": "6.4.5",
     "vitest": "^4.1.12",
-    "wrangler": "^4.156.0"
+    "wrangler": "^4.158.0"
   },
   "dependencies": {
     "@discordjs/rest": "2.6.3",
