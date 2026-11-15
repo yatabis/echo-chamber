@@ -1,251 +1,26 @@
-# E.C.H.O Chamber
+# E.C.H.O. Chamber
 
-複数の存在を独立した状態と記憶で動かす、思考エージェント基盤です。
-現在の主要 entrypoint は Cloudflare Workers / Durable Objects と Discord 連携ですが、runtime 非依存の core を共有する first-class local entrypoint を追加し、そちらを主経路へ寄せる計画です。Cloudflare entrypoint も引き続き維持します。
+E.C.H.O. Chamber を構成する repo をまとめるための repo です。ここには submodule と、この README だけを置きます。
+コードと文書は、それぞれの repo が持ちます。
 
-## モノレポ構成
+## 構成
 
-```text
-apps/
-  cloudflare-workers/        # Worker エントリ・DO実装・wrangler 設定・Cloudflare依存テスト・静的配信
-  dashboard/                 # React + Vite ダッシュボード
-  local-runtime/             # Node上のローカルcomposition root（Native推論ライフサイクルから実装中）
-packages/
-  core/                      # Echo agent のドメイン / application 層（tool spec, prompt, session, ports）
-  contracts/                 # Worker / Dashboard 間の API contract（DTO + zod schema）
-  openai-adapter/            # ModelPort の OpenAI / OpenAI互換 API実装
-  model-evaluation/          # E.C.H.O. runtime behavior / local model 評価
-  discord-adapter/           # Chat / Notification / ThoughtLog の Discord 実装
-  cloudflare-runtime/        # Memory / Note など Cloudflare runtime 実装
-native/
-  echo-inference/            # Qwen3.5系とE.C.H.O.状態管理に特化したRust推論エンジン
-```
+| path | repo | 役割 |
+| --- | --- | --- |
+| `runtime/` | [echo-chamber-lab/echo-chamber-runtime](https://github.com/echo-chamber-lab/echo-chamber-runtime) | Echo の本体。思考セッション、Discord、常駐のループ |
+| `infer/` | [echo-chamber-lab/echo-chamber-infer](https://github.com/echo-chamber-lab/echo-chamber-infer) | 推論サーバー（OpenAI 互換 API） |
 
-## 依存ルール
+どちらも private repo です。
 
-- `packages/core` は Cloudflare 固有型や provider SDK に依存しない
-- `packages/contracts` は API 境界の型と schema を持ち、UI 実装や runtime 実装を持たない
-- adapter package は `packages/core` に依存する
-- `packages/model-evaluation` は評価対象の `core` / adapter に依存し、production package からは参照しない
-- `packages/cloudflare-runtime` は `packages/core` に依存し、Cloudflare 固有実装を閉じ込める
-- `apps/cloudflare-workers` は composition root として adapter / core を束ねる
-- `apps/local-runtime` はローカル composition root として、常駐 Native owner と instance ごとの `ModelPort` を束ねる
-- `native/echo-inference` は pnpm workspace から独立した Cargo workspace として、local inference と per-instance KV/GDN state を担う
-- `apps/dashboard` は agent core ではなく API contract に依存する形へ寄せる
-- workspace package は root barrel ではなく subpath import で参照する
-- 禁止: `packages/core -> adapter/apps` の逆依存
+## submodule の参照先
 
-## 前提条件
+- 参照先のコミットは、その組み合わせで動くことを確かめたときだけ更新します。
+- 開発は、各 repo を単独で clone して行います。この repo の中では開発しません。
+- 起動スクリプトや launchd の設定は、この repo には置きません。
 
-- Node.js `24.21.0`（Volta・pnpm・CI で共通）
-- `pnpm`
-- Cloudflare アカウント
-- Discord Bot（Echo インスタンス用 + ログ通知用）
-- OpenAI API キー
+現在の参照先は、この repo を作り直した時点（2026-11-15）の各 repo の `main` の最新です。
 
-native inference engine の開発には、Rust 1.93 以降、MLX 0.32.0 と対応する official MLX C build が別途必要です。現時点のbuild方法と実装済み範囲は [`native/echo-inference/README.md`](native/echo-inference/README.md) を参照してください。
+## 旧実装
 
-## セットアップ
-
-```bash
-pnpm install
-pnpm --filter @echo-chamber/cloudflare-workers exec wrangler login
-pnpm dev
-```
-
-補足:
-
-- `pnpm-workspace.yaml` の `useNodeVersion` は、pnpm をインストールしたときの Node.js に依存せず、`pnpm run` / `pnpm exec` を指定バージョンで実行します。`pnpm exec node --version` で確認できます。
-- `pnpm dev` は `apps/cloudflare-workers` を対象に `wrangler types && wrangler dev` を実行します。
-- Workers AI はローカル模擬されず、ローカル開発でもリモートリソースへ接続して利用量が発生し得ます。
-- `pnpm dev` / `pnpm start` は、Access で保護された production / preview hostname と分離するため、ローカル開発セッションだけ Worker 名 `echo-chamber-local-dev` を使用します。この一時セッションは Wrangler の preview token で保護され、`pnpm deploy` の Worker 名 `echo-chamber` には影響しません。
-- dashboard の単体開発は `pnpm --filter @echo-chamber/dashboard dev` を使用します。
-
-### ローカル Native 推論のライフサイクル
-
-`apps/local-runtime` には、1つの常駐 Rust 推論プロセスを `rin` / `marie` で共有しながら、instance ごとに同じ `NativeInferenceModel` を保持する構成を実装しています。
-
-- 起動時、instance ごとの state directory を排他 open し、`current.safetensors` があれば KV/GDN state と instance/model identity を検証して自動復元する
-- `current.safetensors` の認証・整合性検証が失敗した場合は、新規状態へ黙って退避せず起動全体を失敗させる。旧 `current.json` 形式も明示的な移行なしには受け入れない
-- `ThinkingEngine.think()` 1回分を「思考セッション」の保存境界とし、process-local state が更新された場合だけ snapshot を発行する
-- 世代管理は行わず、hidden staging file の同期後に固定 `current.safetensors` を原子的に置換する。起動時は管理対象の staging remainder だけを除去し、未知の operator file は保持する
-- 同じ instance の思考セッションは同時実行させず、異なる instance は同じ常駐 owner を共有する
-- 終了時は進行中の生成を token 境界でキャンセルし、commit 済み状態を保存してから owner を閉じる
-
-各モデル生成の直後ではなく思考セッション終了時に保存するのは、約70MB級の KV/GDN state 書き出しをモデル・ツール反復のホットパスへ入れないためです。通常のプロセス異常終了で失い得る範囲は、実行中だった思考セッションです。
-
-現段階で完成しているのは Native 推論の process/model/state lifecycle です。Chat、Memory、Note、scheduler、外部イベント入力を束ねる完全なローカル entrypoint は後続実装です。
-
-## 環境変数と Secret
-
-### 必須キー
-
-| キー名                           | 用途                                          |
-| -------------------------------- | --------------------------------------------- |
-| `OPENAI_API_KEY`                 | OpenAI API 認証                               |
-| `DISCORD_BOT_TOKEN`              | ログ通知用 Discord Bot Token                  |
-| `DISCORD_BOT_TOKEN_RIN`          | `rin` インスタンス用 Bot Token                |
-| `DISCORD_BOT_TOKEN_MARIE`        | `marie` インスタンス用 Bot Token              |
-| `LOG_CHANNEL_ID`                 | ログ通知先チャンネル ID                       |
-| `ENVIRONMENT`                    | 実行環境判定（`local` / それ以外）            |
-| `ACCESS_TEAM_DOMAIN`             | Cloudflare Access team domain の HTTPS origin |
-| `ACCESS_PRODUCTION_HOSTNAME`     | production Worker の hostname                 |
-| `ACCESS_PRODUCTION_AUD`          | production Access application の AUD          |
-| `ACCESS_PREVIEW_HOSTNAME_SUFFIX` | preview Worker hostname の suffix             |
-| `ACCESS_PREVIEW_AUD`             | preview Access application の AUD             |
-
-ローカル開発時は、`apps/cloudflare-workers/.dev.vars` に Secret と `ENVIRONMENT=local` を設定します。`ACCESS_*` は non-local 環境で必須ですが、local bypass では参照しません。
-
-### インスタンスごとの LLM / token limit 設定
-
-Main / Cognitive Module の LLM 設定と token limit は `packages/core/src/echo/instance-definitions.ts` の各 instance 定義で管理します。
-API key などの secret と、一時的な上書きだけを環境変数で指定します。
-token limit は scheduled 起動時の Main model usage に適用し、Cognitive Module の usage は判定に含めません。Dashboard の usage と推定コストには両方を含めます。
-
-Rapid-MLX や LM Studio などの OpenAI 互換 Chat Completions server を一時的に使う場合は、対象 instance の prefix を付けてローカルの `apps/cloudflare-workers/.dev.vars` に追加します。
-
-```dotenv
-MARIE_MAIN_LLM_PROVIDER=openai-compatible
-MARIE_MAIN_LLM_MODEL=qwen3.6-27b
-MARIE_MAIN_LLM_BASE_URL=http://localhost:8000/v1
-
-MARIE_DAILY_HARD_TOKEN_LIMIT=250000
-MARIE_DAILY_SOFT_TOKEN_LIMIT=150000
-MARIE_HARD_TOKEN_LIMIT_BUFFER_FACTOR=1.5
-```
-
-prefix は `RIN_` / `MARIE_` を使います。prefix なしの `MAIN_LLM_*` や `DAILY_*_TOKEN_LIMIT` は、instance 定義に該当項目が無い場合の global fallback です。
-`openai-compatible` は server 製品に依存しない Chat Completions 接続です。LM Studio と Rapid-MLX のどちらを使う場合もこの値を指定します。
-`*_MAIN_LLM_MODEL` は接続先 runtime でロードしたモデルの identifier に合わせてください。
-OpenAI Responses API の reasoning effort は `*_MAIN_LLM_REASONING_EFFORT` または `MAIN_LLM_REASONING_EFFORT` で一時上書きできます。値は `none` / `minimal` / `low` / `medium` / `high` / `xhigh` です。
-OpenAI 互換 Chat Completions server では `*_MAIN_LLM_BASE_URL` が必須です。`*_MAIN_LLM_API_KEY` を省略すると OpenAI client 用の `not-needed` を使用するため、server 側で認証を有効にした場合だけ明示します。
-Chat Completions API 利用時は、prompt template が user message を必須とするモデル向けに `developer` message を `user` role として渡します。
-local runtime には `max_tokens: 32768`、`temperature: 0.7`、`top_p: 0.8`、`presence_penalty: 1.5`、`top_k: 20`、`chat_template_kwargs: { enable_thinking: false }` を固定で指定します。
-
-Memory / Emotion Cognitive Module は、各 instance の `cognitiveModules` にある model / reasoning effort を共有し、認証には Worker の `OPENAI_API_KEY` を使用します。現在の Rin / Marie の default はともに `gpt-5.6-luna` / `low` です。一時的な instance 別上書きには `RIN_COGNITIVE_MODULE_*` / `MARIE_COGNITIVE_MODULE_*` を使います。prefix なしの `COGNITIVE_MODULE_MODEL` / `COGNITIVE_MODULE_REASONING_EFFORT` は、instance definition で該当項目を省略した場合だけ使う global fallback です。詳細は [Cognitive Module Architecture](./docs/cognitive-module-architecture.md) を参照してください。
-
-一時上書き例:
-
-```dotenv
-MARIE_COGNITIVE_MODULE_REASONING_EFFORT=medium
-```
-
-標準の LM Studio / Rapid-MLX には独自 cache field を送りません。E.C.H.O. 向け session cache protocol を実装した専用 runtime を使う場合だけ、次を追加します。
-
-```dotenv
-MARIE_MAIN_LLM_RUNTIME_PROFILE=echo-session-cache-v1
-```
-
-この version 付き profile は、instance ごとの session ID と、最初の完了済み exchange を境に `pinned` から `rolling` へ切り替わる slot を独自 `cache` body で送ります。会話履歴そのものは通常の Chat Completions と同じく `messages` で再送します。
-
-### Secret 設定例
-
-```bash
-pnpm --filter @echo-chamber/cloudflare-workers exec wrangler secret put OPENAI_API_KEY
-pnpm --filter @echo-chamber/cloudflare-workers exec wrangler secret put DISCORD_BOT_TOKEN
-pnpm --filter @echo-chamber/cloudflare-workers exec wrangler secret put DISCORD_BOT_TOKEN_RIN
-pnpm --filter @echo-chamber/cloudflare-workers exec wrangler secret put DISCORD_BOT_TOKEN_MARIE
-pnpm --filter @echo-chamber/cloudflare-workers exec wrangler secret put LOG_CHANNEL_ID
-```
-
-`ENVIRONMENT=local` のときのみ `POST /{instanceId}/run` が有効です。
-この手動実行は Echo の state を検証したうえで、alarm 用の未読、token limit、`next_wake_at` による起動判定を経ずに 1 session を開始します。
-
-## Cloudflare Access 認証
-
-`ENVIRONMENT=local` 以外の Worker request は、`Cf-Access-Jwt-Assertion` の署名、issuer、AUD、時刻 claim を Worker 内でも検証します。production と preview は別の AUD を使い、request hostname に一致しない token は `403 Forbidden` で拒否します。Access binding の欠落や未知の hostname も fail closed です。
-
-Cloudflare Zero Trust 側では、production / preview の両 Access application を次の状態に保ちます。
-
-- Identity provider は Cloudflare account のみを使用する
-- Cloudflare account の MFA を有効にする
-- Instant authentication と Binding Cookie を有効にする
-
-ローカル開発では `ENVIRONMENT=local` に限って Access JWT 検証を省略します。`ENVIRONMENT` を未設定にして bypass することはできません。
-
-## KV 初期化（thinking channel ID）
-
-`ECHO_KV` に以下キーを登録してください。
-
-- `thinking_channel_discord_rin`
-- `thinking_channel_discord_marie`
-
-chat 用チャンネル定義は `apps/cloudflare-workers/src/config/echo-runtime-bindings.ts` に固定で持ちます。
-ここでは `thinkingChannelId` だけを KV に設定します。
-
-設定例:
-
-```bash
-pnpm --filter @echo-chamber/cloudflare-workers exec wrangler kv key put --binding ECHO_KV --local thinking_channel_discord_rin "<THINKING_CHANNEL_ID>"
-```
-
-`pnpm dev` で使うローカルKVに投入するため、ローカル開発時は `--local` を付けてください。
-
-## 実行・開発コマンド
-
-| コマンド                                             | 用途                                                               |
-| ---------------------------------------------------- | ------------------------------------------------------------------ |
-| `pnpm dev`                                           | Worker ローカル起動（型生成付き）                                  |
-| `pnpm start`                                         | Worker ローカル起動                                                |
-| `pnpm cf-typegen`                                    | Worker 型定義生成                                                  |
-| `pnpm deploy`                                        | Cloudflare へデプロイ                                              |
-| `pnpm --filter @echo-chamber/dashboard dev`          | Dashboard 単体開発                                                 |
-| `pnpm --filter @echo-chamber/local-runtime test:run` | ローカル Native lifecycle の統合テスト                             |
-| `pnpm dashboard:build`                               | Dashboard ビルド（Worker assets に出力）                           |
-| `pnpm test:run`                                      | `core` / `contracts` / adapter / runtime / worker のテスト実行     |
-| `pnpm test:coverage`                                 | `core` / `contracts` / adapter / runtime / worker の coverage 集約 |
-| `pnpm eval:check`                                    | モデル評価器のシナリオ・採点・集計ロジックを検証                   |
-| `pnpm eval:native-stateful-performance`              | nativeの状態継続・存在切替・常駐メモリゲートを実機実行             |
-| `pnpm eval:native-long-session-performance`          | nativeの長コンテキスト・反復continuationゲートを実機実行           |
-| `pnpm eval:native-runtime-workflow`                  | 既存の行動評価シナリオをNativeで実行（Cognitive経路への移行前）    |
-| `pnpm eval:cognitive-hosted`                         | Hosted Memory／Emotionを実APIで検証                                |
-| `pnpm eval:rescore`                                  | 保存済み評価結果を現在の採点条件で再採点                           |
-| `pnpm archive:export`                                | Hosted の保存済み event を `.artifacts/hosted-archive/` へ取り出す |
-| `pnpm lint:check` / `pnpm typecheck` / `pnpm check`  | 品質チェック                                                       |
-
-## HTTP エンドポイント
-
-### Worker ルート
-
-| Method | Path              | 説明                              |
-| ------ | ----------------- | --------------------------------- |
-| `GET`  | `/`               | ヘルスチェック                    |
-| `GET`  | `/instances`      | インスタンス一覧（name/state）    |
-| `GET`  | `/dashboard`      | Dashboard SPA 本体                |
-| `GET`  | `/dashboard/*`    | Dashboard 静的配信 + SPA fallback |
-| `ALL`  | `/{instanceId}`   | 対象 Durable Object にフォワード  |
-| `ALL`  | `/{instanceId}/*` | 対象 Durable Object にフォワード  |
-
-### Echo Durable Object (`/{instanceId}` 配下)
-
-| Method | Path                            | 説明                                                   |
-| ------ | ------------------------------- | ------------------------------------------------------ |
-| `GET`  | `/{instanceId}/`                | ステータス/メモリ/ノート/usage の JSON（`EchoStatus`） |
-| `GET`  | `/{instanceId}/summary`         | 一覧用サマリー JSON                                    |
-| `GET`  | `/{instanceId}/session-logs`    | Dashboard 用 session log JSON                          |
-| `GET`  | `/{instanceId}/action-analysis` | Dashboard 用 action analysis JSON                      |
-| `GET`  | `/{instanceId}/archive/events`  | 保存済み event の archive day 単位の NDJSON 取り出し   |
-| `POST` | `/{instanceId}/wake`            | 強制 wake                                              |
-| `POST` | `/{instanceId}/sleep`           | 強制 sleep                                             |
-| `POST` | `/{instanceId}/run`             | 手動実行（`ENVIRONMENT=local` のみ）                   |
-
-## テスト方針（概要）
-
-- agent ドメイン / 純粋ロジック: `packages/core/src/**/*.test.ts`
-- API contract / schema: `packages/contracts/src/**/*.test.ts`
-- provider adapter: `packages/openai-adapter/src/**/*.test.ts`, `packages/discord-adapter/src/**/*.test.ts`
-- local composition: `apps/local-runtime/src/**/*.test.ts`
-- Cloudflare runtime: `packages/cloudflare-runtime/src/**/*.test.ts`
-- Worker / Durable Object / route: `apps/cloudflare-workers/src/**/*.test.ts`
-- Dashboard は現状、専用 test script ではなく build / typecheck と contract parser で整合を保つ
-- `pnpm test:coverage` は monorepo 内の package / worker coverage を順に実行する
-- Worker coverage は `@cloudflare/vitest-plugin` を通じて Workerd 上で実行する
-- model evaluationは通常のtest/coverageから分離し、`pnpm eval:*` で明示的に実行する
-
-## 運用メモ
-
-- Worker 設定ファイル: `apps/cloudflare-workers/wrangler.jsonc`
-- Worker 型定義: `apps/cloudflare-workers/worker-configuration.d.ts`
-- Dashboard build 出力先: `apps/cloudflare-workers/public/dashboard`
-- dashboard 系 API contract は `packages/contracts/src/dashboard/schemas.ts` を正とする
-- Echo event は instance ごとの Durable Object SQLite に 90 日分保持し、日次 sleep 中に保持期限切れの event を削除する
+TypeScript と Cloudflare Workers による旧実装は、tag [`legacy-final`](https://github.com/yatabis/echo-chamber/tree/legacy-final) に残しています。
+新しい本体は、旧実装の移植ではなく、一から作り直したものです。

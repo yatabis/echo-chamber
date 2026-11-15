@@ -1,0 +1,6 @@
+[submodule "runtime"]
+	path = runtime
+	url = https://github.com/echo-chamber-lab/echo-chamber-runtime.git
+[submodule "infer"]
+	path = infer
+	url = https://github.com/echo-chamber-lab/echo-chamber-infer.git
